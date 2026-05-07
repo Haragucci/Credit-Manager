@@ -209,11 +209,16 @@ Beta
 
 Die Mod ist grundsätzlich funktionsfähig, kann aber noch Fehler enthalten.
 
-## Hinweis
+## Hinweis / Disclaimer
 
-Diese Mod ist ein eigenes Projekt und wurde für die Nutzung auf **OPSUCHT.net** entwickelt.
+CreditManager ist ein privates, inoffizielles Projekt und wurde für die persönliche Nutzung auf **OPSUCHT.net** entwickelt.
 
-CreditManager ist nicht offiziell mit Mojang, Microsoft, Fabric oder OPSUCHT.net verbunden, sofern nicht anders angegeben.
+Diese Mod steht in keiner offiziellen Verbindung zu **OPSUCHT.net**, Mojang, Microsoft oder Fabric.  
+Sie wird weder von OPSUCHT.net entwickelt, betrieben, geprüft, unterstützt noch offiziell empfohlen.
+
+Alle genannten Namen, Marken, Logos oder Servernamen gehören ihren jeweiligen Eigentümern und werden nur zur Beschreibung des Einsatzzwecks verwendet.
+
+Falls Rechteinhaber mit der Nutzung bestimmter Begriffe, Bilder oder Hinweise nicht einverstanden sind, können sie mich kontaktieren. Ich werde entsprechende Inhalte dann entfernen oder anpassen.
 
 ## Lizenz
 

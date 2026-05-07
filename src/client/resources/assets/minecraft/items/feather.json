@@ -1,0 +1,37 @@
+{
+  "model": {
+    "type": "minecraft:select",
+    "property": "minecraft:custom_model_data",
+    "index": 0,
+    "cases": [
+      {
+        "when": "1.0",
+        "model": { "type": "minecraft:model", "model": "creditmanager:item/plus" }
+      },
+      {
+        "when": "2.0",
+        "model": { "type": "minecraft:model", "model": "creditmanager:item/minus" }
+      },
+      {
+        "when": "3.0",
+        "model": { "type": "minecraft:model", "model": "creditmanager:item/diagramm" }
+      },
+      {
+        "when": "4.0",
+        "model": { "type": "minecraft:model", "model": "creditmanager:item/transaktion" }
+      },
+      {
+        "when": "5.0",
+        "model": { "type": "minecraft:model", "model": "creditmanager:item/money" }
+      },
+      {
+        "when": "6.0",
+        "model": { "type": "minecraft:model", "model": "creditmanager:item/neu" }
+      }
+    ],
+    "fallback": {
+      "type": "minecraft:model",
+      "model": "minecraft:item/feather"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "required": true,
+  "package": "op.creditmanager.client.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "ResourcePackMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

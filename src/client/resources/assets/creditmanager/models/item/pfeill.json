@@ -1,0 +1,7 @@
+{
+  "parent": "minecraft:item/generated",
+  "textures": {
+    "layer0": "creditmanager:item/pfeill",
+    "particle": "creditmanager:item/pfeill"
+  }
+}

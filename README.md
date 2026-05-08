@@ -121,7 +121,7 @@ Dabei wird ein Verrechnungswert angegeben, damit Items wie eine normale Zahlung 
 Beispiel:
 
 ```text
-/cm schulden itemzahlung diamond-deal 50000
+/cm schulden itemzahlung UserXYZ-05Haragucci-deal 5k
 ```
 
 Dabei wird das Item aus deiner Hand als Zahlung mit einem Wert von `50000` eingetragen.

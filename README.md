@@ -206,7 +206,7 @@ Bei Fragen, Bugs oder Vorschlägen kannst du mich erreichen:
 
 ```text
 Ingame: 05Haragucci
-Discord: haragucci__
+Discord: haragucci
 ```
 
 ## Status

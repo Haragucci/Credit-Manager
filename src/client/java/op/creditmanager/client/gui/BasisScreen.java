@@ -3,6 +3,7 @@ package op.creditmanager.client.gui;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.item.ItemStack;
 import net.minecraft.text.Text;
 
@@ -70,11 +71,19 @@ public abstract class BasisScreen extends Screen {
         MinecraftClient client = MinecraftClient.getInstance();
 
         if (client.options.inventoryKey.matchesKey(input)) {
+            if (istEingabeFeldAktiv()) {
+                return super.keyPressed(input);
+            }
+
             client.setScreen(null);
             return true;
         }
 
         return super.keyPressed(input);
+    }
+
+    protected boolean istEingabeFeldAktiv() {
+        return getFocused() instanceof TextFieldWidget feld && feld.isFocused();
     }
 
     @Override

@@ -198,7 +198,7 @@ public class SchuldenCommand {
         }
 
         try {
-            CreditEntry eintrag = manager.createCredit(glaeubiger, ich, betrag, faelligkeitMs, bezeichnung, notiz, true);
+            CreditEntry eintrag = manager.createCredit(glaeubiger, ich, betrag, faelligkeitMs, bezeichnung, notiz);
 
             ChatUtil.separator();
             ChatUtil.erfolg("Schuld erfolgreich eingetragen!");

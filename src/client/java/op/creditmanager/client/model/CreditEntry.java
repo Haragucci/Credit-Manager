@@ -17,14 +17,13 @@ public class CreditEntry {
     private String status;
     private List<Payment> payments;
     private String note;
-    private boolean allowItems;
 
     public CreditEntry() {
         this.payments = new ArrayList<>();
     }
 
     public CreditEntry(UUID id, String dealName, String creditor, String debtor,
-                       double amount, Long dueDate, String note, boolean allowItems) {
+                       double amount, Long dueDate, String note) {
         this.id = id;
         this.dealName = dealName;
         this.creditor = creditor;
@@ -36,7 +35,6 @@ public class CreditEntry {
         this.status = "OPEN";
         this.payments = new ArrayList<>();
         this.note = note;
-        this.allowItems = allowItems;
     }
 
     public static String buildDealName(String debtor, String creditor, String label) {
@@ -50,10 +48,6 @@ public class CreditEntry {
 
     public double getRemainingAmount() {
         return Math.max(0, amount - paidAmount);
-    }
-
-    public boolean isFullyPaid() {
-        return paidAmount >= amount;
     }
 
     public void addPayment(Payment payment) {
@@ -120,6 +114,4 @@ public class CreditEntry {
     public String getNote() { return note; }
     public void setNote(String note) { this.note = note; }
 
-    public boolean isAllowItems() { return true; }
-    public void setAllowItems(boolean allowItems) { this.allowItems = allowItems; }
 }

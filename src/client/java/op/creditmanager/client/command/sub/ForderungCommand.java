@@ -194,7 +194,7 @@ public class ForderungCommand {
         }
 
         try {
-            CreditEntry eintrag = manager.createCredit(ich, schuldner, betrag, fälligkeitMs, bezeichnung, notiz, false);
+            CreditEntry eintrag = manager.createCredit(ich, schuldner, betrag, fälligkeitMs, bezeichnung, notiz);
             ChatUtil.separator();
             ChatUtil.erfolg("Forderung erfolgreich eingetragen!");
             ChatUtil.sendRaw("  §7Deal-Name: §f" + eintrag.getDealName());

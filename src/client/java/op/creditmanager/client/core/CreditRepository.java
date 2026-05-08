@@ -203,10 +203,6 @@ public class CreditRepository {
                 k -> new PlayerCreditData(playerName.toLowerCase()));
     }
 
-    public Optional<PlayerCreditData> findPlayer(String playerName) {
-        return Optional.ofNullable(players.get(playerName.toLowerCase()));
-    }
-
     public List<Payment> getPaymentsByCreditId(UUID creditId) {
         List<Payment> result = new ArrayList<>();
         payments.values().stream()

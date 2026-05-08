@@ -70,12 +70,4 @@ public class CreditManagerClient implements ClientModInitializer {
 
 		LOGGER.info("[CreditManager] Bereit.");
 	}
-
-	public static CreditManager getCreditManager() {
-		return creditManager;
-	}
-
-	public static CreditRepository getCreditRepository() {
-		return creditRepository;
-	}
 }

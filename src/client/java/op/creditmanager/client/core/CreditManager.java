@@ -28,8 +28,7 @@ public class CreditManager {
 
 
     public CreditEntry createCredit(String gläubiger, String schuldner, double betrag,
-                                    Long fälligkeit, String bezeichnung, String notiz,
-                                    boolean itemsErlaubt) throws CreditException {
+                                    Long fälligkeit, String bezeichnung, String notiz) throws CreditException {
 
         validateNames(gläubiger, schuldner);
 
@@ -53,8 +52,7 @@ public class CreditManager {
                 schuldner.toLowerCase(),
                 betrag,
                 fälligkeit,
-                notiz,
-                itemsErlaubt
+                notiz
         );
 
 
@@ -104,7 +102,6 @@ public class CreditManager {
         CreditEntry entry = getSafeCredit(dealId);
 
         validateActive(entry);
-        validateItems(entry, items);
         validateAmount(wert);
 
         double finalValue = Math.min(wert, entry.getRemainingAmount());
@@ -119,31 +116,6 @@ public class CreditManager {
         );
 
         payment.setItemNbt(nbt);
-
-        entry.addPayment(payment);
-        repository.saveCredit(entry);
-        repository.savePayment(payment);
-
-        return payment;
-    }
-
-
-    public Payment addChatPayment(UUID dealId, String vonSpieler, double betrag) throws CreditException {
-
-        CreditEntry entry = getSafeCredit(dealId);
-
-        validateActive(entry);
-
-        double finalAmount = Math.min(betrag, entry.getRemainingAmount());
-
-        Payment payment = new Payment(
-                dealId,
-                safe(vonSpieler),
-                entry.getCreditor(),
-                finalAmount,
-                null,
-                "CHAT"
-        );
 
         entry.addPayment(payment);
         repository.saveCredit(entry);
@@ -217,16 +189,6 @@ public class CreditManager {
                 .toList();
     }
 
-    public List<String> getAllDealNames() {
-        return repository.getAllCredits().stream()
-                .filter(e -> !STATUS_CANCELLED.equals(e.getStatus()))
-                .map(CreditEntry::getDealName)
-                .filter(n -> n != null && !n.isBlank())
-                .distinct()
-                .sorted()
-                .toList();
-    }
-
     public Optional<CreditEntry> findCredit(String input) {
         if (input == null || input.isBlank()) return Optional.empty();
 
@@ -245,16 +207,8 @@ public class CreditManager {
         return repository.findCreditByNamePrefix(input);
     }
 
-    public List<Payment> getAllPayments() {
-        return repository.getAllPayments();
-    }
-
     public List<Payment> getPaymentsForCredit(UUID dealId) {
         return repository.getPaymentsByCreditId(dealId);
-    }
-
-    public CreditRepository getRepository() {
-        return repository;
     }
 
     private CreditEntry getSafeCredit(UUID id) throws CreditException {
@@ -271,15 +225,6 @@ public class CreditManager {
     private void validateAmount(double amount) throws CreditException {
         if (amount <= 0) {
             throw new CreditException("Betrag muss > 0 sein.");
-        }
-    }
-
-    private void validateItems(CreditEntry entry, List<String> items) throws CreditException {
-        if (!entry.isAllowItems()) {
-            throw new CreditException("Item-Zahlung nicht erlaubt.");
-        }
-        if (items == null || items.isEmpty()) {
-            throw new CreditException("Keine Items angegeben.");
         }
     }
 

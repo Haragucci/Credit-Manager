@@ -53,10 +53,8 @@ public final class SkinHeadUtil {
     private static final Pattern DEV_PLAYER_NAME =
             Pattern.compile("^Player\\d+$", Pattern.CASE_INSENSITIVE);
 
-    // Runtime-Lookup: Spielername, lowercase Name, UUID usw. -> Skin
     private static final Map<String, CachedSkin> SKIN_ALIASES = new ConcurrentHashMap<>();
 
-    // Persistenter Cache: UUID -> Skin, wird so auch gespeichert
     private static final Map<UUID, CachedSkin> SKIN_BY_UUID = new ConcurrentHashMap<>();
 
     private static final Map<String, Boolean> SKIN_LOADING = new ConcurrentHashMap<>();

@@ -36,10 +36,6 @@ public class ItemInspektionScreen extends BasisScreen {
     private static final int C_HIGHLIGHT = 0xFF2A2A3E;
     private static final int C_DUNKEL    = 0xFF0A0A14;
 
-    private static final int C_DROP_1 = 0x40000000;
-    private static final int C_DROP_2 = 0x28000000;
-    private static final int C_DROP_3 = 0x14000000;
-
     private static final int C_NAV_BG     = 0xFF12121F;
     private static final int C_NAV_BORDER = 0xFF2E2E4A;
     private static final int C_NAV_PREFIX = 0xFF666677;

@@ -225,9 +225,6 @@ public class CreditNeuScreen extends BasisScreen {
                 "Bezeichnung",
                 "Notiz"
         };
-        TextFieldWidget[] felder = {
-                feldGegenspieler, feldBetrag, feldDatum, feldBezeichnung, feldNotiz
-        };
 
         for (int i = 0; i < labels.length; i++) {
             int fy = startY + ZEILEN_ABST * i;
@@ -346,8 +343,7 @@ public class CreditNeuScreen extends BasisScreen {
             CreditEntry eintrag = manager.createCredit(
                     creditor, debtor, betrag, fälligkeitMs,
                     bezeichnung.isBlank() ? null : bezeichnung,
-                    notiz.isBlank()       ? null : notiz,
-                    istSchulden);
+                    notiz.isBlank()       ? null : notiz);
             erfolgText = "Deal \"" + eintrag.getDealName() + "\" erstellt!";
             SCHEDULER.schedule(
                     () -> mc.execute(() -> mc.setScreen(elternScreen)),

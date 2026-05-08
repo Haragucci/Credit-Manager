@@ -16,10 +16,6 @@ public class Payment {
     private long timestamp;
     private String source;
 
-    public Payment() {
-        this.items = new ArrayList<>();
-    }
-
     public Payment(UUID creditId, String fromPlayer, String toPlayer,
                    Double amount, List<String> items, String source) {
         this.id = UUID.randomUUID();

@@ -20,10 +20,6 @@ public abstract class BasisScreen extends Screen {
     private static final int C_HIGHLIGHT   = 0xFF2A2A3E;
     private static final int C_SCHATTEN    = 0xFF0A0A14;
 
-    private static final int C_DROP_1     = 0x40000000;
-    private static final int C_DROP_2     = 0x28000000;
-    private static final int C_DROP_3     = 0x14000000;
-
     private static final int C_NAV_BG     = 0xFF12121F;
     private static final int C_NAV_BORDER = 0xFF2E2E4A;
     private static final int C_NAV_PREFIX = 0xFF666677;
@@ -37,7 +33,6 @@ public abstract class BasisScreen extends Screen {
 
     private static final int C_TRENN_D   = 0xFF0A0A14;
     private static final int C_TRENN_H   = 0xFF2A2A3E;
-    private static final int C_LABEL     = 0xFF888899;
 
     protected int guiX, guiY, guiBreite;
     protected int anzahlSlots;
@@ -80,10 +75,6 @@ public abstract class BasisScreen extends Screen {
 
     protected void setSlot(int index, ItemStack stack) {
         if (index >= 0 && index < slots.length) slots[index] = stack;
-    }
-
-    protected void setSlots(int von, int bis, ItemStack stack) {
-        for (int i = von; i <= bis; i++) setSlot(i, stack);
     }
 
     protected int slotX(int slot) { return guiX + RAND + (slot % COLS) * SLOT_SIZE; }
@@ -172,10 +163,6 @@ public abstract class BasisScreen extends Screen {
         ctx.fill(sx + 1,             sy + SLOT_SIZE - 1, sx + SLOT_SIZE,     sy + SLOT_SIZE,      C_SLOT_H);
         ctx.fill(sx + SLOT_SIZE - 1, sy + 1,             sx + SLOT_SIZE,     sy + SLOT_SIZE,      C_SLOT_H);
         ctx.fill(sx + 1,             sy + 1,             sx + SLOT_SIZE - 1, sy + SLOT_SIZE - 1,  C_SLOT_BG);
-    }
-
-    protected void drawEingesunkenerSlot(DrawContext ctx, int sx, int sy) {
-        drawSlotVertiefung(ctx, sx, sy);
     }
 
     private void drawGuiSlots(DrawContext ctx, int mouseX, int mouseY) {

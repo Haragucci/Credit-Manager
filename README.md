@@ -121,10 +121,18 @@ Dabei wird ein Verrechnungswert angegeben, damit Items wie eine normale Zahlung 
 Beispiel:
 
 ```text
-/cm schulden itemzahlung UserXYZ-05Haragucci-deal 5k
+/cm schulden itemzahlung UserXYZ-05Haragucci-deal 500k
+
+
+
+Hinweis:
+
+Beträge unterstützen Kurzformate wie k, m und mrd.
+
+Beispiel: 500k, 2m / 2mio , 1.5mr
 ```
 
-Dabei wird das Item aus deiner Hand als Zahlung mit einem Wert von `50000` eingetragen.
+Dabei wird das Item aus deiner Hand als Zahlung mit einem Wert von `500.000$` eingetragen.
 
 ## Minecraft-Version
 

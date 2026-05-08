@@ -5,6 +5,10 @@ import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.ItemStack;
+import net.minecraft.nbt.NbtElement;
+import net.minecraft.nbt.NbtOps;
+import net.minecraft.registry.RegistryOps;
+import net.minecraft.registry.RegistryWrapper;
 import net.minecraft.text.Text;
 import op.creditmanager.client.core.CreditManager;
 import op.creditmanager.client.model.CreditEntry;
@@ -230,13 +234,6 @@ public class CreditZahlungScreen extends BasisScreen {
 
         if (tooltipStack != null && !tooltipStack.isEmpty())
             ctx.drawItemTooltip(textRenderer, tooltipStack, tooltipX, tooltipY);
-    }
-
-    private void drawDropShadow(DrawContext ctx) {
-        int x = pX + 4, y = pY + 4, w = PANEL_B, h = pHöhe;
-        ctx.fill(x,     y,     x + w,     y + h,     C_DROP_1);
-        ctx.fill(x + 1, y + 1, x + w + 1, y + h + 1, C_DROP_2);
-        ctx.fill(x + 2, y + 2, x + w + 2, y + h + 2, C_DROP_3);
     }
 
     private void drawPanel(DrawContext ctx) {
@@ -604,16 +601,23 @@ public class CreditZahlungScreen extends BasisScreen {
         }
 
         double verrechnungswert = 0.0;
+
         if (feldVerrechnungswert != null) {
             String raw = feldVerrechnungswert.getText().trim();
+
             if (!raw.isBlank()) {
-                try { verrechnungswert = FormatUtil.parseMoney(raw); }
-                catch (IllegalArgumentException e) {
-                    fehlerText = "Ungültiger Verrechnungswert! z.B.: 500, 1k"; return;
+                try {
+                    verrechnungswert = FormatUtil.parseMoney(raw);
+                } catch (IllegalArgumentException e) {
+                    fehlerText = "Ungültiger Verrechnungswert! z.B.: 500, 1k";
+                    return;
                 }
+
                 if (verrechnungswert < 0) {
-                    fehlerText = "Verrechnungswert darf nicht negativ sein!"; return;
+                    fehlerText = "Verrechnungswert darf nicht negativ sein!";
+                    return;
                 }
+
                 if (verrechnungswert > eintrag.getRemainingAmount()) {
                     fehlerText = "Verrechnungswert überschreitet Restbetrag ("
                             + FormatUtil.formatiereBetrag(eintrag.getRemainingAmount()) + ")!";
@@ -623,24 +627,61 @@ public class CreditZahlungScreen extends BasisScreen {
         }
 
         String itemName = gewähltesItem.getName().getString();
+
         List<String> items = new ArrayList<>();
         items.add(gewählteAnzahl + "x " + itemName);
 
+        String itemNbt = serialisiereItemStack(gewähltesItem, gewählteAnzahl);
+
+        if (itemNbt == null || itemNbt.isBlank()) {
+            fehlerText = "Item konnte nicht vollständig gespeichert werden!";
+            return;
+        }
+
         try {
-            manager.addItemPayment(eintrag.getId(), ich, items, verrechnungswert, null);
+            manager.addItemPayment(eintrag.getId(), ich, items, verrechnungswert, itemNbt);
+
             manager.findCredit(eintrag.getDealName()).ifPresent(f -> eintrag = f);
+
             if (verrechnungswert > 0) {
                 erfolgText = gewählteAnzahl + "× " + itemName
                         + " (≙ " + FormatUtil.formatiereBetrag(verrechnungswert) + ") eingetragen!";
             } else {
                 erfolgText = gewählteAnzahl + "× " + itemName + " eingetragen!";
             }
+
             schedule();
+
         } catch (CreditManager.CreditException e) {
             fehlerText = e.getMessage();
         } catch (Exception e) {
             fehlerText = "Fehler: " + e.getMessage();
         }
+    }
+
+    private String serialisiereItemStack(ItemStack stack, int anzahl) {
+        if (stack == null || stack.isEmpty()) return null;
+
+        MinecraftClient mc = MinecraftClient.getInstance();
+
+        RegistryWrapper.WrapperLookup lookup =
+                mc.player != null ? mc.player.getRegistryManager() : null;
+
+        if (lookup == null) {
+            return null;
+        }
+
+        ItemStack kopie = stack.copy();
+        kopie.setCount(Math.max(1, Math.min(anzahl, stack.getCount())));
+
+        NbtElement nbt = ItemStack.CODEC.encodeStart(
+                RegistryOps.of(NbtOps.INSTANCE, lookup),
+                kopie
+        ).resultOrPartial(error ->
+                System.out.println("[CreditManager] ItemStack konnte nicht serialisiert werden: " + error)
+        ).orElse(null);
+
+        return nbt != null ? nbt.toString() : null;
     }
 
     private void schedule() {

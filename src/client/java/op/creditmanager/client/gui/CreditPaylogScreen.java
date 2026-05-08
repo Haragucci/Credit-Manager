@@ -14,9 +14,7 @@ import op.creditmanager.client.model.TransactionEntry;
 import op.creditmanager.client.util.FormatUtil;
 import op.creditmanager.client.util.TimeUtil;
 
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
+import java.util.*;
 import java.util.stream.Collectors;
 
 public class CreditPaylogScreen extends BasisScreen {
@@ -28,6 +26,7 @@ public class CreditPaylogScreen extends BasisScreen {
     private static final int SLOT_FILTER  = 49;
     private static final int SLOT_PREV    = 48;
     private static final int SLOT_NEXT    = 50;
+    private static final int SLOT_ERWEITERTER_FILTER = 52;
 
     private List<TransactionEntry> alleTransaktionen      = new ArrayList<>();
 
@@ -39,6 +38,10 @@ public class CreditPaylogScreen extends BasisScreen {
     private int    seite  = 0;
     private Filter filter = Filter.ALLE;
     private String ich;
+    private String erweiterterSpielerFilter = null;
+    private Long erweiterterVonMs = null;
+    private Long erweiterterBisMs = null;
+    private String erweiterterZeitraumLabel = "Alle";
 
     public CreditPaylogScreen(CreditManager manager, Screen elternScreen) {
         super(Text.literal("§8CreditManager §7» §fPaylogs"), 6);
@@ -52,8 +55,6 @@ public class CreditPaylogScreen extends BasisScreen {
         ich = client.player != null ? client.player.getName().getString().toLowerCase() : "";
 
         alleTransaktionen = TransactionRepository.getInstance().getAll().stream()
-                .filter(t -> t.getFromPlayer().equalsIgnoreCase(ich)
-                        || t.getToPlayer().equalsIgnoreCase(ich))
                 .sorted(Comparator.comparingLong(TransactionEntry::getTimestamp).reversed())
                 .limit(MAX_EINTRÄGE)
                 .collect(Collectors.toList());
@@ -62,14 +63,28 @@ public class CreditPaylogScreen extends BasisScreen {
     }
 
     private void anwenden() {
+        List<TransactionEntry> basis = alleTransaktionen.stream()
+                .filter(t -> {
+                    if (erweiterterSpielerFilter != null && !erweiterterSpielerFilter.isBlank()) {
+                        return t.getFromPlayer().equalsIgnoreCase(erweiterterSpielerFilter)
+                                || t.getToPlayer().equalsIgnoreCase(erweiterterSpielerFilter);
+                    }
+
+                    return t.getFromPlayer().equalsIgnoreCase(ich)
+                            || t.getToPlayer().equalsIgnoreCase(ich);
+                })
+                .filter(t -> erweiterterVonMs == null || t.getTimestamp() >= erweiterterVonMs)
+                .filter(t -> erweiterterBisMs == null || t.getTimestamp() <= erweiterterBisMs)
+                .collect(Collectors.toList());
+
         gefilterteTransaktionen = switch (filter) {
-            case EINGEHEND -> alleTransaktionen.stream()
+            case EINGEHEND -> basis.stream()
                     .filter(t -> t.getToPlayer().equalsIgnoreCase(ich))
                     .collect(Collectors.toList());
-            case AUSGEHEND -> alleTransaktionen.stream()
+            case AUSGEHEND -> basis.stream()
                     .filter(t -> t.getFromPlayer().equalsIgnoreCase(ich))
                     .collect(Collectors.toList());
-            default        -> new ArrayList<>(alleTransaktionen);
+            default -> new ArrayList<>(basis);
         };
 
         for (int i = 0; i < anzahlSlots; i++) setSlot(i, null);
@@ -97,7 +112,7 @@ public class CreditPaylogScreen extends BasisScreen {
 
         setSlot(SLOT_ZURÜCK, GuiHelper.zurückButton());
         setSlot(SLOT_FILTER, erstelleFilterItem());
-
+        setSlot(SLOT_ERWEITERTER_FILTER, erstelleErweiterterFilterItem());
 
         if (seite > 0) {
             ItemStack prev = new ItemStack(Items.ARROW);
@@ -116,7 +131,6 @@ public class CreditPaylogScreen extends BasisScreen {
 
             setSlot(SLOT_PREV, prev);
         }
-
 
         if (seite < maxSeiten() - 1) {
             ItemStack next = new ItemStack(Items.ARROW);
@@ -139,6 +153,32 @@ public class CreditPaylogScreen extends BasisScreen {
         if (gefilterteTransaktionen.isEmpty()) {
             setSlot(22, erstelleLeerItem());
         }
+    }
+
+    private ItemStack erstelleErweiterterFilterItem() {
+        ItemStack item = new ItemStack(Items.FEATHER);
+
+        item.set(DataComponentTypes.ITEM_NAME, Text.literal("§d§lErweiterter Filter"));
+
+        item.set(
+                DataComponentTypes.CUSTOM_MODEL_DATA,
+                new CustomModelDataComponent(List.of(), List.of(), List.of("8.0"), List.of())
+        );
+
+        String spieler = erweiterterSpielerFilter == null
+                ? "§7Du selbst"
+                : "§f" + erweiterterSpielerFilter;
+
+        item.set(DataComponentTypes.LORE, new LoreComponent(List.of(
+                Text.literal("§7Filtert Paylogs genauer."),
+                Text.literal(""),
+                Text.literal("§7Spieler: §f" + spieler),
+                Text.literal("§7Zeitraum: §f" + erweiterterZeitraumLabel),
+                Text.literal(""),
+                Text.literal("§eKlicken zum Öffnen")
+        )));
+
+        return item;
     }
 
     private ItemStack erstelleKopfItem() {
@@ -165,6 +205,8 @@ public class CreditPaylogScreen extends BasisScreen {
                 "",
                 "§7Einträge: §f" + sichtbar + " §8/ " + gesamt,
                 "§7Filter:   " + filterAnzeige,
+                "§7Spieler:  " + (erweiterterSpielerFilter == null ? "§fDu selbst" : "§f" + erweiterterSpielerFilter),
+                "§7Zeitraum: §f" + erweiterterZeitraumLabel,
                 "",
                 "§7Eingehend: §a+" + FormatUtil.formatiereBetrag(sumEin),
                 "§7Ausgehend: §c-" + FormatUtil.formatiereBetrag(sumAus)
@@ -301,8 +343,76 @@ public class CreditPaylogScreen extends BasisScreen {
             return true;
         }
 
+        if (slot == SLOT_ERWEITERTER_FILTER) {
+            client.setScreen(new CreditPaylogFilterScreen(this));
+            return true;
+        }
+
         return false;
     }
+
+    public void setErweiterterFilter(String spielerFilter, Long vonMs, Long bisMs, String zeitraumLabel) {
+        this.erweiterterSpielerFilter = spielerFilter == null || spielerFilter.isBlank()
+                ? null
+                : spielerFilter;
+
+        this.erweiterterVonMs = vonMs;
+        this.erweiterterBisMs = bisMs;
+
+        this.erweiterterZeitraumLabel = zeitraumLabel == null || zeitraumLabel.isBlank()
+                ? "Alle"
+                : zeitraumLabel;
+
+        this.seite = 0;
+        anwenden();
+    }
+
+    public void resetErweiterterFilter() {
+        this.erweiterterSpielerFilter = null;
+        this.erweiterterVonMs = null;
+        this.erweiterterBisMs = null;
+        this.erweiterterZeitraumLabel = "Alle";
+
+        this.seite = 0;
+        anwenden();
+    }
+
+    public String getErweiterterSpielerFilter() {
+        return erweiterterSpielerFilter;
+    }
+
+    public String getErweiterterZeitraumLabel() {
+        return erweiterterZeitraumLabel;
+    }
+
+    public List<String> getBekanntePaylogSpieler() {
+        java.util.Map<String, String> namen = new java.util.LinkedHashMap<>();
+
+        for (TransactionEntry t : TransactionRepository.getInstance().getAll()) {
+            addPaylogSpielerName(namen, t.getFromPlayer());
+            addPaylogSpielerName(namen, t.getToPlayer());
+        }
+
+        return namen.values().stream()
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .collect(Collectors.toList());
+    }
+
+    private void addPaylogSpielerName(java.util.Map<String, String> namen, String name) {
+        if (name == null || name.isBlank()) return;
+
+        String clean = name.trim();
+
+        if (clean.equalsIgnoreCase("ich")
+                || clean.equalsIgnoreCase("me")
+                || clean.equalsIgnoreCase("Du selbst")) {
+            return;
+        }
+
+        String key = clean.toLowerCase(java.util.Locale.ROOT);
+        namen.putIfAbsent(key, clean);
+    }
+
 
     private int maxSeiten() {
         return Math.max(1, (int) Math.ceil((double) gefilterteTransaktionen.size() / EINTRÄGE_PRO_SEITE));

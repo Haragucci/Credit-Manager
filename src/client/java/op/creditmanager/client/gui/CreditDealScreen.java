@@ -1,6 +1,5 @@
 package op.creditmanager.client.gui;
 
-import com.mojang.authlib.GameProfile;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.component.DataComponentTypes;
@@ -18,20 +17,10 @@ import op.creditmanager.client.util.TimeUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.nio.charset.StandardCharsets;
 import java.util.*;
 
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
-import com.mojang.authlib.properties.Property;
-
-import java.io.InputStreamReader;
-import java.net.URI;
-import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 
 public class CreditDealScreen extends BasisScreen {
 
@@ -42,9 +31,6 @@ public class CreditDealScreen extends BasisScreen {
     private static final int SLOT_AKTION_ZAHLEN  = 20;
     private static final int SLOT_AKTION_LÖSCHEN = 24;
     private static final int SLOT_ZURÜCK         = 36;
-
-    private static final Map<String, GameProfile> SKIN_CACHE = new ConcurrentHashMap<>();
-    private static final Map<String, Boolean> SKIN_LOADING = new ConcurrentHashMap<>();
 
     private boolean löschungAusstehend = false;
     private long    löschungTimestamp  = 0;
@@ -156,106 +142,6 @@ public class CreditDealScreen extends BasisScreen {
         setSlot(SLOT_AKTION_LÖSCHEN, erstelleLöschenButton());
         setSlot(SLOT_ZURÜCK, GuiHelper.zurückButton());
     }
-
-    private static GameProfile fetchMojangProfileMitSkin(String name) {
-        try {
-            String uuidUrl = "https://api.mojang.com/users/profiles/minecraft/" + name;
-
-            JsonObject uuidJson;
-            try (InputStreamReader reader = new InputStreamReader(
-                    URI.create(uuidUrl).toURL().openStream(),
-                    StandardCharsets.UTF_8
-            )) {
-                uuidJson = JsonParser.parseReader(reader).getAsJsonObject();
-            }
-
-            if (!uuidJson.has("id") || !uuidJson.has("name")) {
-                return null;
-            }
-
-            String rawUuid = uuidJson.get("id").getAsString();
-            String realName = uuidJson.get("name").getAsString();
-
-            UUID uuid = UUID.fromString(
-                    rawUuid.replaceFirst(
-                            "(\\w{8})(\\w{4})(\\w{4})(\\w{4})(\\w{12})",
-                            "$1-$2-$3-$4-$5"
-                    )
-            );
-
-            String profileUrl = "https://sessionserver.mojang.com/session/minecraft/profile/"
-                    + rawUuid
-                    + "?unsigned=false";
-
-            JsonObject profileJson;
-            try (InputStreamReader reader = new InputStreamReader(
-                    URI.create(profileUrl).toURL().openStream(),
-                    StandardCharsets.UTF_8
-            )) {
-                profileJson = JsonParser.parseReader(reader).getAsJsonObject();
-            }
-
-            GameProfile profile = new GameProfile(uuid, realName);
-
-            if (profileJson.has("properties")) {
-                for (var element : profileJson.getAsJsonArray("properties")) {
-                    JsonObject property = element.getAsJsonObject();
-
-                    String propertyName = property.get("name").getAsString();
-                    String value = property.get("value").getAsString();
-                    String signature = property.has("signature")
-                            ? property.get("signature").getAsString()
-                            : null;
-
-                    if (signature != null) {
-                        profile.properties().put(propertyName, new Property(propertyName, value, signature));
-                    } else {
-                        profile.properties().put(propertyName, new Property(propertyName, value));
-                    }
-                }
-            }
-
-            return profile;
-
-        } catch (Exception e) {
-            LOGGER.error("[DebtSystem] Mojang-Profil-Abfrage fehlgeschlagen für {}", name, e);
-            return null;
-        }
-    }
-
-    private void ladeSkinProfilAsync(String name) {
-        String key = name.toLowerCase(Locale.ROOT);
-
-        if (SKIN_CACHE.containsKey(key)) return;
-        if (SKIN_LOADING.putIfAbsent(key, true) != null) return;
-
-        CompletableFuture.runAsync(() -> {
-            try {
-                GameProfile profile = fetchMojangProfileMitSkin(name);
-
-                if (profile != null) {
-                    SKIN_CACHE.put(key, profile);
-
-                    MinecraftClient client = MinecraftClient.getInstance();
-                    client.execute(() -> {
-                        if (client.currentScreen == this) {
-                            fülleSlots();
-                        }
-                    });
-
-                    LOGGER.info("[DebtSystem] Skin-Profil geladen für {}", name);
-                } else {
-                    LOGGER.warn("[DebtSystem] Kein Mojang-Profil gefunden für {}", name);
-                }
-
-            } catch (Exception e) {
-                LOGGER.error("[DebtSystem] Skin konnte nicht geladen werden für {}", name, e);
-            } finally {
-                SKIN_LOADING.remove(key);
-            }
-        });
-    }
-
 
     private ItemStack erstelleSpielerKopf() {
 

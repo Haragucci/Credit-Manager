@@ -2,7 +2,6 @@ package op.creditmanager.client.core;
 
 import op.creditmanager.client.CreditManagerClient;
 import op.creditmanager.client.model.TransactionEntry;
-import op.creditmanager.client.util.ChatUtil;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.minecraft.client.MinecraftClient;
@@ -85,9 +84,6 @@ public class PaymentDetector {
 
         CreditManagerClient.LOGGER.info("[PaymentDetector] Transaktion geloggt: "
                 + vonSpieler + " → " + anSpieler + " | " + nf.format(betrag) + "$");
-
-        ChatUtil.erfolg("Transaktion: §f" + vonSpieler + " §7→ §f" + anSpieler
-                + " §7| §6" + nf.format(betrag) + "$");
     }
 
     private double parseBetrag(String roh) {

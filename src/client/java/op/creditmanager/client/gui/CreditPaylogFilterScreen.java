@@ -19,7 +19,7 @@ public class CreditPaylogFilterScreen extends BasisScreen {
     private static final int SLOT_ZEITRAUM = 13;
     private static final int SLOT_ANWENDEN = 15;
     private static final int SLOT_RESET    = 22;
-    private static final int SLOT_ZURÜCK   = 26;
+    private static final int SLOT_ZURÜCK   = 18;
 
     private final CreditPaylogScreen elternScreen;
 
@@ -50,7 +50,7 @@ public class CreditPaylogFilterScreen extends BasisScreen {
     }
 
     public CreditPaylogFilterScreen(CreditPaylogScreen elternScreen) {
-        super(Text.literal("§8CreditManager §7» §fPaylog-Filter"), 3);
+        super(Text.literal("§8CreditManager §7» §fFilter"), 3);
         this.elternScreen = elternScreen;
         this.ausgewählterSpielerFilter = elternScreen.getErweiterterSpielerFilter();
 

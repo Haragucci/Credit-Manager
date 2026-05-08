@@ -70,36 +70,46 @@ public class CreditDealScreen extends BasisScreen {
                 .ifPresent(frisch -> eintrag = frisch);
 
         slotZuZahlung.clear();
-
-        slotZuZahlung.clear();
         slotZuLöschen.clear();
 
-        for (int i = 0; i < anzahlSlots; i++) setSlot(i, GuiHelper.schwarzGlas());
-        for (int i = 36; i < 45; i++)         setSlot(i, GuiHelper.schwarzGlas());
+        for (int i = 0; i < anzahlSlots; i++) {
+            setSlot(i, GuiHelper.schwarzGlas());
+        }
 
-        for (int i = 10; i <= 16; i++) setSlot(i, GuiHelper.trennGlas());
+        for (int i = 36; i < 45; i++) {
+            setSlot(i, GuiHelper.schwarzGlas());
+        }
 
+        for (int i = 10; i <= 16; i++) {
+            setSlot(i, GuiHelper.trennGlas());
+        }
 
         setSlot(SLOT_SPIELERKOPF, erstelleSpielerKopf());
-        setSlot(SLOT_STATUS,      erstelleStatusItem());
-        setSlot(SLOT_BETRAG,      erstelleBetragItem());
+        setSlot(SLOT_STATUS, erstelleStatusItem());
+        setSlot(SLOT_BETRAG, erstelleBetragItem());
 
         List<Payment> zahlungen = manager.getPaymentsForCredit(eintrag.getId());
+
         if (zahlungen.isEmpty()) {
             setSlot(13, GuiHelper.erstelleItem(
                     new ItemStack(Items.PAPER),
                     "§7Zahlungshistorie",
-                    "§8Noch keine Zahlungen eingetragen."));
+                    "§8Noch keine Zahlungen eingetragen."
+            ));
         } else {
-            int start   = Math.max(0, zahlungen.size() - 7);
+            int start = Math.max(0, zahlungen.size() - 7);
             int slotIdx = 0;
+
             for (int i = start; i < zahlungen.size(); i++) {
                 int zielSlot = SLOT_ZAHLUNGEN_START + slotIdx;
                 Payment p = zahlungen.get(i);
 
                 if (zahlungLöschungAusstehend && p.getId().equals(zahlungLöschungId)) {
-                    long verbleibend = Math.max(0,
-                            BESTÄTIGUNG_TIMEOUT_MS - (System.currentTimeMillis() - zahlungLöschungTimestamp));
+                    long verbleibend = Math.max(
+                            0,
+                            BESTÄTIGUNG_TIMEOUT_MS - (System.currentTimeMillis() - zahlungLöschungTimestamp)
+                    );
+
                     setSlot(zielSlot, GuiHelper.erstelleItem(
                             new ItemStack(Items.TNT),
                             "§c§l⚠ Zahlung löschen?",
@@ -108,22 +118,29 @@ public class CreditDealScreen extends BasisScreen {
                             "§cNicht rückgängig machbar!",
                             "§7Timeout: §e" + (verbleibend / 1000) + "s",
                             "",
-                            "§c§lNochmals klicken zum Bestätigen"));
+                            "§c§lRechtsklick zum Bestätigen"
+                    ));
+
                     slotZuLöschen.put(zielSlot, p);
                 } else {
                     setSlot(zielSlot, erstelleZahlungsItem(p));
+
                     if (p.getItems() != null && !p.getItems().isEmpty()) {
                         slotZuZahlung.put(zielSlot, p);
                     }
+
                     slotZuLöschen.put(zielSlot, p);
                 }
+
                 slotIdx++;
             }
+
             if (zahlungen.size() > 7) {
                 setSlot(9, GuiHelper.erstelleItem(
                         new ItemStack(Items.PAPER),
                         "§7+" + (zahlungen.size() - 7) + " weitere",
-                        "§8Ältere Zahlungen via §f/cm info " + eintrag.getDealName()));
+                        "§8Ältere Zahlungen via §f/cm info " + eintrag.getDealName()
+                ));
             }
         }
 
@@ -136,7 +153,8 @@ public class CreditDealScreen extends BasisScreen {
             setSlot(SLOT_AKTION_ZAHLEN, GuiHelper.erstelleItem(
                     new ItemStack(Items.GRAY_DYE),
                     "§8Deal abgeschlossen",
-                    "§8Keine weiteren Aktionen möglich."));
+                    "§8Keine weiteren Aktionen möglich."
+            ));
         }
 
         setSlot(SLOT_AKTION_LÖSCHEN, erstelleLöschenButton());
@@ -245,50 +263,73 @@ public class CreditDealScreen extends BasisScreen {
         );
     }
 
+    private String safeName(String name) {
+        return name == null || name.isBlank() ? "Unbekannt" : name;
+    }
+
     private ItemStack erstelleZahlungsItem(Payment p) {
-        boolean ichWarSender = p.getFromPlayer().equalsIgnoreCase(ich);
         boolean istItemZahlung = p.getItems() != null && !p.getItems().isEmpty();
+
+        String von = safeName(eintrag.getDebtor());
+        String an = safeName(eintrag.getCreditor());
+
         net.minecraft.item.Item icon = istItemZahlung ? Items.CHEST : Items.FEATHER;
 
         List<Text> lore = new ArrayList<>();
-        lore.add(Text.literal("§7Von: §f" + p.getFromPlayer()));
-        lore.add(Text.literal("§7An:  §f" + p.getToPlayer()));
+
+        lore.add(Text.literal("§7Von: §f" + von));
+        lore.add(Text.literal("§7An:  §f" + an));
         lore.add(Text.literal(""));
 
         if (istItemZahlung) {
             lore.add(Text.literal("§dItem-Zahlung:"));
+
             for (String item : p.getItems()) {
                 lore.add(Text.literal("  §f" + item));
             }
+
             if (p.getAmount() != null && p.getAmount() > 0) {
                 lore.add(Text.literal("§7Wert: §6" + FormatUtil.formatiereBetrag(p.getAmount())));
             }
+
             lore.add(Text.literal(""));
-            lore.add(Text.literal("§eKlicken zum Inspizieren"));
+            lore.add(Text.literal("§eLinksklick zum Inspizieren"));
+            lore.add(Text.literal("§cRechtsklick zum Löschen"));
         } else {
             lore.add(Text.literal("§7Betrag: §6" + FormatUtil.formatiereBetrag(p.getAmount())));
+            lore.add(Text.literal(""));
+            lore.add(Text.literal("§cRechtsklick zum Löschen"));
         }
 
         lore.add(Text.literal(""));
         lore.add(Text.literal("§8" + TimeUtil.formatDatumZeit(p.getTimestamp())));
 
-        String titel = istItemZahlung
-                ? "§dItem-Zahlung"
-                : (ichWarSender ? "§c-" : "§a+") + FormatUtil.formatiereBetrag(p.getAmount());
+        String titel;
 
-        lore.add(Text.literal(""));
-        lore.add(Text.literal("§cLinksklick zum Löschen"));
+        if (istItemZahlung) {
+            titel = "§dItem-Zahlung";
+        } else {
+            String prefix = istSchulden ? "§c-" : "§a+";
+            titel = prefix + FormatUtil.formatiereBetrag(p.getAmount());
+        }
 
         ItemStack stack = new ItemStack(icon);
+
         if (istItemZahlung) {
-            stack.set(DataComponentTypes.CUSTOM_MODEL_DATA,
-                    new CustomModelDataComponent(List.of(), List.of(), List.of("1.0"), List.of()));
+            stack.set(
+                    DataComponentTypes.CUSTOM_MODEL_DATA,
+                    new CustomModelDataComponent(List.of(), List.of(), List.of("1.0"), List.of())
+            );
         } else {
-            stack.set(DataComponentTypes.CUSTOM_MODEL_DATA,
-                    new CustomModelDataComponent(List.of(), List.of(), List.of("5.0"), List.of()));
+            stack.set(
+                    DataComponentTypes.CUSTOM_MODEL_DATA,
+                    new CustomModelDataComponent(List.of(), List.of(), List.of("5.0"), List.of())
+            );
         }
+
         stack.set(DataComponentTypes.ITEM_NAME, Text.literal(titel));
         stack.set(DataComponentTypes.LORE, new LoreComponent(lore));
+
         return stack;
     }
 
@@ -359,23 +400,25 @@ public class CreditDealScreen extends BasisScreen {
         }
 
         if (slotZuZahlung.containsKey(slot)) {
-            client.setScreen(new ItemInspektionScreen(slotZuZahlung.get(slot), this));
+            client.setScreen(new ItemInspektionScreen(slotZuZahlung.get(slot), eintrag, this));
             return true;
         }
 
         if (slot == SLOT_AKTION_ZAHLEN) {
             boolean abgeschlossen = "PAID".equals(eintrag.getStatus())
                     || "CANCELLED".equals(eintrag.getStatus());
+
             if (!abgeschlossen) {
                 client.setScreen(new CreditZahlungScreen(manager, eintrag, istSchulden, this));
             }
+
             return true;
         }
 
         if (slot == SLOT_AKTION_LÖSCHEN) {
             if (!löschungAusstehend) {
                 löschungAusstehend = true;
-                löschungTimestamp  = System.currentTimeMillis();
+                löschungTimestamp = System.currentTimeMillis();
                 fülleSlots();
             } else {
                 if (System.currentTimeMillis() - löschungTimestamp > BESTÄTIGUNG_TIMEOUT_MS) {
@@ -391,38 +434,83 @@ public class CreditDealScreen extends BasisScreen {
                     }
                 }
             }
+
             return true;
         }
 
         if (slotZuLöschen.containsKey(slot)) {
-            Payment p = slotZuLöschen.get(slot);
-            if (slotZuZahlung.containsKey(slot)) {
-                client.setScreen(new ItemInspektionScreen(slotZuZahlung.get(slot), this));
-                return true;
-            }
-            if (!zahlungLöschungAusstehend || !p.getId().equals(zahlungLöschungId)) {
-                zahlungLöschungAusstehend = true;
-                zahlungLöschungId        = p.getId();
-                zahlungLöschungTimestamp = System.currentTimeMillis();
-                fülleSlots();
-            } else {
-                if (System.currentTimeMillis() - zahlungLöschungTimestamp > BESTÄTIGUNG_TIMEOUT_MS) {
-                    zahlungLöschungAusstehend = false;
-                    fülleSlots();
-                } else {
-                    try {
-                        manager.deletePayment(p.getId());
-                        zahlungLöschungAusstehend = false;
-                        fülleSlots();
-                    } catch (CreditManager.CreditException ex) {
-                        zahlungLöschungAusstehend = false;
-                        fülleSlots();
-                    }
-                }
-            }
             return true;
         }
 
         return false;
+    }
+
+    @Override
+    public boolean mouseClicked(net.minecraft.client.gui.Click click, boolean doubled) {
+        if (click.button() == 1) {
+            int slot = findeSlotUnterMaus(click.x(), click.y());
+
+            if (slot != -1 && slotZuLöschen.containsKey(slot)) {
+                rechtsklickZahlungLöschen(slot);
+                return true;
+            }
+        }
+
+        return super.mouseClicked(click, doubled);
+    }
+
+    private int findeSlotUnterMaus(double mouseX, double mouseY) {
+        for (int i = 0; i < anzahlSlots; i++) {
+            ItemStack stack = slots[i];
+
+            if (stack == null || stack.isEmpty()) {
+                continue;
+            }
+
+            if (isHov(slotX(i), slotY(i), mouseX, mouseY)) {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private void rechtsklickZahlungLöschen(int slot) {
+        Payment p = slotZuLöschen.get(slot);
+
+        if (p == null) {
+            return;
+        }
+
+        if (!zahlungLöschungAusstehend || !p.getId().equals(zahlungLöschungId)) {
+            zahlungLöschungAusstehend = true;
+            zahlungLöschungId = p.getId();
+            zahlungLöschungTimestamp = System.currentTimeMillis();
+            fülleSlots();
+            return;
+        }
+
+        if (System.currentTimeMillis() - zahlungLöschungTimestamp > BESTÄTIGUNG_TIMEOUT_MS) {
+            zahlungLöschungAusstehend = false;
+            zahlungLöschungId = null;
+            fülleSlots();
+            return;
+        }
+
+        try {
+            manager.deletePayment(p.getId());
+
+            zahlungLöschungAusstehend = false;
+            zahlungLöschungId = null;
+
+            manager.findCredit(eintrag.getDealName())
+                    .ifPresent(frisch -> eintrag = frisch);
+
+            fülleSlots();
+        } catch (CreditManager.CreditException ex) {
+            zahlungLöschungAusstehend = false;
+            zahlungLöschungId = null;
+            fülleSlots();
+        }
     }
 }

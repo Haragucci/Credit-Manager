@@ -13,6 +13,7 @@ import net.minecraft.registry.RegistryOps;
 import net.minecraft.registry.RegistryWrapper;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
+import op.creditmanager.client.model.CreditEntry;
 import op.creditmanager.client.model.Payment;
 import op.creditmanager.client.util.FormatUtil;
 import op.creditmanager.client.util.TimeUtil;
@@ -61,15 +62,42 @@ public class ItemInspektionScreen extends BasisScreen {
     private final Payment   zahlung;
     private final Screen    elternScreen;
     private final ItemStack parsedStack;
+    private final String    anzeigeVon;
+    private final String    anzeigeAn;
 
     private int     pX, pY;
     private boolean btnHover = false;
 
     public ItemInspektionScreen(Payment zahlung, Screen elternScreen) {
+        this(
+                zahlung,
+                elternScreen,
+                zahlung != null ? zahlung.getFromPlayer() : "",
+                zahlung != null ? zahlung.getToPlayer() : ""
+        );
+    }
+
+    public ItemInspektionScreen(Payment zahlung, CreditEntry eintrag, Screen elternScreen) {
+        this(
+                zahlung,
+                elternScreen,
+                eintrag != null ? eintrag.getDebtor() : (zahlung != null ? zahlung.getFromPlayer() : ""),
+                eintrag != null ? eintrag.getCreditor() : (zahlung != null ? zahlung.getToPlayer() : "")
+        );
+    }
+
+    private ItemInspektionScreen(Payment zahlung, Screen elternScreen, String von, String an) {
         super(Text.literal("Item-Inspektion"), 0);
-        this.zahlung      = zahlung;
+
+        this.zahlung = zahlung;
         this.elternScreen = elternScreen;
-        this.parsedStack  = parseItemStack(zahlung);
+        this.anzeigeVon = safeName(von);
+        this.anzeigeAn = safeName(an);
+        this.parsedStack = parseItemStack(zahlung);
+    }
+
+    private String safeName(String name) {
+        return name == null || name.isBlank() ? "Unbekannt" : name;
     }
 
     private ItemStack parseItemStack(Payment zahlung) {
@@ -483,42 +511,52 @@ public class ItemInspektionScreen extends BasisScreen {
 
         boolean showcaseHover = mouseX >= showcaseX && mouseX <= showcaseX + SHOWCASE_SIZE
                 && mouseY >= showcaseY && mouseY <= showcaseY + SHOWCASE_SIZE;
+
         if (showcaseHover) {
             ctx.fill(showcaseX, showcaseY,
                     showcaseX + SHOWCASE_SIZE, showcaseY + SHOWCASE_SIZE, C_HOVER);
             ctx.drawItemTooltip(textRenderer, parsedStack, mouseX, mouseY);
         }
+
         curY += SHOWCASE_SIZE + 10;
 
         Text nameText = parsedStack.getName();
-        int  nameW    = textRenderer.getWidth(nameText);
+        int nameW = textRenderer.getWidth(nameText);
+
         ctx.drawText(textRenderer, nameText,
                 pX + (PANEL_B - nameW) / 2, curY, C_WHITE, false);
+
         curY += 12;
 
-        String regId  = Registries.ITEM.getId(parsedStack.getItem()).toString();
-        int    regIdW = textRenderer.getWidth(regId);
+        String regId = Registries.ITEM.getId(parsedStack.getItem()).toString();
+        int regIdW = textRenderer.getWidth(regId);
+
         ctx.drawText(textRenderer, Text.literal(regId),
                 pX + (PANEL_B - regIdW) / 2, curY, C_DARK, false);
+
         curY += 12;
 
         ctx.fill(pX + RAND, curY, pX + PANEL_B - RAND, curY + 1, C_TRENN_D);
         curY += 6;
 
-        String betrag = (zahlung.getAmount() != null && zahlung.getAmount() > 0)
+        String betrag = (zahlung != null && zahlung.getAmount() != null && zahlung.getAmount() > 0)
                 ? "§6" + FormatUtil.formatiereBetrag(zahlung.getAmount())
                 : "§8– (Item-Tausch)";
+
         drawZeile(ctx, x, curY, maxW, "Wert:", betrag);
         curY += 12;
 
-        drawZeile(ctx, x, curY, maxW, "Von:", "§f" + zahlung.getFromPlayer());
-        curY += 11;
-        drawZeile(ctx, x, curY, maxW, "An:",  "§f" + zahlung.getToPlayer());
+        drawZeile(ctx, x, curY, maxW, "Von:", "§f" + anzeigeVon);
         curY += 11;
 
-        drawZeile(ctx, x, curY, maxW, "Zeitpunkt:",
-                "§7" + TimeUtil.formatDatumZeit(zahlung.getTimestamp()));
+        drawZeile(ctx, x, curY, maxW, "An:", "§f" + anzeigeAn);
+        curY += 11;
 
+        String zeitpunkt = zahlung != null
+                ? TimeUtil.formatDatumZeit(zahlung.getTimestamp())
+                : "Unbekannt";
+
+        drawZeile(ctx, x, curY, maxW, "Zeitpunkt:", "§7" + zeitpunkt);
 
         int btnX = pX + RAND;
         int btnY = pY + PANEL_H - 30;
@@ -527,16 +565,20 @@ public class ItemInspektionScreen extends BasisScreen {
 
         ctx.fill(btnX, btnY, btnX + btnW, btnY + btnH,
                 btnHover ? C_BTN_HOV : C_BTN_BG);
-        ctx.fill(btnX,            btnY,            btnX + btnW,    btnY + 1,       C_SLOT_H);
-        ctx.fill(btnX,            btnY,            btnX + 1,        btnY + btnH,    C_SLOT_H);
-        ctx.fill(btnX,            btnY + btnH - 1, btnX + btnW,    btnY + btnH,    C_SLOT_D);
-        ctx.fill(btnX + btnW - 1, btnY,            btnX + btnW,    btnY + btnH,    C_SLOT_D);
 
-        String btnText  = "§7← Zurück";
-        int    btnTextW = textRenderer.getWidth(btnText);
+        ctx.fill(btnX, btnY, btnX + btnW, btnY + 1, C_SLOT_H);
+        ctx.fill(btnX, btnY, btnX + 1, btnY + btnH, C_SLOT_H);
+        ctx.fill(btnX, btnY + btnH - 1, btnX + btnW, btnY + btnH, C_SLOT_D);
+        ctx.fill(btnX + btnW - 1, btnY, btnX + btnW, btnY + btnH, C_SLOT_D);
+
+        String btnText = "§7← Zurück";
+        int btnTextW = textRenderer.getWidth(btnText);
+
         ctx.drawText(textRenderer, Text.literal(btnText),
-                btnX + (btnW - btnTextW) / 2, btnY + (btnH - 8) / 2,
-                btnHover ? C_WHITE : C_GRAY, false);
+                btnX + (btnW - btnTextW) / 2,
+                btnY + (btnH - 8) / 2,
+                btnHover ? C_WHITE : C_GRAY,
+                false);
     }
 
     private void drawZeile(DrawContext ctx, int x, int y, int maxW,

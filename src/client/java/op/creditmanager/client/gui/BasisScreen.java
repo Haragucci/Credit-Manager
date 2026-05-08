@@ -1,5 +1,6 @@
 package op.creditmanager.client.gui;
 
+import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.item.ItemStack;
@@ -62,6 +63,18 @@ public abstract class BasisScreen extends Screen {
         this.slots       = new ItemStack[anzahlSlots];
         this.guiBreite   = COLS * SLOT_SIZE + RAND * 2;
         this.gesamtHöhe  = KOPF_GESAMT_LEGACY + guiReihen * SLOT_SIZE + 4;
+    }
+
+    @Override
+    public boolean keyPressed(net.minecraft.client.input.KeyInput input) {
+        MinecraftClient client = MinecraftClient.getInstance();
+
+        if (client.options.inventoryKey.matchesKey(input)) {
+            client.setScreen(null);
+            return true;
+        }
+
+        return super.keyPressed(input);
     }
 
     @Override

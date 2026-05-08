@@ -17,8 +17,8 @@ import java.util.stream.Collectors;
 
 public class CreditPaylogSpielerSuchScreen extends BasisScreen {
 
-    private static final int SLOT_KEIN_FILTER = 45;
-    private static final int SLOT_ZURÜCK      = 53;
+    private static final int SLOT_KEIN_FILTER = 53;
+    private static final int SLOT_ZURÜCK      = 45;
 
     private static final int MAX_TREFFER = 28;
 

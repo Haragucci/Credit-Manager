@@ -78,6 +78,7 @@ public class ItemInspektionScreen extends BasisScreen {
 
     private ItemStack parseItemStack(Payment zahlung) {
         String nbtStr = zahlung.getItemNbt();
+
         if (nbtStr != null && !nbtStr.isBlank()) {
             try {
                 MinecraftClient mc = MinecraftClient.getInstance();
@@ -87,118 +88,298 @@ public class ItemInspektionScreen extends BasisScreen {
                 NbtCompound nbt = StringNbtReader.readCompound(nbtStr);
 
                 if (lookup != null) {
-                    ItemStack stack = ItemStack.CODEC.parse(
-                            RegistryOps.of(NbtOps.INSTANCE, lookup), nbt
-                    ).result().orElse(ItemStack.EMPTY);
-                    if (stack != null && !stack.isEmpty()) return stack;
+                    ItemStack fullStack = tryDecodeFullStack(nbt, lookup);
+                    if (!fullStack.isEmpty()) return fullStack;
+
+                    ItemStack componentStack = tryDecodeComponentOnlyStack(nbt, lookup);
+                    if (!componentStack.isEmpty()) return componentStack;
                 }
 
-                String idStr = nbt.getString("id", "");
-                if (!idStr.isBlank()) {
-                    Identifier itemId = Identifier.of(idStr);
-                    net.minecraft.item.Item item = Registries.ITEM.get(itemId);
-                    int count = nbt.getInt("count", 1);
-                    ItemStack stack = new ItemStack(item, count);
-                    if (lookup != null && nbt.contains("components")) {
-                        applyComponentsFromNbt(stack, nbt.getCompoundOrEmpty("components"), lookup);
-                    }
-                    if (!stack.isEmpty()) return stack;
-                }
-            } catch (Exception ignored) {}
-        }
+                ItemStack simpleStack = tryDecodeSimpleNbtStack(nbt);
+                if (!simpleStack.isEmpty()) return simpleStack;
 
-        List<String> items = zahlung.getItems();
-        if (items != null && !items.isEmpty()) {
-            String raw = items.get(0).trim();
-
-            String id = raw.replaceAll("(?i)^\\d+\\s*x\\s*", "").trim();
-
-            id = id.replace(" ", "_").toLowerCase();
-
-            if (!id.contains(":")) id = "minecraft:" + id;
-
-            try {
-                Identifier itemId = Identifier.of(id);
-                net.minecraft.item.Item item = Registries.ITEM.get(itemId);
-                if (item != null && item != Items.AIR) {
-                    return new ItemStack(item);
-                }
-            } catch (Exception ignored) {}
-
-            ItemStack fallback = new ItemStack(Items.PAPER);
-            fallback.set(DataComponentTypes.ITEM_NAME, Text.literal("§f" + raw));
-            List<Text> lore = new ArrayList<>();
-            lore.add(Text.literal("§8Item ID nicht erkannt: " + id));
-            fallback.set(DataComponentTypes.LORE, new LoreComponent(lore));
-            return fallback;
-        }
-
-        return new ItemStack(Items.BARRIER);
-    }
-
-
-    private void applyComponentsFromNbt(ItemStack stack, NbtCompound comp,
-                                        RegistryWrapper.WrapperLookup lookup) {
-        if (comp.contains("minecraft:custom_name")) {
-            String raw  = comp.getString("minecraft:custom_name", "");
-            Text   name = safeParseText(raw);
-            if (name != null) stack.set(DataComponentTypes.CUSTOM_NAME, name);
-        }
-
-        if (comp.contains("minecraft:lore")) {
-            NbtList    loreNbt  = comp.getListOrEmpty("minecraft:lore");
-            List<Text> loreList = new ArrayList<>();
-            for (int i = 0; i < loreNbt.size(); i++) {
-                String line = loreNbt.getString(i).orElse("");
-                Text   t    = safeParseText(line);
-                if (t != null) loreList.add(t);
+            } catch (Exception e) {
+                System.out.println("[CreditManager] Item-NBT konnte nicht geladen werden: " + e.getMessage());
             }
-            if (!loreList.isEmpty())
-                stack.set(DataComponentTypes.LORE, new LoreComponent(loreList));
+        }
+
+        return fallbackStack(zahlung);
+    }
+
+    private ItemStack tryDecodeFullStack(NbtCompound nbt, RegistryWrapper.WrapperLookup lookup) {
+        try {
+            return ItemStack.CODEC.parse(
+                    RegistryOps.of(NbtOps.INSTANCE, lookup),
+                    nbt
+            ).result().orElse(ItemStack.EMPTY);
+        } catch (Exception ignored) {
+            return ItemStack.EMPTY;
         }
     }
 
-    private static Text safeParseText(String json) {
-        if (json == null || json.isBlank()) return null;
+    private ItemStack tryDecodeComponentOnlyStack(NbtCompound components, RegistryWrapper.WrapperLookup lookup) {
         try {
-            Text t = Text.literal(json);
-            if (t != null) return t;
-        } catch (Exception ignored) {}
-        return Text.literal(json);
+            Identifier itemId = findItemIdFromComponents(components);
+            if (itemId == null) return ItemStack.EMPTY;
+
+            NbtCompound wrapped = new NbtCompound();
+            wrapped.putString("id", itemId.toString());
+            wrapped.putInt("count", getCountFromComponentsOrDefault(components));
+            wrapped.put("components", components.copy());
+
+            return ItemStack.CODEC.parse(
+                    RegistryOps.of(NbtOps.INSTANCE, lookup),
+                    wrapped
+            ).result().orElse(ItemStack.EMPTY);
+
+        } catch (Exception ignored) {
+            return ItemStack.EMPTY;
+        }
     }
+
+    private ItemStack tryDecodeSimpleNbtStack(NbtCompound nbt) {
+        try {
+            String idStr = nbt.getString("id", "");
+
+            if (idStr.isBlank()) {
+                Identifier guessed = findItemIdFromComponents(nbt);
+                if (guessed != null) idStr = guessed.toString();
+            }
+
+            if (idStr.isBlank()) return ItemStack.EMPTY;
+
+            Identifier itemId = Identifier.of(idStr);
+            net.minecraft.item.Item item = Registries.ITEM.get(itemId);
+
+            if (item == null || item == Items.AIR) return ItemStack.EMPTY;
+
+            int count = nbt.getInt("count", 1);
+            if (count <= 0) count = 1;
+
+            return new ItemStack(item, count);
+
+        } catch (Exception ignored) {
+            return ItemStack.EMPTY;
+        }
+    }
+
+    private Identifier findItemIdFromComponents(NbtCompound components) {
+        try {
+            String id = components.getString("id", "");
+            Identifier found = findItemIdByString(id);
+            if (found != null) return found;
+        } catch (Exception ignored) {}
+
+        try {
+            String itemModel = components.getString("minecraft:item_model", "");
+            Identifier found = findItemIdByString(itemModel);
+            if (found != null) return found;
+        } catch (Exception ignored) {}
+
+        try {
+            if (components.contains("minecraft:profile")) {
+                return Identifier.of("minecraft:player_head");
+            }
+
+            if (components.contains("minecraft:item_name")) {
+                NbtCompound itemName = components.getCompoundOrEmpty("minecraft:item_name");
+                String translate = itemName.getString("translate", "");
+
+                if ("block.minecraft.player_head".equals(translate)) {
+                    return Identifier.of("minecraft:player_head");
+                }
+
+                if (translate.startsWith("item.minecraft.")) {
+                    return findItemIdByString("minecraft:" + translate.substring("item.minecraft.".length()));
+                }
+
+                if (translate.startsWith("block.minecraft.")) {
+                    return findItemIdByString("minecraft:" + translate.substring("block.minecraft.".length()));
+                }
+            }
+        } catch (Exception ignored) {}
+
+        return null;
+    }
+
+    private int getCountFromComponentsOrDefault(NbtCompound components) {
+        try {
+            int maxStack = components.getInt("minecraft:max_stack_size", 1);
+            if (maxStack > 1) return 1;
+        } catch (Exception ignored) {}
+
+        return 1;
+    }
+
 
     private ItemStack fallbackStack(Payment zahlung) {
         List<String> items = zahlung.getItems();
-        if (items == null || items.isEmpty()) return new ItemStack(Items.BARRIER);
 
-        String first = items.get(0).trim();
+        if (items == null || items.isEmpty()) {
+            return new ItemStack(Items.BARRIER);
+        }
 
-        try {
-            String id = first.toLowerCase()
-                    .replaceAll("^\\d+x?\\s+", "")
-                    .replaceAll("\\s.*", "")
-                    .trim();
+        String raw = items.get(0);
+        if (raw == null || raw.isBlank()) {
+            return new ItemStack(Items.BARRIER);
+        }
 
-            if (!id.contains(":")) id = "minecraft:" + id;
+        int count = extractCount(raw);
+        Identifier itemId = findItemIdByRawName(raw);
 
-            Identifier itemId = Identifier.of(id);
+        if (itemId != null) {
             net.minecraft.item.Item item = Registries.ITEM.get(itemId);
 
-            if (item != Items.AIR) {
-                ItemStack stack = new ItemStack(item);
-                stack.set(DataComponentTypes.ITEM_NAME, Text.literal("§f" + first));
+            if (item != null && item != Items.AIR) {
+                ItemStack stack = new ItemStack(item, count);
                 return stack;
             }
-        } catch (Exception ignored) {}
+        }
 
-        ItemStack fallback = new ItemStack(Items.FEATHER);
-        fallback.set(DataComponentTypes.ITEM_NAME, Text.literal("§f" + first));
+        ItemStack fallback = new ItemStack(Items.PAPER);
+        fallback.set(DataComponentTypes.ITEM_NAME, Text.literal("§f" + raw));
+
         List<Text> lore = new ArrayList<>();
-        lore.add(Text.literal("§8Item konnte nicht geladen werden"));
+        lore.add(Text.literal("§8Item konnte nicht erkannt werden."));
+        lore.add(Text.literal("§8Gespeicherter Name: §7" + raw));
+        lore.add(Text.literal(""));
+        lore.add(Text.literal("§7Tipp: Für volle NBT/Lore-Anzeige muss"));
+        lore.add(Text.literal("§7das Item beim Speichern komplett serialisiert werden."));
+
         fallback.set(DataComponentTypes.LORE, new LoreComponent(lore));
         return fallback;
     }
 
+    private Identifier findItemIdByRawName(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+
+        String cleaned = cleanRawItemName(raw);
+
+        Identifier direct = findItemIdByString(cleaned);
+        if (direct != null) return direct;
+
+        String normalizedPath = normalizeItemNameToPath(cleaned);
+
+        Identifier pathId = findItemIdByString("minecraft:" + normalizedPath);
+        if (pathId != null) return pathId;
+
+        for (Identifier id : Registries.ITEM.getIds()) {
+            net.minecraft.item.Item item = Registries.ITEM.get(id);
+            if (item == null || item == Items.AIR) continue;
+
+            String idPath = id.getPath();
+            String idPathSpaces = idPath.replace("_", " ");
+
+            if (idPath.equalsIgnoreCase(normalizedPath)) {
+                return id;
+            }
+
+            if (idPathSpaces.equalsIgnoreCase(cleaned)) {
+                return id;
+            }
+
+            String translatedName = item.getName().getString();
+            if (translatedName != null) {
+                String translatedClean = cleanRawItemName(translatedName);
+                if (translatedClean.equalsIgnoreCase(cleaned)) {
+                    return id;
+                }
+
+                String translatedPath = normalizeItemNameToPath(translatedClean);
+                if (translatedPath.equalsIgnoreCase(normalizedPath)) {
+                    return id;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private Identifier findItemIdByString(String value) {
+        if (value == null || value.isBlank()) return null;
+
+        String id = value.trim();
+
+        if (id.contains("{")) {
+            id = id.substring(0, id.indexOf("{")).trim();
+        }
+
+        if (id.contains(" ")) {
+            id = normalizeItemNameToPath(id);
+        }
+
+        if (!id.contains(":")) {
+            id = "minecraft:" + id;
+        }
+
+        try {
+            Identifier identifier = Identifier.of(id);
+            net.minecraft.item.Item item = Registries.ITEM.get(identifier);
+
+            if (item != null && item != Items.AIR) {
+                return identifier;
+            }
+        } catch (Exception ignored) {}
+
+        return null;
+    }
+
+    private String cleanRawItemName(String raw) {
+        String s = raw;
+
+        s = s.replaceAll("§[0-9a-fk-orA-FK-OR]", "");
+        s = s.replaceAll("(?i)^\\s*\\d+\\s*(x|×)?\\s*", "");
+        s = s.replaceAll("(?i)^\\s*x\\s*\\d+\\s*", "");
+
+        if (s.contains("{")) {
+            s = s.substring(0, s.indexOf("{"));
+        }
+
+        if (s.contains(" - ")) {
+            s = s.substring(0, s.indexOf(" - "));
+        }
+
+        s = s.trim();
+
+        while (s.startsWith("\"") || s.startsWith("'")) {
+            s = s.substring(1).trim();
+        }
+
+        while (s.endsWith("\"") || s.endsWith("'")) {
+            s = s.substring(0, s.length() - 1).trim();
+        }
+
+        return s;
+    }
+
+    private String normalizeItemNameToPath(String name) {
+        String s = cleanRawItemName(name).toLowerCase();
+
+        s = s.replace("minecraft:", "");
+        s = s.replace("-", "_");
+        s = s.replace(" ", "_");
+        s = s.replaceAll("[^a-z0-9_:/]", "");
+        s = s.replaceAll("_+", "_");
+
+        return s;
+    }
+
+    private int extractCount(String raw) {
+        if (raw == null) return 1;
+
+        try {
+            java.util.regex.Matcher matcher = java.util.regex.Pattern
+                    .compile("^\\s*(\\d+)\\s*(x|×)?\\s+.*$", java.util.regex.Pattern.CASE_INSENSITIVE)
+                    .matcher(raw);
+
+            if (matcher.matches()) {
+                int count = Integer.parseInt(matcher.group(1));
+                return Math.max(1, Math.min(64, count));
+            }
+        } catch (Exception ignored) {}
+
+        return 1;
+    }
 
 
     @Override
@@ -228,11 +409,6 @@ public class ItemInspektionScreen extends BasisScreen {
         drawTrennlinie(ctx);
         drawInhalt(ctx, mouseX, mouseY);
 
-        super.render(ctx, mouseX, mouseY, delta);
-    }
-
-
-    private void drawDropShadow(DrawContext ctx) {
     }
 
     private void drawPanel(DrawContext ctx) {
@@ -346,7 +522,6 @@ public class ItemInspektionScreen extends BasisScreen {
 
         drawZeile(ctx, x, curY, maxW, "Zeitpunkt:",
                 "§7" + TimeUtil.formatDatumZeit(zahlung.getTimestamp()));
-        curY += 12;
 
 
         int btnX = pX + RAND;

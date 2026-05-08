@@ -11,7 +11,9 @@ import net.minecraft.item.Items;
 import net.minecraft.text.Text;
 import op.creditmanager.client.core.CreditManager;
 import op.creditmanager.client.util.FormatUtil;
-
+import net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
+import net.minecraft.inventory.SimpleInventory;
+import net.minecraft.screen.GenericContainerScreenHandler;
 
 import java.util.List;
 
@@ -22,6 +24,7 @@ public class CreditHauptmenüScreen extends BasisScreen {
     private static final int SLOT_FORDERUNG  = 2;
     private static final int SLOT_SCHULDEN   = 6;
     private static final int SLOT_ÜBERSICHT  = 20;
+    private static final int SLOT_INFO = 22;
     private static final int SLOT_TRANSLOG   = 24;
     private static final int SLOT_KOPF = 13;
 
@@ -145,6 +148,25 @@ public class CreditHauptmenüScreen extends BasisScreen {
 
         setSlot(SLOT_KOPF, kopf);
 
+        ItemStack info = new ItemStack(Items.FEATHER);
+        info.set(DataComponentTypes.ITEM_NAME, Text.literal("§b§lInfo"));
+
+        info.set(
+                DataComponentTypes.CUSTOM_MODEL_DATA,
+                new CustomModelDataComponent(List.of(), List.of(), List.of("7.0"), List.of())
+        );
+
+        info.set(DataComponentTypes.LORE, new LoreComponent(List.of(
+                Text.literal("§7Informationen zur Mod"),
+                Text.literal(""),
+                Text.literal("§7Version, Ersteller, Kontakt"),
+                Text.literal("§7und wichtige Hinweise."),
+                Text.literal(""),
+                Text.literal("§eKlicken zum Öffnen")
+        )));
+
+        setSlot(SLOT_INFO, info);
+
     }
 
     @Override
@@ -164,6 +186,10 @@ public class CreditHauptmenüScreen extends BasisScreen {
         }
         if (slot == SLOT_TRANSLOG) {
             client.setScreen(new CreditPaylogScreen(manager, this));
+            return true;
+        }
+        if (slot == SLOT_INFO) {
+            client.setScreen(new CreditInfoScreen(this));
             return true;
         }
         return false;

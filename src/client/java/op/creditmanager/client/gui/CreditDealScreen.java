@@ -273,7 +273,7 @@ public class CreditDealScreen extends BasisScreen {
         String von = safeName(eintrag.getDebtor());
         String an = safeName(eintrag.getCreditor());
 
-        net.minecraft.item.Item icon = istItemZahlung ? Items.CHEST : Items.FEATHER;
+        net.minecraft.item.Item icon = Items.FEATHER;
 
         List<Text> lore = new ArrayList<>();
 
@@ -318,7 +318,7 @@ public class CreditDealScreen extends BasisScreen {
         if (istItemZahlung) {
             stack.set(
                     DataComponentTypes.CUSTOM_MODEL_DATA,
-                    new CustomModelDataComponent(List.of(), List.of(), List.of("1.0"), List.of())
+                    new CustomModelDataComponent(List.of(), List.of(), List.of("9.0"), List.of())
             );
         } else {
             stack.set(

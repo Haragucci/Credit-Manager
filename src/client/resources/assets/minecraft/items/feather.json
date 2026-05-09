@@ -35,6 +35,10 @@
       {
         "when": "8.0",
         "model": { "type": "minecraft:model", "model": "creditmanager:item/search"}
+      },
+      {
+        "when": "9.0",
+        "model": { "type": "minecraft:model", "model": "creditmanager:item/box"}
       }
     ],
     "fallback": {

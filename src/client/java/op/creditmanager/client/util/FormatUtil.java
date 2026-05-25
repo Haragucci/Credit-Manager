@@ -18,13 +18,19 @@ public class FormatUtil {
         return BETRAG_FORMAT.format(betrag) + "$";
     }
 
-    @Deprecated public static String formatiereBetrag(double betrag) { return formatAmount(betrag); }
+    @Deprecated
+    public static String formatiereBetrag(double betrag) {
+        return formatAmount(betrag);
+    }
 
     public static String formatAmountColored(double betrag) {
         return "§6" + formatAmount(betrag) + "§r";
     }
 
-    @Deprecated public static String formatiereBetragFarbig(double betrag) { return formatAmountColored(betrag); }
+    @Deprecated
+    public static String formatiereBetragFarbig(double betrag) {
+        return formatAmountColored(betrag);
+    }
 
     public static String getStatusDisplay(String status) {
         return switch (status) {
@@ -36,13 +42,19 @@ public class FormatUtil {
         };
     }
 
-    @Deprecated public static String getStatusAnzeige(String status) { return getStatusDisplay(status); }
+    @Deprecated
+    public static String getStatusAnzeige(String status) {
+        return getStatusDisplay(status);
+    }
 
     public static String shortId(CreditEntry eintrag) {
         return eintrag.getId().toString().substring(0, 8);
     }
 
-    @Deprecated public static String kurzId(CreditEntry eintrag) { return shortId(eintrag); }
+    @Deprecated
+    public static String kurzId(CreditEntry eintrag) {
+        return shortId(eintrag);
+    }
 
     public static String formatCreditSummary(CreditEntry e) {
         String name = e.getDealName() != null ? e.getDealName() : shortId(e);
@@ -76,40 +88,191 @@ public class FormatUtil {
             throw new IllegalArgumentException("Leerer Betrag");
         }
 
-        String s = input.trim().toLowerCase().replace(" ", "");
+        String s = input.trim()
+                .toLowerCase(Locale.ROOT)
+                .replace(" ", "")
+                .replace("_", "")
+                .replace("$", "")
+                .replace("€", "");
 
-        double multiplier = 1;
+        if (s.isBlank()) {
+            throw new IllegalArgumentException("Leerer Betrag");
+        }
+
+        double multiplier = 1.0;
 
         if (s.endsWith("mrd")) {
-            multiplier = 1_000_000_000;
+            multiplier = 1_000_000_000.0;
             s = s.substring(0, s.length() - 3);
         } else if (s.endsWith("mio")) {
-            multiplier = 1_000_000;
+            multiplier = 1_000_000.0;
             s = s.substring(0, s.length() - 3);
         } else if (s.endsWith("kk")) {
-            multiplier = 1_000_000;
+            multiplier = 1_000_000.0;
             s = s.substring(0, s.length() - 2);
         } else if (s.endsWith("k")) {
-            multiplier = 1_000;
+            multiplier = 1_000.0;
             s = s.substring(0, s.length() - 1);
         } else if (s.endsWith("m")) {
-            multiplier = 1_000_000;
+            multiplier = 1_000_000.0;
             s = s.substring(0, s.length() - 1);
         } else if (s.endsWith("b")) {
-            multiplier = 1_000_000_000;
+            multiplier = 1_000_000_000.0;
             s = s.substring(0, s.length() - 1);
         }
 
-        s = s.replace(".", "").replace(",", ".");
+        if (s.isBlank()) {
+            throw new IllegalArgumentException("Ungültiger Betrag");
+        }
 
-        double value = Double.parseDouble(s);
+        String normalized = normalizeNumberString(s, multiplier != 1.0);
 
-        if (value <= 0) {
+        double value;
+        try {
+            value = Double.parseDouble(normalized);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Ungültiger Betrag");
+        }
+
+        double result = value * multiplier;
+
+        if (Double.isNaN(result) || Double.isInfinite(result)) {
+            throw new IllegalArgumentException("Ungültiger Betrag");
+        }
+
+        if (result <= 0) {
             throw new IllegalArgumentException("Betrag muss > 0 sein");
         }
 
-        return value * multiplier;
+        return result;
     }
 
-    @Deprecated public static String formatiereDealZeile(CreditEntry e) { return formatCreditSummary(e); }
+    private static String normalizeNumberString(String input, boolean hasSuffixMultiplier) {
+        if (input == null || input.isBlank()) {
+            throw new IllegalArgumentException("Ungültiger Betrag");
+        }
+
+        String s = input.trim();
+
+        if (!s.matches("[0-9.,]+")) {
+            throw new IllegalArgumentException("Ungültiger Betrag");
+        }
+
+        boolean hasDot = s.contains(".");
+        boolean hasComma = s.contains(",");
+
+        if (!hasDot && !hasComma) {
+            return s;
+        }
+
+        if (hasSuffixMultiplier) {
+            return normalizeNumberWithSuffix(s);
+        }
+
+        return normalizeNumberWithoutSuffix(s);
+    }
+
+    private static String normalizeNumberWithSuffix(String s) {
+        boolean hasDot = s.contains(".");
+        boolean hasComma = s.contains(",");
+
+        if (hasDot && hasComma) {
+            int lastDot = s.lastIndexOf('.');
+            int lastComma = s.lastIndexOf(',');
+
+            if (lastDot > lastComma) {
+                return s.replace(",", "");
+            } else {
+                return s.replace(".", "").replace(',', '.');
+            }
+        }
+
+        if (hasDot) {
+            if (countChar(s, '.') > 1) {
+                int last = s.lastIndexOf('.');
+                String before = s.substring(0, last).replace(".", "");
+                String after = s.substring(last + 1);
+                return before + "." + after;
+            }
+
+            return s;
+        }
+
+        if (hasComma) {
+            if (countChar(s, ',') > 1) {
+                int last = s.lastIndexOf(',');
+                String before = s.substring(0, last).replace(",", "");
+                String after = s.substring(last + 1);
+                return before + "." + after;
+            }
+
+            return s.replace(',', '.');
+        }
+
+        return s;
+    }
+
+    private static String normalizeNumberWithoutSuffix(String s) {
+        boolean hasDot = s.contains(".");
+        boolean hasComma = s.contains(",");
+
+        if (hasDot && hasComma) {
+            int lastDot = s.lastIndexOf('.');
+            int lastComma = s.lastIndexOf(',');
+
+            if (lastDot > lastComma) {
+                return s.replace(",", "");
+            } else {
+                return s.replace(".", "").replace(',', '.');
+            }
+        }
+
+        if (hasDot) {
+            return normalizeSingleSeparatorNumber(s, '.');
+        }
+
+        if (hasComma) {
+            return normalizeSingleSeparatorNumber(s, ',');
+        }
+
+        return s;
+    }
+
+    private static String normalizeSingleSeparatorNumber(String s, char separator) {
+        int count = countChar(s, separator);
+
+        if (count > 1) {
+            return s.replace(String.valueOf(separator), "");
+        }
+
+        int pos = s.indexOf(separator);
+        int digitsAfter = s.length() - pos - 1;
+
+        if (digitsAfter == 3) {
+            return s.replace(String.valueOf(separator), "");
+        }
+
+        if (separator == ',') {
+            return s.replace(',', '.');
+        }
+
+        return s;
+    }
+
+    private static int countChar(String s, char c) {
+        int count = 0;
+
+        for (int i = 0; i < s.length(); i++) {
+            if (s.charAt(i) == c) {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    @Deprecated
+    public static String formatiereDealZeile(CreditEntry e) {
+        return formatCreditSummary(e);
+    }
 }

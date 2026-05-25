@@ -11,20 +11,15 @@ import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 public class CreditManagerCommand {
 
     public static void register(CommandDispatcher<FabricClientCommandSource> dispatcher, CreditManager manager) {
-        dispatcher.register(
-                ClientCommandManager.literal("CreditManager")
-                        .executes(ctx -> guiAusführen(ctx, manager))
-                        .then(ClientCommandManager.literal("befehle")
-                                .executes(ctx -> hilfeAusführen(ctx)))
-                        .then(SchuldenCommand.build(manager))
-                        .then(ForderungCommand.build(manager))
-                        .then(InfoCommand.build(manager))
-                        .then(PaylogsCommand.build(manager))
-                        .then(ÜbersichtCommand.build(manager))
-        );
+        registerCommand(dispatcher, manager, "CreditManager");
+        registerCommand(dispatcher, manager, "cm");
+        registerCommand(dispatcher, manager, "OpCreditmanager");
+        registerCommand(dispatcher, manager, "OpCM");
+    }
 
+    private static void registerCommand(CommandDispatcher<FabricClientCommandSource> dispatcher, CreditManager manager, String name) {
         dispatcher.register(
-                ClientCommandManager.literal("cm")
+                ClientCommandManager.literal(name)
                         .executes(ctx -> guiAusführen(ctx, manager))
                         .then(ClientCommandManager.literal("befehle")
                                 .executes(ctx -> hilfeAusführen(ctx)))

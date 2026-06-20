@@ -13,6 +13,8 @@ import op.creditmanager.client.gui.SkinHeadUtil;
 import op.creditmanager.client.model.CreditEntry;
 import op.creditmanager.client.util.FormatUtil;
 import op.creditmanager.client.util.TimeUtil;
+import op.creditmanager.client.search.FuzzySearch;
+import op.creditmanager.client.gui.modern.widget.ModernScrollArea;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -27,10 +29,11 @@ public class ModernCreditListScreen extends ModernBaseScreen {
     private final boolean debts;
     private TextFieldWidget searchField;
     private int statusIndex;
-    private int scrollOffset;
+    private final ModernScrollArea scroll = new ModernScrollArea();
     private int listY;
     private int listHeight;
     private List<CreditEntry> renderedEntries = List.of();
+    private int renderedStart;
     private final Map<String, ItemStack> playerHeads = new ConcurrentHashMap<>();
 
     private static final String[] FILTERS = {"Alle", "Offen", "Teilweise", "Bezahlt", "Storniert"};
@@ -44,9 +47,10 @@ public class ModernCreditListScreen extends ModernBaseScreen {
     protected void init() {
         super.init();
         clearChildren();
-        searchField = new CenteredTextFieldWidget(textRenderer, contentX + 8, contentY + 4, Math.max(60, contentWidth - 16), 34, Text.empty());
+        searchField = ModernUi.configureGuiTextField(
+                new CenteredTextFieldWidget(textRenderer, contentX + 8, contentY + 4, Math.max(60, contentWidth - 16), 34, Text.empty()));
         searchField.setMaxLength(64);
-        searchField.setPlaceholder(Text.literal("Spieler oder Deal suchen..."));
+        ModernUi.setGuiPlaceholder(searchField, "Spieler oder Deal suchen...");
         addDrawableChild(searchField);
     }
 
@@ -61,10 +65,10 @@ public class ModernCreditListScreen extends ModernBaseScreen {
         ModernUi.card(context, contentX, toolbarY, contentWidth, 34,
                 ModernUi.contains(mouseX, mouseY, contentX, toolbarY, contentWidth, 34));
         ModernUi.button(context, textRenderer, contentX, toolbarY + 39, filterWidth, 24,
-                FILTERS[statusIndex], ModernUi.BUTTON_NEUTRAL,
+                FILTERS[statusIndex], ModernUi.theme().buttonNeutral,
                 ModernUi.contains(mouseX, mouseY, contentX, toolbarY + 39, filterWidth, 24));
         ModernUi.button(context, textRenderer, newButtonX, toolbarY + 39, newButtonWidth, 24, "+ Neu",
-                debts ? ModernUi.BUTTON_DANGER : ModernUi.BUTTON_PRIMARY,
+                debts ? ModernUi.theme().buttonDanger : ModernUi.theme().buttonPrimary,
                 ModernUi.contains(mouseX, mouseY, newButtonX, toolbarY + 39, newButtonWidth, 24));
 
         List<CreditEntry> entries = filteredEntries();
@@ -72,26 +76,27 @@ public class ModernCreditListScreen extends ModernBaseScreen {
         listHeight = Math.max(48, contentHeight - 78);
         int rowHeight = 48;
         int visibleRows = Math.max(1, listHeight / rowHeight);
-        int maxOffset = Math.max(0, entries.size() - visibleRows);
-        scrollOffset = Math.min(scrollOffset, maxOffset);
-        int end = Math.min(entries.size(), scrollOffset + visibleRows);
-        renderedEntries = entries.subList(scrollOffset, end);
+        scroll.setBounds(contentX, listY, contentWidth, listHeight, entries.size() * rowHeight);
+        scroll.tick(mouseX, mouseY);
+        int pixelOffset = scroll.offset();
+        renderedStart = Math.max(0, pixelOffset / rowHeight);
+        int end = Math.min(entries.size(), renderedStart + visibleRows + 2);
+        renderedEntries = entries.subList(renderedStart, end);
 
         if (renderedEntries.isEmpty()) {
             ModernUi.card(context, contentX, listY, contentWidth, Math.min(74, listHeight), false);
             ModernUi.drawCentered(context, textRenderer, "Keine passenden Deals gefunden.", contentX + contentWidth / 2,
-                    listY + 24, ModernUi.MUTED);
+                    listY + 24, ModernUi.theme().muted);
             ModernUi.drawCentered(context, textRenderer, "Lege über '+ Neu' einen Deal an.", contentX + contentWidth / 2,
-                    listY + 40, ModernUi.MUTED);
+                    listY + 40, ModernUi.theme().muted);
         } else {
+            context.enableScissor(contentX, listY, contentX + contentWidth, listY + listHeight);
             for (int i = 0; i < renderedEntries.size(); i++) {
-                drawEntry(context, mouseX, mouseY, renderedEntries.get(i), contentX, listY + i * rowHeight, contentWidth);
+                drawEntry(context, mouseX, mouseY, renderedEntries.get(i), contentX,
+                        listY + (renderedStart + i) * rowHeight - pixelOffset, contentWidth - (scroll.isScrollable() ? 8 : 0));
             }
-            if (maxOffset > 0) {
-                ModernUi.drawTruncated(context, textRenderer,
-                        (scrollOffset + 1) + "–" + end + " von " + entries.size() + " · Mausrad zum Scrollen",
-                        contentX + 4, listY + visibleRows * rowHeight + 3, contentWidth - 8, ModernUi.MUTED);
-            }
+            context.disableScissor();
+            scroll.renderScrollbar(context, mouseX, mouseY);
         }
 
         super.render(context, mouseX, mouseY, delta);
@@ -104,18 +109,16 @@ public class ModernCreditListScreen extends ModernBaseScreen {
         String otherPlayer = debts ? entry.getCreditor() : entry.getDebtor();
         context.drawItem(headFor(otherPlayer), x + 8, y + 13);
         String players = safe(entry.getDebtor()) + " -> " + safe(entry.getCreditor());
-        ModernUi.drawTruncated(context, textRenderer, players, x + 30, y + 7, Math.max(40, width - 170), ModernUi.TEXT);
+        ModernUi.drawTruncated(context, textRenderer, players, x + 30, y + 7, Math.max(40, width - 170), ModernUi.theme().text);
         ModernUi.drawTruncated(context, textRenderer, entry.getDealName(), x + 30, y + 22,
-                Math.max(40, width - 170), ModernUi.MUTED);
+                Math.max(40, width - 170), ModernUi.theme().muted);
         String amount = FormatUtil.formatAmount(entry.getRemainingAmount());
-        int amountWidth = textRenderer.getWidth(amount);
-        context.drawText(textRenderer, Text.literal(amount), x + width - amountWidth - 12, y + 9,
-                debts ? ModernUi.RED : ModernUi.GREEN, false);
+        ModernUi.drawGuiTextRightAligned(context, textRenderer, amount, x + width - 12, y + 9,
+                debts ? ModernUi.theme().danger : ModernUi.theme().success);
         String status = statusLabel(entry.getStatus());
-        int statusWidth = textRenderer.getWidth(status);
-        context.drawText(textRenderer, Text.literal(status), x + width - statusWidth - 12, y + 24, accent, false);
+        ModernUi.drawGuiTextRightAligned(context, textRenderer, status, x + width - 12, y + 24, accent);
         if (TimeUtil.isOverdue(entry.getDueDate())) {
-            context.fill(x + 5, y + 5, x + 8, y + 8, ModernUi.RED);
+            context.fill(x + 5, y + 5, x + 8, y + 8, ModernUi.theme().danger);
         }
     }
 
@@ -132,14 +135,13 @@ public class ModernCreditListScreen extends ModernBaseScreen {
     private List<CreditEntry> filteredEntries() {
         String player = currentPlayerName();
         List<CreditEntry> source = debts ? manager.getAllCreditsAsDebtor(player) : manager.getAllCreditsAsCreditor(player);
-        String query = searchField == null ? "" : searchField.getText().trim().toLowerCase(Locale.ROOT);
+        String query = searchField == null ? "" : searchField.getText().trim();
         return source.stream()
                 .filter(entry -> statusMatches(entry.getStatus()))
                 .filter(entry -> query.isEmpty()
-                        || contains(entry.getDealName(), query)
-                        || contains(entry.getCreditor(), query)
-                        || contains(entry.getDebtor(), query))
-                .sorted(Comparator.comparingLong(CreditEntry::getCreatedAt).reversed())
+                        || score(entry, query) > 0)
+                .sorted(Comparator.<CreditEntry>comparingInt(entry -> score(entry, query)).reversed()
+                        .thenComparing(Comparator.comparingLong(CreditEntry::getCreatedAt).reversed()))
                 .toList();
     }
 
@@ -153,8 +155,10 @@ public class ModernCreditListScreen extends ModernBaseScreen {
         };
     }
 
-    private boolean contains(String value, String query) {
-        return value != null && value.toLowerCase(Locale.ROOT).contains(query);
+    private int score(CreditEntry entry, String query) {
+        if (query == null || query.isBlank()) return 1;
+        return Math.max(FuzzySearch.score(entry.getDealName(), query), Math.max(
+                FuzzySearch.score(entry.getCreditor(), query), FuzzySearch.score(entry.getDebtor(), query)));
     }
 
     @Override
@@ -167,17 +171,18 @@ public class ModernCreditListScreen extends ModernBaseScreen {
             int newButtonWidth = Math.max(48, contentWidth - filterWidth - 8);
             if (ModernUi.contains(click.x(), click.y(), contentX, toolbarY + 39, filterWidth, 24)) {
                 statusIndex = (statusIndex + 1) % FILTERS.length;
-                scrollOffset = 0;
+                scroll.scrollToStart();
                 return true;
             }
             if (ModernUi.contains(click.x(), click.y(), newButtonX, toolbarY + 39, newButtonWidth, 24)) {
                 open(new ModernCreateCreditScreen(manager, debts, this));
                 return true;
             }
+            if (scroll.mouseClicked(click.x(), click.y(), click.button())) return true;
             if (ModernUi.contains(click.x(), click.y(), contentX, listY, contentWidth, listHeight)) {
-                int index = (int) ((click.y() - listY) / 48);
-                if (index >= 0 && index < renderedEntries.size()) {
-                    open(new ModernCreditDetailScreen(manager, renderedEntries.get(index), debts, this));
+                int index = (int) ((click.y() - listY + scroll.offset()) / 48);
+                if (index >= renderedStart && index < renderedStart + renderedEntries.size()) {
+                    open(new ModernCreditDetailScreen(manager, renderedEntries.get(index - renderedStart), debts, this));
                     return true;
                 }
             }
@@ -188,9 +193,7 @@ public class ModernCreditListScreen extends ModernBaseScreen {
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
         if (ModernUi.contains(mouseX, mouseY, contentX, listY, contentWidth, listHeight) && verticalAmount != 0) {
-            List<CreditEntry> entries = filteredEntries();
-            int maxOffset = Math.max(0, entries.size() - Math.max(1, listHeight / 48));
-            scrollOffset = Math.max(0, Math.min(maxOffset, scrollOffset - (int) Math.signum(verticalAmount)));
+            scroll.scroll(verticalAmount);
             return true;
         }
         return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
@@ -198,10 +201,10 @@ public class ModernCreditListScreen extends ModernBaseScreen {
 
     private int statusColor(String status) {
         return switch (status) {
-            case CreditManager.STATUS_PAID -> ModernUi.GREEN;
-            case CreditManager.STATUS_PARTIAL -> ModernUi.YELLOW;
-            case CreditManager.STATUS_CANCELLED -> ModernUi.MUTED;
-            default -> ModernUi.RED;
+            case CreditManager.STATUS_PAID -> ModernUi.theme().success;
+            case CreditManager.STATUS_PARTIAL -> ModernUi.theme().warning;
+            case CreditManager.STATUS_CANCELLED -> ModernUi.theme().muted;
+            default -> ModernUi.theme().danger;
         };
     }
 
@@ -216,5 +219,12 @@ public class ModernCreditListScreen extends ModernBaseScreen {
 
     private String safe(String value) {
         return value == null || value.isBlank() ? "Unbekannt" : value;
+    }
+
+    @Override
+    protected void clearTransientState() {
+        scroll.reset();
+        if (searchField != null) searchField.setText("");
+        super.clearTransientState();
     }
 }

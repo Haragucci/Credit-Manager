@@ -3,6 +3,8 @@ package op.creditmanager.client.core;
 import op.creditmanager.client.model.CreditEntry;
 import op.creditmanager.client.model.Payment;
 import op.creditmanager.client.model.PlayerCreditData;
+import op.creditmanager.client.model.CreditEventEntry;
+import op.creditmanager.client.model.CreditEventType;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -65,6 +67,8 @@ public class CreditManager {
         repository.savePlayer(schuldnerData);
 
         repository.saveCredit(entry);
+        recordEvent(CreditEventType.CREDIT_CREATED, entry, entry.getAmount(), entry.getAmount(),
+                entry.getNote(), gläubiger, "CREATE", false);
         return entry;
     }
 
@@ -91,6 +95,7 @@ public class CreditManager {
         entry.addPayment(payment);
         repository.saveCredit(entry);
         repository.savePayment(payment);
+        recordPaymentEvents(entry, payment, rest);
 
         return payment;
     }
@@ -115,7 +120,8 @@ public class CreditManager {
             throw new CreditException("Mindestens ein Item muss ausgewählt werden.");
         }
 
-        double finalValue = Math.min(wert, entry.getRemainingAmount());
+        double remainingBefore = entry.getRemainingAmount();
+        double finalValue = Math.min(wert, remainingBefore);
 
         Payment payment = new Payment(
                 dealId,
@@ -132,6 +138,7 @@ public class CreditManager {
         entry.addPayment(payment);
         repository.saveCredit(entry);
         repository.savePayment(payment);
+        recordPaymentEvents(entry, payment, remainingBefore);
 
         return payment;
     }
@@ -139,8 +146,10 @@ public class CreditManager {
     public CreditEntry deleteCredit(UUID dealId) throws CreditException {
 
         CreditEntry entry = getSafeCredit(dealId);
-
+        double remainingBefore = entry.getRemainingAmount();
         repository.deleteCredit(dealId);
+        recordEvent(CreditEventType.CREDIT_DELETED, entry, entry.getAmount(), remainingBefore,
+                "Deal gelöscht", null, "DELETE", false);
 
         return entry;
     }
@@ -172,9 +181,13 @@ public class CreditManager {
                 .orElseThrow(() -> new CreditException("Zahlung nicht gefunden: " + paymentId));
 
         CreditEntry entry = getSafeCredit(payment.getCreditId());
+        double remainingBefore = entry.getRemainingAmount();
         entry.removePayment(paymentId);
         repository.saveCredit(entry);
         repository.deletePayment(paymentId);
+        recordEvent(CreditEventType.PAYMENT_DELETED, entry, payment.getAmount() == null ? 0.0 : payment.getAmount(),
+                remainingBefore, "Zahlung gelöscht", payment.getFromPlayer(), payment.getSource(),
+                payment.getItems() != null && !payment.getItems().isEmpty());
     }
 
     public List<CreditEntry> getCreditsForPlayer(String player) {
@@ -248,6 +261,31 @@ public class CreditManager {
 
     private String safe(String name) {
         return name == null ? "unknown" : name.toLowerCase();
+    }
+
+    private void recordPaymentEvents(CreditEntry entry, Payment payment, double remainingBefore) {
+        double amount = payment.getAmount() == null ? 0.0 : payment.getAmount();
+        boolean itemPayment = payment.getItems() != null && !payment.getItems().isEmpty();
+        recordEvent(CreditEventType.PAYMENT_ADDED, entry, amount, remainingBefore, "Zahlung hinzugefügt",
+                payment.getFromPlayer(), payment.getSource(), itemPayment);
+        if (STATUS_PAID.equals(entry.getStatus())) {
+            recordEvent(CreditEventType.CREDIT_PAID, entry, amount, remainingBefore, "Deal vollständig bezahlt",
+                    payment.getFromPlayer(), payment.getSource(), itemPayment);
+        } else if (STATUS_PARTIAL.equals(entry.getStatus())) {
+            recordEvent(CreditEventType.CREDIT_PARTIAL, entry, amount, remainingBefore, "Teilzahlung",
+                    payment.getFromPlayer(), payment.getSource(), itemPayment);
+        }
+    }
+
+    private void recordEvent(CreditEventType type, CreditEntry entry, double amount, double amountBefore,
+                             String note, String actor, String source, boolean itemPayment) {
+        try {
+            CreditEventRepository.getInstance().add(new CreditEventEntry(type, entry, amount, amountBefore,
+                    note, actor, source, itemPayment));
+        } catch (RuntimeException exception) {
+            // A history write is useful, but must never undo a completed credit operation.
+            op.creditmanager.client.CreditManagerClient.LOGGER.error("Could not persist credit event " + type, exception);
+        }
     }
 
     public Payment addItemPaymentForced(UUID dealId, String vonSpieler, List<String> items, double verrechnungswert, String itemNbt) throws CreditException { CreditEntry eintrag = repository.findCreditById(dealId) .orElseThrow(() -> new CreditException("Deal nicht gefunden: " + dealId)); if ("PAID".equals(eintrag.getStatus()) || "CANCELLED".equals(eintrag.getStatus())) throw new CreditException("Dieser Deal ist bereits abgeschlossen oder storniert."); if (items == null || items.isEmpty()) throw new CreditException("Keine Items angegeben."); if (verrechnungswert <= 0) throw new CreditException("Der Verrechnungswert muss größer als 0 sein."); double tatsächlicherWert = Math.min(verrechnungswert, eintrag.getRemainingAmount()); Payment zahlung = new Payment(dealId, vonSpieler.toLowerCase(), eintrag.getCreditor(), tatsächlicherWert, items, "MANUELL"); zahlung.setItemNbt(itemNbt); eintrag.addPayment(zahlung); repository.saveCredit(eintrag); repository.savePayment(zahlung); return zahlung; }

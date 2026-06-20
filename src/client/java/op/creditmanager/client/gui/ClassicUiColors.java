@@ -1,29 +1,29 @@
 package op.creditmanager.client.gui;
 
-/** Shared forest-green, lime and gold palette for the classic CreditManager screens. */
+/** Dark palette shared by the classic/inventory screens; kept separate from vanilla UI colours. */
 public final class ClassicUiColors {
 
-    public static final int PANEL = 0xFF0B170E;
-    public static final int OUTER_BORDER = 0xFF071008;
-    public static final int CORNER = 0xFF102618;
-    public static final int HIGHLIGHT = 0xFF3D7637;
-    public static final int SHADOW = 0xFF040A05;
-    public static final int NAVIGATION = 0xFF102618;
-    public static final int TEXT = 0xFFF2F8E9;
-    public static final int MUTED = 0xFFA7BC9D;
-    public static final int MUTED_DARK = 0xFF66805E;
-    public static final int LIME = 0xFF86E34B;
-    public static final int GOLD = 0xFFF0B83F;
-    public static final int GOLD_DARK = 0xFF765719;
-    public static final int SLOT = 0xFF162D1B;
-    public static final int SLOT_EDGE = 0xFF275F2C;
-    public static final int HOVER = 0x4086E34B;
-    public static final int ITEM_GLOW = 0x3086E34B;
-    public static final int PRIMARY = 0xFF216D2B;
-    public static final int PRIMARY_HOVER = 0xFF318A38;
-    public static final int DANGER = 0xFF743B2F;
-    public static final int DANGER_HOVER = 0xFF98503B;
-    public static final int ERROR = 0xFFE46B4A;
+    public static final int PANEL = 0xFF151A20;
+    public static final int OUTER_BORDER = 0xFF080B0E;
+    public static final int CORNER = 0xFF1C242C;
+    public static final int HIGHLIGHT = 0xFF3C5360;
+    public static final int SHADOW = 0xFF080B0E;
+    public static final int NAVIGATION = 0xFF1C242C;
+    public static final int TEXT = 0xFFF1F5F3;
+    public static final int MUTED = 0xFFABB8B3;
+    public static final int MUTED_DARK = 0xFF71807A;
+    public static final int LIME = 0xFF9BE7B0;
+    public static final int GOLD = 0xFFF2BD58;
+    public static final int GOLD_DARK = 0xFF8D6A27;
+    public static final int SLOT = 0xFF202A33;
+    public static final int SLOT_EDGE = 0xFF2B3843;
+    public static final int HOVER = 0x3372D98A;
+    public static final int ITEM_GLOW = 0x309BE7B0;
+    public static final int PRIMARY = 0xFF2F8550;
+    public static final int PRIMARY_HOVER = 0xFF3D9D67;
+    public static final int DANGER = 0xFF934641;
+    public static final int DANGER_HOVER = 0xFFB95751;
+    public static final int ERROR = 0xFFE66E67;
 
     private ClassicUiColors() {
     }

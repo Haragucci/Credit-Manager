@@ -2,6 +2,7 @@ package op.creditmanager.client.config;
 
 import op.creditmanager.client.storage.FileManager;
 import op.creditmanager.client.storage.JsonStorage;
+import op.creditmanager.client.gui.modern.theme.ModernThemeMode;
 
 import java.nio.file.Path;
 
@@ -50,6 +51,56 @@ public final class ClientConfigManager {
     public static synchronized void setShowPaylogNotifications(boolean enabled) {
         ClientConfig loaded = getConfig();
         loaded.setShowPaylogNotifications(enabled);
+        save(loaded);
+    }
+
+    public static synchronized ModernThemeMode getModernThemeMode() {
+        return getConfig().getModernThemeMode();
+    }
+
+    public static synchronized void setModernThemeMode(ModernThemeMode mode) {
+        ClientConfig loaded = getConfig();
+        loaded.setModernThemeMode(mode);
+        save(loaded);
+    }
+
+    public static synchronized GuiFontMode getGuiFontMode() {
+        return getConfig().getGuiFontMode();
+    }
+
+    public static synchronized void setGuiFontMode(GuiFontMode mode) {
+        ClientConfig loaded = getConfig();
+        loaded.setGuiFontMode(mode);
+        save(loaded);
+    }
+
+    public static synchronized int getCustomMainColor() {
+        return getConfig().getCustomMainColor();
+    }
+
+    public static synchronized void setCustomMainColor(int color) {
+        ClientConfig loaded = getConfig();
+        loaded.setCustomMainColor(color);
+        save(loaded);
+    }
+
+    public static synchronized int getCustomAccentColor() {
+        return getConfig().getCustomAccentColor();
+    }
+
+    public static synchronized void setCustomAccentColor(int color) {
+        ClientConfig loaded = getConfig();
+        loaded.setCustomAccentColor(color);
+        save(loaded);
+    }
+
+    public static synchronized int getStatisticsDefaultPeriodDays() {
+        return getConfig().getStatisticsDefaultPeriodDays();
+    }
+
+    public static synchronized void setStatisticsDefaultPeriodDays(int days) {
+        ClientConfig loaded = getConfig();
+        loaded.setStatisticsDefaultPeriodDays(days);
         save(loaded);
     }
 

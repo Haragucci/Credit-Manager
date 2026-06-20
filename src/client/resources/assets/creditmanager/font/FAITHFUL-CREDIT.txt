@@ -1,0 +1,6 @@
+CreditManager uses the Faithful 64x font textures (ASCII, accented and non-Latin European glyph sheets).
+
+Faithful Resource Pack © Faithful Resource Pack
+https://faithfulpack.net/
+
+The complete, unmodified Faithful License is bundled as FAITHFUL-LICENSE.txt beside this notice.

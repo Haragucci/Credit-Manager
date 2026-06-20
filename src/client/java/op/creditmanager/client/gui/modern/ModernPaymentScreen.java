@@ -11,6 +11,7 @@ import net.minecraft.text.Text;
 import op.creditmanager.client.core.CreditManager;
 import op.creditmanager.client.gui.CenteredTextFieldWidget;
 import op.creditmanager.client.gui.ItemStackStorage;
+import op.creditmanager.client.gui.modern.widget.ModernScrollArea;
 import op.creditmanager.client.model.CreditEntry;
 import op.creditmanager.client.util.FormatUtil;
 
@@ -24,11 +25,12 @@ public class ModernPaymentScreen extends ModernBaseScreen {
 
     private static final int INVENTORY_COLUMNS = 9;
     private static final int INVENTORY_ROWS = 4;
-    private static final int INVENTORY_SLOT_SIZE = 16;
+    private static final int INVENTORY_SLOT_SIZE = 22;
 
     private final CreditEntry entry;
     private final boolean debts;
     private final Map<Integer, Integer> selectedInventorySlots = new LinkedHashMap<>();
+    private final ModernScrollArea formScroll = new ModernScrollArea();
 
     private TextFieldWidget amountField;
     private boolean itemMode;
@@ -40,7 +42,9 @@ public class ModernPaymentScreen extends ModernBaseScreen {
     private int inventoryY;
     private int visibleInventoryRows;
     private int inventoryScrollRows;
-    private String feedback;
+    private String itemHint;
+    private int formViewportY;
+    private int formViewportHeight;
 
     public ModernPaymentScreen(CreditManager manager, CreditEntry entry, boolean debts, Screen parent) {
         super(manager, parent, debts ? "Zahlung leisten" : "Zahlung empfangen", debts ? "debts" : "claims");
@@ -61,16 +65,26 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         fieldX = contentX + 8;
         fieldWidth = Math.max(100, contentWidth - 16);
         modeY = contentY;
-        amountField = new CenteredTextFieldWidget(textRenderer, fieldX + 5, modeY + 63, fieldWidth - 10, 19, Text.empty());
+        amountField = ModernUi.configureGuiTextField(
+                new CenteredTextFieldWidget(textRenderer, fieldX + 5, modeY + 63, fieldWidth - 10, 19, Text.empty()));
         amountField.setMaxLength(20);
-        amountField.setPlaceholder(Text.literal(itemMode ? "Gemeinsamer Wert aller Items" : "Betrag eingeben"));
+        ModernUi.setGuiPlaceholder(amountField, itemMode ? "Gemeinsamer Wert aller Items" : "Betrag eingeben");
         addDrawableChild(amountField);
-        setInitialFocus(amountField);
     }
 
     @Override
     public void render(DrawContext context, int mouseX, int mouseY, float delta) {
         renderShell(context, mouseX, mouseY);
+        formViewportY = contentY;
+        formViewportHeight = Math.max(28, contentHeight);
+        int formContentHeight = itemMode ? 204 : 122;
+        formScroll.setBounds(fieldX, formViewportY, fieldWidth, formViewportHeight, formContentHeight);
+        formScroll.tick(mouseX, mouseY);
+        modeY = formViewportY - formScroll.offset();
+        int fieldY = modeY + 63;
+        amountField.setPosition(fieldX + 5, fieldY);
+        amountField.setVisible(fieldY + 19 > formViewportY && fieldY < formViewportY + formViewportHeight);
+        context.enableScissor(fieldX, formViewportY, fieldX + fieldWidth, formViewportY + formViewportHeight);
         drawModeAndAmount(context, mouseX, mouseY);
 
         if (itemMode) {
@@ -78,33 +92,31 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         } else {
             drawMoneyActions(context, mouseX, mouseY);
         }
-
-        if (feedback != null && !itemMode) {
-            ModernUi.drawTruncated(context, textRenderer, feedback, fieldX, panelY + panelHeight - 16, fieldWidth, ModernUi.RED);
-        }
+        context.disableScissor();
+        formScroll.renderScrollbar(context, mouseX, mouseY);
         super.render(context, mouseX, mouseY, delta);
     }
 
     private void drawModeAndAmount(DrawContext context, int mouseX, int mouseY) {
         ModernUi.card(context, fieldX, modeY, fieldWidth, 49, false);
-        context.drawText(textRenderer, Text.literal("Zahlungsart"), fieldX + 10, modeY + 9, ModernUi.MUTED, false);
+        ModernUi.drawGuiText(context, textRenderer, "Zahlungsart", fieldX + 10, modeY + 9, ModernUi.theme().muted);
         int tabWidth = Math.max(40, (fieldWidth - 30) / 2);
-        ModernUi.button(context, textRenderer, fieldX + 10, modeY + 22, tabWidth, 20, "Geld", itemMode ? ModernUi.BUTTON_NEUTRAL : ModernUi.BUTTON_PRIMARY,
+        ModernUi.button(context, textRenderer, fieldX + 10, modeY + 22, tabWidth, 20, "Geld", itemMode ? ModernUi.theme().buttonNeutral : ModernUi.theme().buttonPrimary,
                 ModernUi.contains(mouseX, mouseY, fieldX + 10, modeY + 22, tabWidth, 20));
-        ModernUi.button(context, textRenderer, fieldX + 20 + tabWidth, modeY + 22, tabWidth, 20, "Items", itemMode ? ModernUi.BUTTON_GOLD : ModernUi.BUTTON_NEUTRAL,
+        ModernUi.button(context, textRenderer, fieldX + 20 + tabWidth, modeY + 22, tabWidth, 20, "Items", itemMode ? ModernUi.theme().buttonGold : ModernUi.theme().buttonNeutral,
                 ModernUi.contains(mouseX, mouseY, fieldX + 20 + tabWidth, modeY + 22, tabWidth, 20));
-        String amountLabel = itemMode && feedback != null ? feedback : itemMode ? "Gemeinsamer Item-Wert" : "Betrag";
+        String amountLabel = itemMode && itemHint != null ? itemHint : itemMode ? "Gemeinsamer Item-Wert" : "Betrag";
         ModernUi.drawTruncated(context, textRenderer, amountLabel, fieldX, modeY + 55, fieldWidth,
-                itemMode && feedback != null ? ModernUi.RED : ModernUi.MUTED);
+                itemMode && itemHint != null ? ModernUi.theme().warning : ModernUi.theme().muted);
         ModernUi.card(context, fieldX, modeY + 63, fieldWidth, 19, false);
     }
 
     private void drawMoneyActions(DrawContext context, int mouseX, int mouseY) {
         saveY = modeY + 96;
         int buttonWidth = Math.max(42, Math.min(132, (fieldWidth - 8) / 2));
-        ModernUi.button(context, textRenderer, fieldX, saveY, buttonWidth, 23, "Zahlung speichern", ModernUi.BUTTON_PRIMARY,
+        ModernUi.button(context, textRenderer, fieldX, saveY, buttonWidth, 23, "Zahlung speichern", ModernUi.theme().buttonPrimary,
                 ModernUi.contains(mouseX, mouseY, fieldX, saveY, buttonWidth, 23));
-        ModernUi.button(context, textRenderer, fieldX + buttonWidth + 8, saveY, buttonWidth, 23, "Abbrechen", ModernUi.BUTTON_NEUTRAL,
+        ModernUi.button(context, textRenderer, fieldX + buttonWidth + 8, saveY, buttonWidth, 23, "Abbrechen", ModernUi.theme().buttonNeutral,
                 ModernUi.contains(mouseX, mouseY, fieldX + buttonWidth + 8, saveY, buttonWidth, 23));
     }
 
@@ -112,19 +124,18 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         saveY = modeY + 88;
         int buttonWidth = Math.max(42, Math.min(132, (fieldWidth - 8) / 2));
         ModernUi.button(context, textRenderer, fieldX, saveY, buttonWidth, 20,
-                "Speichern (" + selectedInventorySlots.size() + ")", ModernUi.BUTTON_PRIMARY,
+                "Speichern (" + selectedInventorySlots.size() + ")", ModernUi.theme().buttonPrimary,
                 ModernUi.contains(mouseX, mouseY, fieldX, saveY, buttonWidth, 20));
-        ModernUi.button(context, textRenderer, fieldX + buttonWidth + 8, saveY, buttonWidth, 20, "Auswahl leeren", ModernUi.BUTTON_NEUTRAL,
+        ModernUi.button(context, textRenderer, fieldX + buttonWidth + 8, saveY, buttonWidth, 20, "Auswahl leeren", ModernUi.theme().buttonNeutral,
                 ModernUi.contains(mouseX, mouseY, fieldX + buttonWidth + 8, saveY, buttonWidth, 20));
 
         inventoryY = saveY + 24;
         inventoryX = fieldX + Math.max(0, (fieldWidth - INVENTORY_COLUMNS * INVENTORY_SLOT_SIZE) / 2);
         visibleInventoryRows = INVENTORY_ROWS;
-        inventoryScrollRows = 0;
 
         PlayerInventory inventory = playerInventory();
         if (inventory == null) {
-            ModernUi.drawTruncated(context, textRenderer, "Inventar nicht verfügbar.", fieldX, inventoryY, fieldWidth, ModernUi.RED);
+            ModernUi.drawTruncated(context, textRenderer, "Inventar nicht verfügbar.", fieldX, inventoryY, fieldWidth, ModernUi.theme().danger);
             return;
         }
 
@@ -142,30 +153,36 @@ public class ModernPaymentScreen extends ModernBaseScreen {
     private void drawInventorySlot(DrawContext context, int mouseX, int mouseY, ItemStack stack, int slot, int x, int y) {
         boolean hovered = ModernUi.contains(mouseX, mouseY, x, y, INVENTORY_SLOT_SIZE, INVENTORY_SLOT_SIZE);
         ModernUi.card(context, x, y, INVENTORY_SLOT_SIZE, INVENTORY_SLOT_SIZE, hovered);
-        if (selectedInventorySlots.containsKey(slot)) {
-            context.fill(x + 2, y + 2, x + INVENTORY_SLOT_SIZE - 2, y + INVENTORY_SLOT_SIZE - 2, ModernUi.SELECTION);
-        }
         if (!stack.isEmpty()) {
-            context.drawItem(stack, x, y);
+            context.drawItem(stack, x + 3, y + 3);
+        }
+        if (selectedInventorySlots.containsKey(slot)) {
+            context.fill(x + 2, y + 2, x + INVENTORY_SLOT_SIZE - 2, y + INVENTORY_SLOT_SIZE - 2, ModernUi.theme().selection);
+            context.fill(x + 2, y + 2, x + INVENTORY_SLOT_SIZE - 2, y + 3, ModernUi.theme().accent);
+        }
+        if (hovered && !stack.isEmpty()) {
+            context.drawItemTooltip(textRenderer, stack, mouseX, mouseY);
         }
     }
 
     @Override
     public boolean mouseClicked(Click click, boolean doubled) {
         if (handleSidebarClick(click)) return true;
+        if (formScroll.mouseClicked(click.x(), click.y(), click.button())) return true;
+        if (!formScroll.contains(click.x(), click.y())) return super.mouseClicked(click, doubled);
         if (click.button() != 0) return super.mouseClicked(click, doubled);
 
         int tabWidth = Math.max(40, (fieldWidth - 30) / 2);
         if (ModernUi.contains(click.x(), click.y(), fieldX + 10, modeY + 22, tabWidth, 20)) {
             itemMode = false;
-            feedback = null;
-            amountField.setPlaceholder(Text.literal("Betrag eingeben"));
+            itemHint = null;
+            ModernUi.setGuiPlaceholder(amountField, "Betrag eingeben");
             return true;
         }
         if (ModernUi.contains(click.x(), click.y(), fieldX + 20 + tabWidth, modeY + 22, tabWidth, 20)) {
             itemMode = true;
-            feedback = null;
-            amountField.setPlaceholder(Text.literal("Gemeinsamer Wert aller Items"));
+            itemHint = null;
+            ModernUi.setGuiPlaceholder(amountField, "Gemeinsamer Wert aller Items");
             return true;
         }
 
@@ -178,7 +195,7 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         if (ModernUi.contains(click.x(), click.y(), fieldX + buttonWidth + 8, saveY, buttonWidth, itemButtonHeight)) {
             if (itemMode) {
                 selectedInventorySlots.clear();
-                feedback = null;
+                itemHint = null;
             } else {
                 closeToParent();
             }
@@ -198,6 +215,15 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         return super.mouseClicked(click, doubled);
     }
 
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
+        if (formScroll.contains(mouseX, mouseY)) {
+            formScroll.scroll(verticalAmount);
+            return true;
+        }
+        return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
+    }
+
     private void toggleInventorySlot(int slot, ItemStack stack) {
         if (stack.isEmpty()) return;
         if (selectedInventorySlots.containsKey(slot)) {
@@ -205,19 +231,19 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         } else {
             selectedInventorySlots.put(slot, stack.getCount());
         }
-        feedback = null;
+        itemHint = null;
     }
 
     private void savePayment() {
         if (currentPlayerName().isBlank()) {
-            feedback = "Du musst mit einem Spieler verbunden sein.";
+            toastError("Du musst mit einem Spieler verbunden sein.");
             return;
         }
         double amount;
         try {
             amount = FormatUtil.parseMoney(amountField.getText());
         } catch (IllegalArgumentException exception) {
-            feedback = "Bitte einen gültigen positiven Betrag eingeben.";
+            toastError("Bitte einen gültigen positiven Betrag eingeben.");
             return;
         }
         try {
@@ -226,9 +252,10 @@ public class ModernPaymentScreen extends ModernBaseScreen {
             } else {
                 manager.addMoneyPayment(entry.getId(), currentPlayerName(), amount);
             }
-            MinecraftClient.getInstance().setScreen(parent);
+            toastSuccess(itemMode ? "Item-Zahlung gespeichert." : "Zahlung gespeichert.");
+            closeToParent();
         } catch (CreditManager.CreditException exception) {
-            feedback = exception.getMessage();
+            toastError(exception.getMessage());
         }
     }
 
@@ -258,5 +285,16 @@ public class ModernPaymentScreen extends ModernBaseScreen {
     private PlayerInventory playerInventory() {
         MinecraftClient client = MinecraftClient.getInstance();
         return client.player == null ? null : client.player.getInventory();
+    }
+
+    @Override
+    protected void clearTransientState() {
+        itemMode = false;
+        itemHint = null;
+        inventoryScrollRows = 0;
+        formScroll.reset();
+        selectedInventorySlots.clear();
+        if (amountField != null) amountField.setText("");
+        super.clearTransientState();
     }
 }

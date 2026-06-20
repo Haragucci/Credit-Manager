@@ -10,6 +10,7 @@ import op.creditmanager.client.model.CreditEntry;
 import op.creditmanager.client.model.Payment;
 import op.creditmanager.client.util.FormatUtil;
 import op.creditmanager.client.util.TimeUtil;
+import op.creditmanager.client.gui.modern.widget.ModernScrollArea;
 
 import java.util.Comparator;
 import java.util.List;
@@ -22,11 +23,12 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
     private final boolean debts;
     private int paymentListY;
     private int paymentListHeight;
-    private int scrollOffset;
+    private final ModernScrollArea scroll = new ModernScrollArea();
     private List<Payment> renderedPayments = List.of();
+    private int renderedStart;
     private boolean deleteArmed;
     private UUID paymentDeleteArmed;
-    private String feedback;
+    private int actionWidth;
 
     public ModernCreditDetailScreen(CreditManager manager, CreditEntry entry, boolean debts, Screen parent) {
         super(manager, parent, "Deal-Details", debts ? "debts" : "claims");
@@ -42,36 +44,34 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
         int topY = contentY + 5;
         ModernUi.card(context, contentX, topY, contentWidth, 89, false);
         ModernUi.drawTruncated(context, textRenderer, entry.getDealName(), contentX + 14, topY + 12,
-                Math.max(48, contentWidth - 28), ModernUi.TEXT);
+                Math.max(48, contentWidth - 28), ModernUi.theme().text);
         String counterparty = debts ? entry.getCreditor() : entry.getDebtor();
         ModernUi.drawTruncated(context, textRenderer, debts ? "Gläubiger: " + safe(counterparty) : "Schuldner: " + safe(counterparty),
-                contentX + 14, topY + 28, contentWidth - 28, ModernUi.MUTED);
-        context.drawText(textRenderer, Text.literal("Gesamt: " + FormatUtil.formatAmount(entry.getAmount())),
-                contentX + 14, topY + 44, ModernUi.MUTED, false);
-        context.drawText(textRenderer, Text.literal("Bezahlt: " + FormatUtil.formatAmount(entry.getPaidAmount())),
-                contentX + 14, topY + 58, ModernUi.GREEN, false);
+                contentX + 14, topY + 28, contentWidth - 28, ModernUi.theme().muted);
+        ModernUi.drawGuiText(context, textRenderer, "Gesamt: " + FormatUtil.formatAmount(entry.getAmount()),
+                contentX + 14, topY + 44, ModernUi.theme().muted);
+        ModernUi.drawGuiText(context, textRenderer, "Bezahlt: " + FormatUtil.formatAmount(entry.getPaidAmount()),
+                contentX + 14, topY + 58, ModernUi.theme().success);
         String remaining = "Offen: " + FormatUtil.formatAmount(entry.getRemainingAmount());
-        int remainingWidth = textRenderer.getWidth(remaining);
-        context.drawText(textRenderer, Text.literal(remaining), contentX + contentWidth - remainingWidth - 14, topY + 44,
-                debts ? ModernUi.RED : ModernUi.GREEN, false);
+        ModernUi.drawGuiTextRightAligned(context, textRenderer, remaining, contentX + contentWidth - 14, topY + 44,
+                debts ? ModernUi.theme().danger : ModernUi.theme().success);
         String status = statusLabel(entry.getStatus());
-        int statusWidth = textRenderer.getWidth(status);
-        context.drawText(textRenderer, Text.literal(status), contentX + contentWidth - statusWidth - 14, topY + 58,
-                statusColor(entry.getStatus()), false);
+        ModernUi.drawGuiTextRightAligned(context, textRenderer, status, contentX + contentWidth - 14, topY + 58,
+                statusColor(entry.getStatus()));
         if (entry.getDueDate() != null) {
             ModernUi.drawTruncated(context, textRenderer, "Fällig: " + TimeUtil.formatDate(entry.getDueDate()),
                     contentX + 14, topY + 73, contentWidth - 28,
-                    TimeUtil.isOverdue(entry.getDueDate()) ? ModernUi.RED : ModernUi.MUTED);
+                    TimeUtil.isOverdue(entry.getDueDate()) ? ModernUi.theme().danger : ModernUi.theme().muted);
         }
 
-        int actionY = topY + 98;
-        int actionWidth = Math.max(72, Math.min(148, (contentWidth - 8) / 2));
+        int actionY = topY + 92;
+        actionWidth = Math.max(56, (contentWidth - 8) / 2);
         boolean finished = CreditManager.STATUS_PAID.equals(entry.getStatus()) || CreditManager.STATUS_CANCELLED.equals(entry.getStatus());
         ModernUi.button(context, textRenderer, contentX, actionY, actionWidth, 23,
-                finished ? "Deal abgeschlossen" : "Zahlung eintragen", finished ? ModernUi.BUTTON_NEUTRAL : ModernUi.BUTTON_PRIMARY,
+                finished ? "Abgeschlossen" : "Zahlung", finished ? ModernUi.theme().buttonNeutral : ModernUi.theme().buttonPrimary,
                 ModernUi.contains(mouseX, mouseY, contentX, actionY, actionWidth, 23));
         ModernUi.button(context, textRenderer, contentX + actionWidth + 8, actionY, actionWidth, 23,
-                deleteArmed ? "Löschen bestätigen" : "Deal löschen", ModernUi.BUTTON_DANGER,
+                deleteArmed ? "Bestätigen" : "Löschen", ModernUi.theme().buttonDanger,
                 ModernUi.contains(mouseX, mouseY, contentX + actionWidth + 8, actionY, actionWidth, 23));
 
         paymentListY = actionY + 34;
@@ -79,26 +79,28 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
         List<Payment> payments = manager.getPaymentsForCredit(entry.getId()).stream()
                 .sorted(Comparator.comparingLong(Payment::getTimestamp).reversed())
                 .toList();
-        context.drawText(textRenderer, Text.literal("Zahlungen · " + payments.size()), contentX, paymentListY - 13, ModernUi.MUTED, false);
+        ModernUi.drawGuiText(context, textRenderer, "Zahlungen · " + payments.size(), contentX, paymentListY - 13, ModernUi.theme().muted);
         int rowHeight = 39;
         int visibleRows = Math.max(1, paymentListHeight / rowHeight);
-        int maxOffset = Math.max(0, payments.size() - visibleRows);
-        scrollOffset = Math.min(scrollOffset, maxOffset);
-        int end = Math.min(payments.size(), scrollOffset + visibleRows);
-        renderedPayments = payments.subList(scrollOffset, end);
+        scroll.setBounds(contentX, paymentListY, contentWidth, paymentListHeight, payments.size() * rowHeight);
+        scroll.tick(mouseX, mouseY);
+        int pixelOffset = scroll.offset();
+        renderedStart = Math.max(0, pixelOffset / rowHeight);
+        int end = Math.min(payments.size(), renderedStart + visibleRows + 2);
+        renderedPayments = payments.subList(renderedStart, end);
 
         if (renderedPayments.isEmpty()) {
             ModernUi.card(context, contentX, paymentListY, contentWidth, Math.min(56, paymentListHeight), false);
             ModernUi.drawCentered(context, textRenderer, "Noch keine Zahlungen eingetragen.", contentX + contentWidth / 2,
-                    paymentListY + 22, ModernUi.MUTED);
+                    paymentListY + 22, ModernUi.theme().muted);
         } else {
+            context.enableScissor(contentX, paymentListY, contentX + contentWidth, paymentListY + paymentListHeight);
             for (int i = 0; i < renderedPayments.size(); i++) {
-                drawPayment(context, mouseX, mouseY, renderedPayments.get(i), contentX, paymentListY + i * rowHeight, contentWidth);
+                drawPayment(context, mouseX, mouseY, renderedPayments.get(i), contentX,
+                        paymentListY + (renderedStart + i) * rowHeight - pixelOffset, contentWidth - (scroll.isScrollable() ? 8 : 0));
             }
-        }
-        if (feedback != null) {
-            ModernUi.drawTruncated(context, textRenderer, feedback, contentX, panelY + panelHeight - 16, contentWidth,
-                    ModernUi.YELLOW);
+            context.disableScissor();
+            scroll.renderScrollbar(context, mouseX, mouseY);
         }
         super.render(context, mouseX, mouseY, delta);
     }
@@ -107,28 +109,26 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
         boolean hovered = ModernUi.contains(mouseX, mouseY, x, y, width, 35);
         ModernUi.card(context, x, y, width, 35, hovered);
         boolean itemPayment = payment.getItems() != null && !payment.getItems().isEmpty();
-        int color = itemPayment ? ModernUi.YELLOW : ModernUi.GREEN;
+        int color = itemPayment ? ModernUi.theme().warning : ModernUi.theme().success;
         context.fill(x + 8, y + 7, x + 11, y + 28, color);
         String label = itemPayment ? "Item-Zahlung" : "Geld-Zahlung";
-        ModernUi.drawTruncated(context, textRenderer, label, x + 19, y + 7, Math.max(40, width - 156), ModernUi.TEXT);
+        ModernUi.drawTruncated(context, textRenderer, label, x + 19, y + 7, Math.max(40, width - 156), ModernUi.theme().text);
         ModernUi.drawTruncated(context, textRenderer, safe(payment.getFromPlayer()) + " -> " + safe(payment.getToPlayer())
                         + " · " + TimeUtil.formatDateTime(payment.getTimestamp()), x + 19, y + 20,
-                Math.max(40, width - 156), ModernUi.MUTED);
+                Math.max(40, width - 156), ModernUi.theme().muted);
         String amount = FormatUtil.formatAmount(payment.getAmount() == null ? 0 : payment.getAmount());
-        int amountWidth = textRenderer.getWidth(amount);
-        context.drawText(textRenderer, Text.literal(amount), x + width - amountWidth - 12, y + 7, color, false);
+        ModernUi.drawGuiTextRightAligned(context, textRenderer, amount, x + width - 12, y + 7, color);
         String deleteHint = paymentDeleteArmed != null && paymentDeleteArmed.equals(payment.getId()) ? "Rechtsklick bestätigt" : "Rechtsklick: löschen";
-        int hintWidth = textRenderer.getWidth(deleteHint);
-        context.drawText(textRenderer, Text.literal(deleteHint), x + width - hintWidth - 12, y + 20,
-                paymentDeleteArmed != null && paymentDeleteArmed.equals(payment.getId()) ? ModernUi.RED : ModernUi.MUTED, false);
+        ModernUi.drawGuiTextRightAligned(context, textRenderer, deleteHint, x + width - 12, y + 20,
+                paymentDeleteArmed != null && paymentDeleteArmed.equals(payment.getId()) ? ModernUi.theme().danger : ModernUi.theme().muted);
     }
 
     @Override
     public boolean mouseClicked(Click click, boolean doubled) {
         if (handleSidebarClick(click)) return true;
+        if (scroll.mouseClicked(click.x(), click.y(), click.button())) return true;
         int topY = contentY + 5;
-        int actionY = topY + 98;
-        int actionWidth = Math.max(72, Math.min(148, (contentWidth - 8) / 2));
+        int actionY = topY + 92;
         if (click.button() == 0) {
             if (ModernUi.contains(click.x(), click.y(), contentX, actionY, actionWidth, 23)) {
                 if (!CreditManager.STATUS_PAID.equals(entry.getStatus()) && !CreditManager.STATUS_CANCELLED.equals(entry.getStatus())) {
@@ -141,9 +141,9 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
                 return true;
             }
             if (ModernUi.contains(click.x(), click.y(), contentX, paymentListY, contentWidth, paymentListHeight)) {
-                int index = (int) ((click.y() - paymentListY) / 39);
-                if (index >= 0 && index < renderedPayments.size()) {
-                    Payment payment = renderedPayments.get(index);
+                int index = (int) ((click.y() - paymentListY + scroll.offset()) / 39);
+                if (index >= renderedStart && index < renderedStart + renderedPayments.size()) {
+                    Payment payment = renderedPayments.get(index - renderedStart);
                     if (payment.getItems() != null && !payment.getItems().isEmpty()) {
                         open(new ModernItemInspectionScreen(manager, payment, this));
                     }
@@ -152,9 +152,9 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
             }
         }
         if (click.button() == 1 && ModernUi.contains(click.x(), click.y(), contentX, paymentListY, contentWidth, paymentListHeight)) {
-            int index = (int) ((click.y() - paymentListY) / 39);
-            if (index >= 0 && index < renderedPayments.size()) {
-                deletePayment(renderedPayments.get(index));
+            int index = (int) ((click.y() - paymentListY + scroll.offset()) / 39);
+            if (index >= renderedStart && index < renderedStart + renderedPayments.size()) {
+                deletePayment(renderedPayments.get(index - renderedStart));
                 return true;
             }
         }
@@ -164,39 +164,39 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
     private void deleteDeal() {
         if (!deleteArmed) {
             deleteArmed = true;
-            feedback = "Zum endgültigen Löschen erneut auf den Button klicken.";
+            toastWarning("Erneut klicken, um den Deal zu löschen.");
             return;
         }
         try {
             manager.deleteCredit(entry.getId());
+            toastSuccess("Deal gelöscht.");
             closeToParent();
         } catch (CreditManager.CreditException exception) {
             deleteArmed = false;
-            feedback = exception.getMessage();
+            toastError(exception.getMessage());
         }
     }
 
     private void deletePayment(Payment payment) {
         if (!payment.getId().equals(paymentDeleteArmed)) {
             paymentDeleteArmed = payment.getId();
-            feedback = "Rechtsklick auf dieselbe Zahlung bestätigt das Löschen.";
+            toastWarning("Erneut rechtsklicken, um die Zahlung zu löschen.");
             return;
         }
         try {
             manager.deletePayment(payment.getId());
             paymentDeleteArmed = null;
-            feedback = "Zahlung wurde gelöscht.";
+            toastSuccess("Zahlung gelöscht.");
         } catch (CreditManager.CreditException exception) {
             paymentDeleteArmed = null;
-            feedback = exception.getMessage();
+            toastError(exception.getMessage());
         }
     }
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
         if (ModernUi.contains(mouseX, mouseY, contentX, paymentListY, contentWidth, paymentListHeight) && verticalAmount != 0) {
-            int maximum = Math.max(0, manager.getPaymentsForCredit(entry.getId()).size() - Math.max(1, paymentListHeight / 39));
-            scrollOffset = Math.max(0, Math.min(maximum, scrollOffset - (int) Math.signum(verticalAmount)));
+            scroll.scroll(verticalAmount);
             return true;
         }
         return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
@@ -210,10 +210,10 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
 
     private int statusColor(String status) {
         return switch (status) {
-            case CreditManager.STATUS_PAID -> ModernUi.GREEN;
-            case CreditManager.STATUS_PARTIAL -> ModernUi.YELLOW;
-            case CreditManager.STATUS_CANCELLED -> ModernUi.MUTED;
-            default -> ModernUi.RED;
+            case CreditManager.STATUS_PAID -> ModernUi.theme().success;
+            case CreditManager.STATUS_PARTIAL -> ModernUi.theme().warning;
+            case CreditManager.STATUS_CANCELLED -> ModernUi.theme().muted;
+            default -> ModernUi.theme().danger;
         };
     }
 
@@ -228,5 +228,13 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
 
     private String safe(String value) {
         return value == null || value.isBlank() ? "Unbekannt" : value;
+    }
+
+    @Override
+    protected void clearTransientState() {
+        deleteArmed = false;
+        paymentDeleteArmed = null;
+        scroll.reset();
+        super.clearTransientState();
     }
 }

@@ -4,18 +4,17 @@ import net.minecraft.client.gui.Click;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.text.Text;
-import op.creditmanager.client.config.ClientConfigManager;
-import op.creditmanager.client.config.GuiMode;
 import op.creditmanager.client.core.CreditManager;
-import op.creditmanager.client.gui.GuiRouter;
+import op.creditmanager.client.gui.modern.theme.ModernThemePalette;
+import op.creditmanager.client.gui.modern.widget.ModernScrollArea;
 
-/** Scrollable settings page for presentation and local Paylog behaviour. */
+/** Settings dashboard. Individual categories keep the main screen calm and easy to scan. */
 public class ModernSettingsScreen extends ModernBaseScreen {
-
-    private static final int ROW_HEIGHT = 31;
+    private static final ModernSettingsDetailScreen.Category[] CATEGORIES = ModernSettingsDetailScreen.Category.values();
+    private static final int CATEGORY_ROW_HEIGHT = 54;
+    private final ModernScrollArea categoryScroll = new ModernScrollArea();
     private int listY;
-    private int visibleRows;
-    private int scrollOffset;
+    private int listHeight;
 
     public ModernSettingsScreen(CreditManager manager, Screen parent) {
         super(manager, parent, "Einstellungen", "settings");
@@ -24,95 +23,56 @@ public class ModernSettingsScreen extends ModernBaseScreen {
     @Override
     public void render(DrawContext context, int mouseX, int mouseY, float delta) {
         renderShell(context, mouseX, mouseY);
+        ModernThemePalette theme = ModernUi.theme();
         listY = contentY + 8;
-        visibleRows = Math.max(1, (contentHeight - 12) / ROW_HEIGHT);
-        int maxOffset = Math.max(0, settingCount() - visibleRows);
-        scrollOffset = Math.max(0, Math.min(scrollOffset, maxOffset));
-
-        for (int row = 0; row < visibleRows && row + scrollOffset < settingCount(); row++) {
-            int setting = row + scrollOffset;
-            drawSetting(context, mouseX, mouseY, setting, contentX, listY + row * ROW_HEIGHT, contentWidth);
+        listHeight = Math.max(32, contentHeight - 12);
+        categoryScroll.setBounds(contentX, listY, contentWidth, listHeight, CATEGORIES.length * CATEGORY_ROW_HEIGHT);
+        categoryScroll.tick(mouseX, mouseY);
+        int offset = categoryScroll.offset();
+        int first = offset / CATEGORY_ROW_HEIGHT;
+        int last = Math.min(CATEGORIES.length, first + listHeight / CATEGORY_ROW_HEIGHT + 3);
+        context.enableScissor(contentX, listY, contentX + contentWidth, listY + listHeight);
+        for (int index = first; index < last; index++) {
+            ModernSettingsDetailScreen.Category category = CATEGORIES[index];
+            int y = listY + index * CATEGORY_ROW_HEIGHT - offset;
+            boolean hovered = ModernUi.contains(mouseX, mouseY, contentX, y, contentWidth, CATEGORY_ROW_HEIGHT - 5);
+            ModernUi.card(context, contentX, y, contentWidth - (categoryScroll.isScrollable() ? 8 : 0), CATEGORY_ROW_HEIGHT - 5, hovered);
+            ModernUi.drawGuiText(context, textRenderer, category.label(), contentX + 13, y + 10, theme.text);
+            ModernUi.drawTruncated(context, textRenderer, category.description(), contentX + 13, y + 24,
+                    contentWidth - 44, theme.muted);
+            ModernUi.drawGuiText(context, textRenderer, "›", contentX + contentWidth - 26, y + 21, theme.accent);
         }
-        if (maxOffset > 0) {
-            ModernUi.drawTruncated(context, textRenderer, "Mausrad für weitere Einstellungen", contentX, panelY + panelHeight - 14,
-                    contentWidth, ModernUi.MUTED);
-        }
+        context.disableScissor();
+        categoryScroll.renderScrollbar(context, mouseX, mouseY);
         super.render(context, mouseX, mouseY, delta);
-    }
-
-    private void drawSetting(DrawContext context, int mouseX, int mouseY, int setting, int x, int y, int width) {
-        boolean hovered = ModernUi.contains(mouseX, mouseY, x, y, width, 25);
-        ModernUi.card(context, x, y, width, 25, hovered);
-        String label = settingLabel(setting);
-        String value = settingValue(setting);
-        ModernUi.drawTruncated(context, textRenderer, label, x + 10, y + 8, Math.max(40, width - 112), ModernUi.TEXT);
-        int color = value.equals("AN") || value.equals("Modern GUI") ? ModernUi.GREEN : ModernUi.MUTED;
-        int valueWidth = textRenderer.getWidth(value);
-        context.drawText(textRenderer, Text.literal(value), x + width - valueWidth - 10, y + 8, color, false);
     }
 
     @Override
     public boolean mouseClicked(Click click, boolean doubled) {
         if (handleSidebarClick(click)) return true;
-        if (click.button() == 0 && ModernUi.contains(click.x(), click.y(), contentX, listY, contentWidth, visibleRows * ROW_HEIGHT)) {
-            int setting = scrollOffset + (int) ((click.y() - listY) / ROW_HEIGHT);
-            activateSetting(setting);
-            return true;
+        if (categoryScroll.mouseClicked(click.x(), click.y(), click.button())) return true;
+        if (click.button() == 0 && ModernUi.contains(click.x(), click.y(), contentX, listY, contentWidth, listHeight)) {
+            int index = (int) ((click.y() - listY + categoryScroll.offset()) / CATEGORY_ROW_HEIGHT);
+            if (index >= 0 && index < CATEGORIES.length) {
+                open(new ModernSettingsDetailScreen(manager, this, CATEGORIES[index]));
+                return true;
+            }
         }
         return super.mouseClicked(click, doubled);
     }
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
-        if (ModernUi.contains(mouseX, mouseY, contentX, listY, contentWidth, visibleRows * ROW_HEIGHT) && verticalAmount != 0) {
-            int maxOffset = Math.max(0, settingCount() - visibleRows);
-            scrollOffset = Math.max(0, Math.min(maxOffset, scrollOffset - (int) Math.signum(verticalAmount)));
+        if (categoryScroll.contains(mouseX, mouseY)) {
+            categoryScroll.scroll(verticalAmount);
             return true;
         }
         return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
     }
 
-    private int settingCount() {
-        return 6;
-    }
-
-    private String settingLabel(int setting) {
-        return switch (setting) {
-            case 0 -> "Classic GUI aktivieren";
-            case 1 -> "Modern GUI aktivieren";
-            case 2 -> "GUI-Auswahl beim nächsten Öffnen";
-            case 3 -> "Paylogs automatisch erkennen";
-            case 4 -> "Overlay-/Actionbar-Nachrichten prüfen";
-            case 5 -> "Paylog-Benachrichtigungen im Chat";
-            default -> "Unbekannte Einstellung";
-        };
-    }
-
-    private String settingValue(int setting) {
-        return switch (setting) {
-            case 0 -> ClientConfigManager.getGuiMode() == GuiMode.CLASSIC ? "AKTIV" : "";
-            case 1 -> ClientConfigManager.getGuiMode() == GuiMode.MODERN ? "Modern GUI" : "";
-            case 2 -> "Zurücksetzen";
-            case 3 -> ClientConfigManager.isAutomaticPaylogDetection() ? "AN" : "AUS";
-            case 4 -> ClientConfigManager.isDetectPaylogsInOverlay() ? "AN" : "AUS";
-            case 5 -> ClientConfigManager.isShowPaylogNotifications() ? "AN" : "AUS";
-            default -> "";
-        };
-    }
-
-    private void activateSetting(int setting) {
-        switch (setting) {
-            case 0 -> GuiRouter.selectModeAndOpen(manager, GuiMode.CLASSIC);
-            case 1 -> GuiRouter.selectModeAndOpen(manager, GuiMode.MODERN);
-            case 2 -> {
-                ClientConfigManager.setGuiMode(GuiMode.UNSELECTED);
-                closeToParent();
-            }
-            case 3 -> ClientConfigManager.setAutomaticPaylogDetection(!ClientConfigManager.isAutomaticPaylogDetection());
-            case 4 -> ClientConfigManager.setDetectPaylogsInOverlay(!ClientConfigManager.isDetectPaylogsInOverlay());
-            case 5 -> ClientConfigManager.setShowPaylogNotifications(!ClientConfigManager.isShowPaylogNotifications());
-            default -> {
-            }
-        }
+    @Override
+    protected void clearTransientState() {
+        categoryScroll.reset();
+        super.clearTransientState();
     }
 }

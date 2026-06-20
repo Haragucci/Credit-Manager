@@ -25,7 +25,6 @@ public class ModernCreateCreditScreen extends ModernBaseScreen {
     private int fieldStartY;
     private int fieldGap;
     private int actionY;
-    private String feedback;
 
     public ModernCreateCreditScreen(CreditManager manager, boolean debts, Screen parent) {
         super(manager, parent, debts ? "Neue Schuld" : "Neue Forderung", debts ? "debts" : "claims");
@@ -46,13 +45,13 @@ public class ModernCreateCreditScreen extends ModernBaseScreen {
         labelField = addField(fieldX, fieldStartY + fieldGap * 3, "Bezeichnung (optional)", 32);
         noteField = addField(fieldX, fieldStartY + fieldGap * 4, "Notiz (optional)", 64);
         actionY = fieldStartY + fieldGap * 4 + 28;
-        setInitialFocus(playerField);
     }
 
     private TextFieldWidget addField(int x, int y, String placeholder, int maxLength) {
-        TextFieldWidget field = new CenteredTextFieldWidget(textRenderer, x + 5, y + 8, fieldWidth - 10, 19, Text.empty());
+        TextFieldWidget field = ModernUi.configureGuiTextField(
+                new CenteredTextFieldWidget(textRenderer, x + 5, y + 8, fieldWidth - 10, 19, Text.empty()));
         field.setMaxLength(maxLength);
-        field.setPlaceholder(Text.literal(placeholder));
+        ModernUi.setGuiPlaceholder(field, placeholder);
         addDrawableChild(field);
         return field;
     }
@@ -66,19 +65,15 @@ public class ModernCreateCreditScreen extends ModernBaseScreen {
         drawField(context, "Bezeichnung", fieldX, fieldStartY + fieldGap * 3);
         drawField(context, "Notiz", fieldX, fieldStartY + fieldGap * 4);
         int buttonWidth = Math.max(42, Math.min(132, (fieldWidth - 8) / 2));
-        ModernUi.button(context, textRenderer, fieldX, actionY, buttonWidth, 23, "Speichern", debts ? ModernUi.BUTTON_DANGER : ModernUi.BUTTON_PRIMARY,
+        ModernUi.button(context, textRenderer, fieldX, actionY, buttonWidth, 23, "Speichern", debts ? ModernUi.theme().buttonDanger : ModernUi.theme().buttonPrimary,
                 ModernUi.contains(mouseX, mouseY, fieldX, actionY, buttonWidth, 23));
-        ModernUi.button(context, textRenderer, fieldX + buttonWidth + 8, actionY, buttonWidth, 23, "Abbrechen", ModernUi.BUTTON_NEUTRAL,
+        ModernUi.button(context, textRenderer, fieldX + buttonWidth + 8, actionY, buttonWidth, 23, "Abbrechen", ModernUi.theme().buttonNeutral,
                 ModernUi.contains(mouseX, mouseY, fieldX + buttonWidth + 8, actionY, buttonWidth, 23));
-        if (feedback != null) {
-            ModernUi.drawTruncated(context, textRenderer, feedback, fieldX, actionY + 29, fieldWidth,
-                    feedback.startsWith("Deal erstellt") ? ModernUi.GREEN : ModernUi.RED);
-        }
         super.render(context, mouseX, mouseY, delta);
     }
 
     private void drawField(DrawContext context, String label, int x, int y) {
-        context.drawText(textRenderer, Text.literal(label), x, y, ModernUi.MUTED, false);
+        ModernUi.drawGuiText(context, textRenderer, label, x, y, ModernUi.theme().muted);
         ModernUi.card(context, x, y + 8, fieldWidth, 19, false);
     }
 
@@ -112,22 +107,22 @@ public class ModernCreateCreditScreen extends ModernBaseScreen {
         String otherPlayer = playerField.getText().trim().toLowerCase(java.util.Locale.ROOT);
         String ownPlayer = currentPlayerName();
         if (ownPlayer.isBlank()) {
-            feedback = "Du musst mit einem Spieler verbunden sein.";
+            toastError("Du musst mit einem Spieler verbunden sein.");
             return;
         }
         if (otherPlayer.isBlank()) {
-            feedback = "Der Spieler darf nicht leer sein.";
+            toastError("Der Spieler darf nicht leer sein.");
             return;
         }
         if (otherPlayer.equals(ownPlayer)) {
-            feedback = "Ein Deal mit dir selbst ist nicht möglich.";
+            toastError("Ein Deal mit dir selbst ist nicht möglich.");
             return;
         }
         double amount;
         try {
             amount = FormatUtil.parseMoney(amountField.getText());
         } catch (IllegalArgumentException exception) {
-            feedback = "Bitte einen gültigen positiven Betrag eingeben.";
+            toastError("Bitte einen gültigen positiven Betrag eingeben.");
             return;
         }
         Long dueDate = null;
@@ -135,22 +130,41 @@ public class ModernCreateCreditScreen extends ModernBaseScreen {
         if (!dueDateText.isEmpty()) {
             dueDate = TimeUtil.parseDueDate(dueDateText);
             if (dueDate == null) {
-                feedback = "Datum bitte als TT.MM.JJJJ eingeben.";
+                toastError("Datum bitte als TT.MM.JJJJ eingeben.");
                 return;
             }
         }
         try {
             manager.createCredit(debts ? otherPlayer : ownPlayer, debts ? ownPlayer : otherPlayer, amount, dueDate,
                     blankToNull(labelField.getText()), blankToNull(noteField.getText()));
-            feedback = "Deal erstellt.";
-            MinecraftClient.getInstance().setScreen(new ModernCreditListScreen(manager, debts, parent));
+            toastSuccess("Deal erstellt.");
+            if (parent instanceof ModernCreditListScreen) {
+                closeToParent();
+            } else {
+                // Claims and debts are root navigation pages, so they never inherit a second back layer.
+                open(new ModernCreditListScreen(manager, debts, null));
+            }
         } catch (CreditManager.CreditException exception) {
-            feedback = exception.getMessage();
+            toastError(exception.getMessage());
         }
     }
 
     private String blankToNull(String value) {
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    @Override
+    protected void clearTransientState() {
+        clearField(playerField);
+        clearField(amountField);
+        clearField(dueDateField);
+        clearField(labelField);
+        clearField(noteField);
+        super.clearTransientState();
+    }
+
+    private void clearField(TextFieldWidget field) {
+        if (field != null) field.setText("");
     }
 }

@@ -48,6 +48,11 @@ public class FileManager {
         return dataDirectory.resolve("transactions.json");
     }
 
+    /** Dedicated history for credit/deal statistics, intentionally separate from Paylogs. */
+    public static Path getCreditEventsFile() {
+        return dataDirectory.resolve("credit_events.json");
+    }
+
     /** Client preferences are intentionally kept separate from user data. */
     public static Path getClientConfigFile() {
         return dataDirectory.resolve("client_config.json");

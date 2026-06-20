@@ -5,6 +5,7 @@ import op.creditmanager.client.core.CreditManager;
 import op.creditmanager.client.core.CreditRepository;
 import op.creditmanager.client.core.PaymentDetector;
 import op.creditmanager.client.core.TransactionRepository;
+import op.creditmanager.client.core.CreditEventRepository;
 import op.creditmanager.client.storage.FileManager;
 import op.creditmanager.client.config.ClientConfigManager;
 import net.fabricmc.api.ClientModInitializer;
@@ -47,6 +48,7 @@ public class CreditManagerClient implements ClientModInitializer {
 		creditManager = new CreditManager(creditRepository);
 
 		TransactionRepository.getInstance().load();
+		CreditEventRepository.getInstance().load();
 
 		paymentDetector = new PaymentDetector();
 

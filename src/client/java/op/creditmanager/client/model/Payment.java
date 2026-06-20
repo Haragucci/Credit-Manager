@@ -13,6 +13,7 @@ public class Payment {
     private Double amount;
     private List<String> items;
     private String itemNbt;
+    private List<String> itemNbtEntries;
     private long timestamp;
     private String source;
 
@@ -24,6 +25,7 @@ public class Payment {
         this.toPlayer = toPlayer;
         this.amount = amount;
         this.items = items != null ? items : new ArrayList<>();
+        this.itemNbtEntries = new ArrayList<>();
         this.timestamp = System.currentTimeMillis();
         this.source = source;
     }
@@ -43,11 +45,23 @@ public class Payment {
     public Double getAmount() { return amount; }
     public void setAmount(Double amount) { this.amount = amount; }
 
-    public List<String> getItems() { return items; }
-    public void setItems(List<String> items) { this.items = items; }
+    public List<String> getItems() {
+        if (items == null) items = new ArrayList<>();
+        return items;
+    }
+    public void setItems(List<String> items) { this.items = items != null ? items : new ArrayList<>(); }
 
     public String getItemNbt() { return itemNbt; }
     public void setItemNbt(String itemNbt) { this.itemNbt = itemNbt; }
+
+    public List<String> getItemNbtEntries() {
+        if (itemNbtEntries == null) itemNbtEntries = new ArrayList<>();
+        return itemNbtEntries;
+    }
+
+    public void setItemNbtEntries(List<String> itemNbtEntries) {
+        this.itemNbtEntries = itemNbtEntries != null ? new ArrayList<>(itemNbtEntries) : new ArrayList<>();
+    }
 
     public long getTimestamp() { return timestamp; }
     public void setTimestamp(long timestamp) { this.timestamp = timestamp; }

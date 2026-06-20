@@ -400,7 +400,7 @@ public class CreditDealScreen extends BasisScreen {
         }
 
         if (slotZuZahlung.containsKey(slot)) {
-            client.setScreen(new ItemInspektionScreen(slotZuZahlung.get(slot), eintrag, this));
+            client.setScreen(new ItemPaymentListScreen(slotZuZahlung.get(slot), this));
             return true;
         }
 

@@ -1,18 +1,12 @@
 package op.creditmanager.client.command.sub;
 
-import net.minecraft.client.MinecraftClient;
 import op.creditmanager.client.core.CreditManager;
-import op.creditmanager.client.gui.CreditHauptmenüScreen;
+import op.creditmanager.client.gui.GuiRouter;
 
 public class GuiCommand {
 
     public static int openGui(CreditManager manager) {
-        MinecraftClient client = MinecraftClient.getInstance();
-
-        client.execute(() -> {
-            client.setScreen(new CreditHauptmenüScreen(manager));
-        });
-
+        GuiRouter.openMain(manager);
         return 1;
     }
 }

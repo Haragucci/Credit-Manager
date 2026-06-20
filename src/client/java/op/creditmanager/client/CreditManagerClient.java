@@ -6,6 +6,7 @@ import op.creditmanager.client.core.CreditRepository;
 import op.creditmanager.client.core.PaymentDetector;
 import op.creditmanager.client.core.TransactionRepository;
 import op.creditmanager.client.storage.FileManager;
+import op.creditmanager.client.config.ClientConfigManager;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
@@ -38,6 +39,7 @@ public class CreditManagerClient implements ClientModInitializer {
 		});
 
 		FileManager.initialize();
+		ClientConfigManager.reload();
 
 		creditRepository = new CreditRepository();
 		creditRepository.load();
@@ -57,13 +59,14 @@ public class CreditManagerClient implements ClientModInitializer {
 		});
 
 		ClientReceiveMessageEvents.CHAT.register((message, signedMessage, sender, params, receptionTimestamp) -> {
-			if (paymentDetector != null) {
+			if (paymentDetector != null && ClientConfigManager.isAutomaticPaylogDetection()) {
 				paymentDetector.process(message.getString());
 			}
 		});
 
 		ClientReceiveMessageEvents.GAME.register((message, overlay) -> {
-			if (!overlay && paymentDetector != null) {
+			if (paymentDetector != null && ClientConfigManager.isAutomaticPaylogDetection()
+					&& (!overlay || ClientConfigManager.isDetectPaylogsInOverlay())) {
 				paymentDetector.process(message.getString());
 			}
 		});

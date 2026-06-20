@@ -23,7 +23,7 @@ public class GuiHelper {
     }
 
     public static ItemStack trennGlas() {
-        ItemStack g = new ItemStack(Items.GRAY_STAINED_GLASS_PANE);
+        ItemStack g = new ItemStack(Items.GREEN_STAINED_GLASS_PANE);
         g.set(DataComponentTypes.ITEM_NAME, Text.literal("§8"));
         return g;
     }

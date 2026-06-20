@@ -22,6 +22,7 @@ public class CreditHauptmenüScreen extends BasisScreen {
     private static final int SLOT_SCHULDEN   = 6;
     private static final int SLOT_ÜBERSICHT  = 20;
     private static final int SLOT_INFO = 22;
+    private static final int SLOT_SETTINGS = 26;
     private static final int SLOT_TRANSLOG   = 24;
     private static final int SLOT_KOPF = 13;
 
@@ -122,12 +123,15 @@ public class CreditHauptmenüScreen extends BasisScreen {
         setSlot(SLOT_TRANSLOG, translog);
 
         ItemStack kopf = new ItemStack(Items.PLAYER_HEAD);
+        String playerName = client.player == null ? "Nicht verbunden" : client.player.getName().getString();
 
-        GameProfile profile = client.player.getGameProfile();
-        kopf.set(DataComponentTypes.PROFILE, ProfileComponent.ofStatic(profile));
+        if (client.player != null) {
+            GameProfile profile = client.player.getGameProfile();
+            kopf.set(DataComponentTypes.PROFILE, ProfileComponent.ofStatic(profile));
+        }
 
         kopf.set(DataComponentTypes.CUSTOM_NAME,
-                Text.literal("§8Credit Manager §7» §f" + client.player.getName().getString()));
+                Text.literal("§8Credit Manager §7» §f" + playerName));
 
         String saldoAnzeige = saldo >= 0
                 ? "§a§l+" + FormatUtil.formatiereBetrag(saldo) + " §7(Guthaben)"
@@ -164,6 +168,14 @@ public class CreditHauptmenüScreen extends BasisScreen {
 
         setSlot(SLOT_INFO, info);
 
+        setSlot(SLOT_SETTINGS, GuiHelper.erstelleItem(
+                new ItemStack(Items.COMPARATOR),
+                "§e§lEinstellungen",
+                "§7GUI-Modus und lokale Optionen",
+                "",
+                "§eKlicken zum Öffnen"
+        ));
+
     }
 
     @Override
@@ -187,6 +199,10 @@ public class CreditHauptmenüScreen extends BasisScreen {
         }
         if (slot == SLOT_INFO) {
             client.setScreen(new CreditInfoScreen(this));
+            return true;
+        }
+        if (slot == SLOT_SETTINGS) {
+            client.setScreen(new CreditClassicSettingsScreen(manager, this));
             return true;
         }
         return false;

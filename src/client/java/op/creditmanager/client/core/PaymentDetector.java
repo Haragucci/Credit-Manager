@@ -1,7 +1,9 @@
 package op.creditmanager.client.core;
 
 import op.creditmanager.client.CreditManagerClient;
+import op.creditmanager.client.config.ClientConfigManager;
 import op.creditmanager.client.model.TransactionEntry;
+import op.creditmanager.client.util.ChatUtil;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.minecraft.client.MinecraftClient;
@@ -81,6 +83,10 @@ public class PaymentDetector {
         NumberFormat nf = NumberFormat.getNumberInstance(Locale.GERMANY);
         nf.setMinimumFractionDigits(2);
         nf.setMaximumFractionDigits(2);
+
+        if (ClientConfigManager.isShowPaylogNotifications()) {
+            ChatUtil.info("Paylog erkannt: " + vonSpieler + " -> " + anSpieler + " (" + nf.format(betrag) + "$");
+        }
 
         CreditManagerClient.LOGGER.info("[PaymentDetector] Transaktion geloggt: "
                 + vonSpieler + " → " + anSpieler + " | " + nf.format(betrag) + "$");

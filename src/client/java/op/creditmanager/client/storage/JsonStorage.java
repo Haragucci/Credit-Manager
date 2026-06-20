@@ -9,6 +9,7 @@ import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.StandardCopyOption;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -49,8 +50,16 @@ public class JsonStorage {
         try {
             String json = GSON.toJson(data);
             Path tempPath = path.resolveSibling(path.getFileName() + ".tmp");
+            Path parent = path.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
             Files.writeString(tempPath, json, StandardCharsets.UTF_8);
-            Files.move(tempPath, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            try {
+                Files.move(tempPath, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException ignored) {
+                Files.move(tempPath, path, StandardCopyOption.REPLACE_EXISTING);
+            }
         } catch (IOException e) {
             CreditManagerClient.LOGGER.error("Failed to save file: " + path, e);
         } finally {

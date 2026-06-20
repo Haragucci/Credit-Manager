@@ -48,6 +48,11 @@ public class FileManager {
         return dataDirectory.resolve("transactions.json");
     }
 
+    /** Client preferences are intentionally kept separate from user data. */
+    public static Path getClientConfigFile() {
+        return dataDirectory.resolve("client_config.json");
+    }
+
     public static Path getBackupFile(String originalName) {
         String backupName = originalName.replace(".json",
                 "_backup_" + System.currentTimeMillis() + ".json");

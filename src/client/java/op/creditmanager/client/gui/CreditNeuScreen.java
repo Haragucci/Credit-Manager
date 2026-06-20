@@ -32,40 +32,40 @@ public class CreditNeuScreen extends BasisScreen {
                     + 14
                     + 8;
 
-    private static final int C_PANEL_BG    = 0xFF1E1E2E;
-    private static final int C_RAND_AUSSEN = 0xFF0D0D1A;
-    private static final int C_RAND_ECKE   = 0xFF161626;
-    private static final int C_HIGHLIGHT   = 0xFF2A2A3E;
-    private static final int C_SCHATTEN    = 0xFF0A0A14;
+    private static final int C_PANEL_BG    = ClassicUiColors.PANEL;
+    private static final int C_RAND_AUSSEN = ClassicUiColors.OUTER_BORDER;
+    private static final int C_RAND_ECKE   = ClassicUiColors.CORNER;
+    private static final int C_HIGHLIGHT   = ClassicUiColors.HIGHLIGHT;
+    private static final int C_SCHATTEN    = ClassicUiColors.SHADOW;
 
     private static final int C_DROP_1     = 0x40000000;
     private static final int C_DROP_2     = 0x28000000;
     private static final int C_DROP_3     = 0x14000000;
 
-    private static final int C_NAV_BG     = 0xFF12121F;
-    private static final int C_NAV_BORDER = 0xFF2E2E4A;
-    private static final int C_NAV_PREFIX = 0xFF666677;
-    private static final int C_NAV_PFEIL  = 0xFF4A9E4A;
-    private static final int C_NAV_SEITE  = 0xFFFFFFFF;
+    private static final int C_NAV_BG     = ClassicUiColors.NAVIGATION;
+    private static final int C_NAV_BORDER = ClassicUiColors.HIGHLIGHT;
+    private static final int C_NAV_PREFIX = ClassicUiColors.MUTED;
+    private static final int C_NAV_PFEIL  = ClassicUiColors.LIME;
+    private static final int C_NAV_SEITE  = ClassicUiColors.TEXT;
 
-    private static final int C_TRENN_D   = 0xFF0A0A14;
-    private static final int C_TRENN_H   = 0xFF2A2A3E;
-    private static final int C_LABEL_CLR = 0xFF888899;
+    private static final int C_TRENN_D   = ClassicUiColors.SHADOW;
+    private static final int C_TRENN_H   = ClassicUiColors.HIGHLIGHT;
+    private static final int C_LABEL_CLR = ClassicUiColors.MUTED;
 
-    private static final int C_SLOT_D  = 0xFF0D0D1A;
-    private static final int C_SLOT_H  = 0xFF2E2E4A;
-    private static final int C_SLOT_BG = 0xFF181828;
+    private static final int C_SLOT_D  = ClassicUiColors.OUTER_BORDER;
+    private static final int C_SLOT_H  = ClassicUiColors.SLOT_EDGE;
+    private static final int C_SLOT_BG = ClassicUiColors.SLOT;
 
-    private static final int C_BTN_OK   = 0xFF1A4A1A;
-    private static final int C_BTN_OK_H = 0xFF226622;
-    private static final int C_BTN_AB   = 0xFF4A1A1A;
-    private static final int C_BTN_AB_H = 0xFF662222;
+    private static final int C_BTN_OK   = ClassicUiColors.PRIMARY;
+    private static final int C_BTN_OK_H = ClassicUiColors.PRIMARY_HOVER;
+    private static final int C_BTN_AB   = ClassicUiColors.DANGER;
+    private static final int C_BTN_AB_H = ClassicUiColors.DANGER_HOVER;
 
-    private static final int C_FEHLER = 0xFFDD4444;
-    private static final int C_ERFOLG = 0xFF44DD44;
+    private static final int C_FEHLER = ClassicUiColors.ERROR;
+    private static final int C_ERFOLG = ClassicUiColors.LIME;
 
-    private static final int C_TEXT_EDITABLE   = 0xFFFFFFFF;
-    private static final int C_TEXT_PLACEHOLDER = 0xFF555566;
+    private static final int C_TEXT_EDITABLE   = ClassicUiColors.TEXT;
+    private static final int C_TEXT_PLACEHOLDER = ClassicUiColors.MUTED_DARK;
 
     private static final ScheduledExecutorService SCHEDULER =
             Executors.newSingleThreadScheduledExecutor(r -> {
@@ -88,6 +88,7 @@ public class CreditNeuScreen extends BasisScreen {
     private String erfolgText = null;
 
     private int pX, pY;
+    private float panelScale = 1.0F;
 
     public CreditNeuScreen(CreditManager manager, boolean istSchulden,
                            net.minecraft.client.gui.screen.Screen elternScreen) {
@@ -99,12 +100,15 @@ public class CreditNeuScreen extends BasisScreen {
 
     @Override
     protected void init() {
-        pX = (width  - PANEL_BREITE) / 2;
-        pY = (height - PANEL_HÖHE)   / 2;
+        panelScale = GuiScaleUtil.compactPanelScale(width, height, PANEL_BREITE, PANEL_HÖHE);
+        pX = GuiScaleUtil.centeredX(width, panelScale, PANEL_BREITE);
+        pY = GuiScaleUtil.centeredY(height, panelScale, PANEL_HÖHE);
 
         guiX      = pX;
         guiY      = pY;
         guiBreite = PANEL_BREITE;
+
+        clearChildren();
 
         int feldX  = pX + (PANEL_BREITE - FELD_BREITE) / 2;
         int startY = pY + NAV_HÖHE_INT + 2 + 16;
@@ -135,9 +139,8 @@ public class CreditNeuScreen extends BasisScreen {
     protected void fülleSlots() { }
 
     private TextFieldWidget neuesFeld(int x, int y, int breite, int höhe, int maxLen) {
-        TextFieldWidget f = new TextFieldWidget(textRenderer, x, y, breite, höhe, Text.empty());
+        TextFieldWidget f = new CenteredTextFieldWidget(textRenderer, x, y - 2, breite, höhe + 4, Text.empty());
         f.setMaxLength(maxLen);
-        f.setDrawsBackground(false);
         f.setEditableColor(C_TEXT_EDITABLE);
         f.setUneditableColor(C_TEXT_PLACEHOLDER);
         return f;
@@ -145,13 +148,18 @@ public class CreditNeuScreen extends BasisScreen {
 
     @Override
     public void render(DrawContext ctx, int mouseX, int mouseY, float delta) {
+        int layoutMouseX = GuiScaleUtil.toLayoutCoordinate(mouseX, panelScale);
+        int layoutMouseY = GuiScaleUtil.toLayoutCoordinate(mouseY, panelScale);
+        ctx.getMatrices().pushMatrix();
+        ctx.getMatrices().scale(panelScale, panelScale);
         drawDropShadowManuell(ctx);
         drawPanelManuell(ctx);
         drawNavManuell(ctx);
         drawTrennlinieManuell(ctx);
-        drawFormularInhalt(ctx, mouseX, mouseY);
+        drawFormularInhalt(ctx, layoutMouseX, layoutMouseY);
 
-        super.render(ctx, mouseX, mouseY, delta);
+        super.render(ctx, layoutMouseX, layoutMouseY, delta);
+        ctx.getMatrices().popMatrix();
     }
 
 
@@ -241,9 +249,9 @@ public class CreditNeuScreen extends BasisScreen {
         boolean okHov = isIn(mouseX, mouseY, pX + RAND, btnY, btnBreite, 20);
         boolean abHov = isIn(mouseX, mouseY, pX + PANEL_BREITE - btnBreite - RAND, btnY, btnBreite, 20);
         drawDarkBtn(ctx, pX + RAND, btnY, btnBreite, 20,
-                okHov ? C_BTN_OK_H : C_BTN_OK, "✔ Speichern",  0xFF66DD66);
+                okHov ? C_BTN_OK_H : C_BTN_OK, "✔ Speichern", ClassicUiColors.LIME);
         drawDarkBtn(ctx, pX + PANEL_BREITE - btnBreite - RAND, btnY, btnBreite, 20,
-                abHov ? C_BTN_AB_H : C_BTN_AB, "✖ Abbrechen", 0xFFDD6666);
+                abHov ? C_BTN_AB_H : C_BTN_AB, "✖ Abbrechen", ClassicUiColors.ERROR);
 
         int statusY = btnY + 24;
         if (fehlerText != null)
@@ -275,8 +283,9 @@ public class CreditNeuScreen extends BasisScreen {
 
     @Override
     public boolean mouseClicked(net.minecraft.client.gui.Click click, boolean doubled) {
-        if (click.button() == 0) {
-            int mx = (int) click.x(), my = (int) click.y();
+        net.minecraft.client.gui.Click layoutClick = GuiScaleUtil.toLayoutClick(click, panelScale);
+        if (layoutClick.button() == 0) {
+            int mx = (int) layoutClick.x(), my = (int) layoutClick.y();
             int btnY      = pY + PANEL_HÖHE - 8 - 20 - 14;
             int btnBreite = 100;
             if (isIn(mx, my, pX + RAND, btnY, btnBreite, 20)) {
@@ -286,7 +295,7 @@ public class CreditNeuScreen extends BasisScreen {
                 MinecraftClient.getInstance().setScreen(elternScreen); return true;
             }
         }
-        return super.mouseClicked(click, doubled);
+        return super.mouseClicked(layoutClick, doubled);
     }
 
     @Override

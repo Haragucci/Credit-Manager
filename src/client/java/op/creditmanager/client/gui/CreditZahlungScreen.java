@@ -15,7 +15,9 @@ import op.creditmanager.client.model.CreditEntry;
 import op.creditmanager.client.util.FormatUtil;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -71,49 +73,49 @@ public class CreditZahlungScreen extends BasisScreen {
                     + 14
                     + 8;
 
-    private static final int C_PANEL_BG    = 0xFF1E1E2E;
-    private static final int C_RAND_AUSSEN = 0xFF0D0D1A;
-    private static final int C_RAND_ECKE   = 0xFF161626;
-    private static final int C_HIGHLIGHT   = 0xFF2A2A3E;
-    private static final int C_DUNKEL      = 0xFF0A0A14;
+    private static final int C_PANEL_BG    = ClassicUiColors.PANEL;
+    private static final int C_RAND_AUSSEN = ClassicUiColors.OUTER_BORDER;
+    private static final int C_RAND_ECKE   = ClassicUiColors.CORNER;
+    private static final int C_HIGHLIGHT   = ClassicUiColors.HIGHLIGHT;
+    private static final int C_DUNKEL      = ClassicUiColors.SHADOW;
 
     private static final int C_DROP_1 = 0x40000000;
     private static final int C_DROP_2 = 0x28000000;
     private static final int C_DROP_3 = 0x14000000;
 
-    private static final int C_NAV_BG     = 0xFF12121F;
-    private static final int C_NAV_PREFIX = 0xFF666677;
-    private static final int C_NAV_PFEIL  = 0xFF4A9E4A;
-    private static final int C_NAV_SEITE  = 0xFFFFFFFF;
+    private static final int C_NAV_BG     = ClassicUiColors.NAVIGATION;
+    private static final int C_NAV_PREFIX = ClassicUiColors.MUTED;
+    private static final int C_NAV_PFEIL  = ClassicUiColors.LIME;
+    private static final int C_NAV_SEITE  = ClassicUiColors.TEXT;
 
-    private static final int C_TRENN_D = 0xFF0A0A14;
-    private static final int C_TRENN_H = 0xFF2A2A3E;
-    private static final int C_LABEL   = 0xFF888899;
+    private static final int C_TRENN_D = ClassicUiColors.SHADOW;
+    private static final int C_TRENN_H = ClassicUiColors.HIGHLIGHT;
+    private static final int C_LABEL   = ClassicUiColors.MUTED;
 
-    private static final int C_SLOT_D  = 0xFF0D0D1A;
-    private static final int C_SLOT_H  = 0xFF2E2E4A;
-    private static final int C_SLOT_BG = 0xFF181828;
-    private static final int C_HOVER   = 0x40FFFFFF;
+    private static final int C_SLOT_D  = ClassicUiColors.OUTER_BORDER;
+    private static final int C_SLOT_H  = ClassicUiColors.SLOT_EDGE;
+    private static final int C_SLOT_BG = ClassicUiColors.SLOT;
+    private static final int C_HOVER   = ClassicUiColors.HOVER;
 
-    private static final int C_TAB_GELD_AKT   = 0xFF1A3A1A;
-    private static final int C_TAB_GELD_AKT_L = 0xFF2E6E2E;
-    private static final int C_TAB_ITEM_AKT   = 0xFF1A1A3A;
-    private static final int C_TAB_ITEM_AKT_L = 0xFF2E2E8B;
-    private static final int C_TAB_INK        = 0xFF1A1A28;
-    private static final int C_TAB_HOV        = 0xFF252538;
+    private static final int C_TAB_GELD_AKT   = ClassicUiColors.PRIMARY;
+    private static final int C_TAB_GELD_AKT_L = ClassicUiColors.PRIMARY_HOVER;
+    private static final int C_TAB_ITEM_AKT   = ClassicUiColors.GOLD_DARK;
+    private static final int C_TAB_ITEM_AKT_L = ClassicUiColors.GOLD;
+    private static final int C_TAB_INK        = ClassicUiColors.SLOT;
+    private static final int C_TAB_HOV        = ClassicUiColors.SLOT_EDGE;
 
-    private static final int C_ZIEL_ITEM = 0x508080FF;
+    private static final int C_ZIEL_ITEM = ClassicUiColors.ITEM_GLOW;
 
-    private static final int C_BTN_OK   = 0xFF1A4A1A;
-    private static final int C_BTN_OK_H = 0xFF226622;
-    private static final int C_BTN_AB   = 0xFF4A1A1A;
-    private static final int C_BTN_AB_H = 0xFF662222;
+    private static final int C_BTN_OK   = ClassicUiColors.PRIMARY;
+    private static final int C_BTN_OK_H = ClassicUiColors.PRIMARY_HOVER;
+    private static final int C_BTN_AB   = ClassicUiColors.DANGER;
+    private static final int C_BTN_AB_H = ClassicUiColors.DANGER_HOVER;
 
-    private static final int C_FEHLER = 0xFFDD4444;
-    private static final int C_ERFOLG = 0xFF44DD44;
+    private static final int C_FEHLER = ClassicUiColors.ERROR;
+    private static final int C_ERFOLG = ClassicUiColors.LIME;
 
-    private static final int C_TEXT_ED = 0xFFFFFFFF;
-    private static final int C_TEXT_PH = 0xFF555566;
+    private static final int C_TEXT_ED = ClassicUiColors.TEXT;
+    private static final int C_TEXT_PH = ClassicUiColors.MUTED_DARK;
 
     private static final ScheduledExecutorService SCHEDULER =
             Executors.newSingleThreadScheduledExecutor(r -> {
@@ -139,11 +141,13 @@ public class CreditZahlungScreen extends BasisScreen {
 
     private ItemStack gewähltesItem  = ItemStack.EMPTY;
     private int       gewählteAnzahl = 1;
+    private final Map<Integer, Integer> selectedInventorySlots = new LinkedHashMap<>();
 
     private ItemStack tooltipStack;
     private int tooltipX, tooltipY;
 
     private int pX, pY, pHöhe;
+    private float panelScale = 1.0F;
     private int yInfo, yTabs, yEingabe, yInvLabel, yInv, yHotbar, yButtons, yStatus;
 
     public CreditZahlungScreen(CreditManager manager, CreditEntry eintrag,
@@ -161,8 +165,9 @@ public class CreditZahlungScreen extends BasisScreen {
     @Override
     protected void init() {
         pHöhe = (modus == Modus.GELD) ? PANEL_H_GELD : PANEL_H_ITEM;
-        pX    = (width  - PANEL_B) / 2;
-        pY    = (height - pHöhe)   / 2;
+        panelScale = GuiScaleUtil.compactPanelScale(width, height, PANEL_B, pHöhe);
+        pX = GuiScaleUtil.centeredX(width, panelScale, PANEL_B);
+        pY = GuiScaleUtil.centeredY(height, panelScale, pHöhe);
 
         guiX      = pX;
         guiY      = pY;
@@ -208,9 +213,8 @@ public class CreditZahlungScreen extends BasisScreen {
     protected void fülleSlots() {}
 
     private TextFieldWidget neuesFeld(int x, int y, int breite, int höhe, int maxLen) {
-        TextFieldWidget f = new TextFieldWidget(textRenderer, x, y, breite, höhe, Text.empty());
+        TextFieldWidget f = new CenteredTextFieldWidget(textRenderer, x, y - 2, breite, höhe + 4, Text.empty());
         f.setMaxLength(maxLen);
-        f.setDrawsBackground(false);
         f.setEditableColor(C_TEXT_ED);
         f.setUneditableColor(C_TEXT_PH);
         return f;
@@ -218,22 +222,27 @@ public class CreditZahlungScreen extends BasisScreen {
 
     @Override
     public void render(DrawContext ctx, int mouseX, int mouseY, float delta) {
+        int layoutMouseX = GuiScaleUtil.toLayoutCoordinate(mouseX, panelScale);
+        int layoutMouseY = GuiScaleUtil.toLayoutCoordinate(mouseY, panelScale);
         tooltipStack = null;
+        ctx.getMatrices().pushMatrix();
+        ctx.getMatrices().scale(panelScale, panelScale);
 
         drawPanel(ctx);
         drawNav(ctx);
         drawTrennlinie(ctx);
         drawInfo(ctx);
-        drawTabs(ctx, mouseX, mouseY);
-        drawEingabe(ctx, mouseX, mouseY);
-        if (modus == Modus.ITEM) drawInventar(ctx, mouseX, mouseY);
-        drawButtons(ctx, mouseX, mouseY);
+        drawTabs(ctx, layoutMouseX, layoutMouseY);
+        drawEingabe(ctx, layoutMouseX, layoutMouseY);
+        if (modus == Modus.ITEM) drawInventar(ctx, layoutMouseX, layoutMouseY);
+        drawButtons(ctx, layoutMouseX, layoutMouseY);
         drawStatus(ctx);
 
-        super.render(ctx, mouseX, mouseY, delta);
+        super.render(ctx, layoutMouseX, layoutMouseY, delta);
+        ctx.getMatrices().popMatrix();
 
         if (tooltipStack != null && !tooltipStack.isEmpty())
-            ctx.drawItemTooltip(textRenderer, tooltipStack, tooltipX, tooltipY);
+            ctx.drawItemTooltip(textRenderer, tooltipStack, mouseX, mouseY);
     }
 
     private void drawPanel(DrawContext ctx) {
@@ -301,9 +310,9 @@ public class CreditZahlungScreen extends BasisScreen {
         boolean geldHov = isIn(mx, my, xGeld, yTabs, tabBreite, 20);
         boolean itemHov = isIn(mx, my, xItem, yTabs, tabBreite, 20);
         drawTab(ctx, xGeld, yTabs, tabBreite, 20, modus == Modus.GELD, geldHov,
-                "✦ Geld", C_TAB_GELD_AKT, C_TAB_GELD_AKT_L, 0xFFFFDD66);
+                "✦ Geld", C_TAB_GELD_AKT, C_TAB_GELD_AKT_L, ClassicUiColors.GOLD);
         drawTab(ctx, xItem, yTabs, tabBreite, 20, modus == Modus.ITEM, itemHov,
-                "✦ Item", C_TAB_ITEM_AKT, C_TAB_ITEM_AKT_L, 0xFF88CCFF);
+                "✦ Item", C_TAB_ITEM_AKT, C_TAB_ITEM_AKT_L, ClassicUiColors.GOLD);
     }
 
     private void drawTab(DrawContext ctx, int x, int y, int w, int h,
@@ -315,7 +324,7 @@ public class CreditZahlungScreen extends BasisScreen {
         if (aktiv) {
             ctx.fill(x + 1, y + 1, x + w - 1, y + 3, hlAktiv);
         }
-        int col = aktiv ? textFarbe : (hov ? 0xFFCCCCCC : 0xFF888899);
+        int col = aktiv ? textFarbe : (hov ? ClassicUiColors.TEXT : ClassicUiColors.MUTED);
         int tw  = textRenderer.getWidth(label);
         ctx.drawText(textRenderer, Text.literal(label),
                 x + (w - tw) / 2, y + (h - 8) / 2, col, false);
@@ -344,14 +353,14 @@ public class CreditZahlungScreen extends BasisScreen {
                         infoX, infoY + 4, C_LABEL, false);
             } else {
                 ctx.drawText(textRenderer,
-                        Text.literal("§f" + gewähltesItem.getName().getString()),
+                        Text.literal("§f" + selectedInventorySlots.size() + " Items ausgewählt"),
                         infoX, infoY + 2, 0xFFFFFF, false);
                 ctx.drawText(textRenderer,
-                        Text.literal("§7Anzahl: §f" + gewählteAnzahl + " §8/ " + gewähltesItem.getCount()),
+                        Text.literal("§7Vorschau: §f" + gewähltesItem.getName().getString()),
                         infoX, infoY + 11, C_LABEL, false);
                 ctx.drawText(textRenderer,
-                        Text.literal("§8↕ Scroll  |  RMB: ×½"),
-                        infoX, infoY + 20, 0xFF444455, false);
+                        Text.literal("§8Klicke markierte Slots zum Entfernen"),
+                        infoX, infoY + 20, ClassicUiColors.MUTED_DARK, false);
             }
 
             int wertLabelY = sy + SLOT_SIZE + 16;
@@ -386,7 +395,9 @@ public class CreditZahlungScreen extends BasisScreen {
             for (int c = 0; c < INV_COLS; c++) {
                 int sx = invStartX + c * SLOT_SIZE;
                 int sy = yInv + r * SLOT_SIZE;
-                drawDarkSlot(ctx, sx, sy, inv.getStack(9 + r * INV_COLS + c), mx, my, false);
+                int inventorySlot = 9 + r * INV_COLS + c;
+                drawDarkSlot(ctx, sx, sy, inv.getStack(inventorySlot), mx, my, false,
+                        selectedInventorySlots.containsKey(inventorySlot));
             }
         }
 
@@ -396,19 +407,25 @@ public class CreditZahlungScreen extends BasisScreen {
 
         for (int c = 0; c < INV_COLS; c++) {
             int sx = invStartX + c * SLOT_SIZE;
-            drawDarkSlot(ctx, sx, yHotbar, inv.getStack(c), mx, my, false);
+            drawDarkSlot(ctx, sx, yHotbar, inv.getStack(c), mx, my, false,
+                    selectedInventorySlots.containsKey(c));
         }
     }
 
     private void drawDarkSlot(DrawContext ctx, int sx, int sy, ItemStack stack,
                               int mx, int my, boolean zielSlot) {
+        drawDarkSlot(ctx, sx, sy, stack, mx, my, zielSlot, false);
+    }
+
+    private void drawDarkSlot(DrawContext ctx, int sx, int sy, ItemStack stack,
+                              int mx, int my, boolean zielSlot, boolean selected) {
         ctx.fill(sx,                 sy,                 sx + SLOT_SIZE,     sy + 1,             C_SLOT_D);
         ctx.fill(sx,                 sy,                 sx + 1,             sy + SLOT_SIZE,     C_SLOT_D);
         ctx.fill(sx + 1,             sy + SLOT_SIZE - 1, sx + SLOT_SIZE,     sy + SLOT_SIZE,     C_SLOT_H);
         ctx.fill(sx + SLOT_SIZE - 1, sy + 1,             sx + SLOT_SIZE,     sy + SLOT_SIZE,     C_SLOT_H);
         ctx.fill(sx + 1,             sy + 1,             sx + SLOT_SIZE - 1, sy + SLOT_SIZE - 1, C_SLOT_BG);
 
-        if (zielSlot && !stack.isEmpty())
+        if ((zielSlot || selected) && !stack.isEmpty())
             ctx.fill(sx + 1, sy + 1, sx + SLOT_SIZE - 1, sy + SLOT_SIZE - 1, C_ZIEL_ITEM);
 
         if (isIn(mx, my, sx, sy, SLOT_SIZE, SLOT_SIZE)) {
@@ -425,7 +442,7 @@ public class CreditZahlungScreen extends BasisScreen {
         int abX = pX + PANEL_B - RAND - BTN_BREITE;
 
         String okLabel   = modus == Modus.GELD ? "✔ Zahlung" : "✔ Item zahlen";
-        int    okTextClr = modus == Modus.GELD ? 0xFF66DD66 : 0xFF88AAFF;
+        int    okTextClr = modus == Modus.GELD ? ClassicUiColors.LIME : ClassicUiColors.GOLD;
 
         boolean okHov = isIn(mx, my, okX, yButtons, BTN_BREITE, BTN_HÖHE);
         boolean abHov = isIn(mx, my, abX, yButtons, BTN_BREITE, BTN_HÖHE);
@@ -433,7 +450,7 @@ public class CreditZahlungScreen extends BasisScreen {
         drawDarkBtn(ctx, okX, yButtons, BTN_BREITE, BTN_HÖHE,
                 okHov ? C_BTN_OK_H : C_BTN_OK, okLabel, okTextClr);
         drawDarkBtn(ctx, abX, yButtons, BTN_BREITE, BTN_HÖHE,
-                abHov ? C_BTN_AB_H : C_BTN_AB, "✖ Abbrechen", 0xFFDD6666);
+                abHov ? C_BTN_AB_H : C_BTN_AB, "✖ Abbrechen", ClassicUiColors.ERROR);
     }
 
     private void drawDarkBtn(DrawContext ctx, int x, int y, int w, int h,
@@ -460,8 +477,9 @@ public class CreditZahlungScreen extends BasisScreen {
 
     @Override
     public boolean mouseClicked(net.minecraft.client.gui.Click click, boolean doubled) {
-        double mx = click.x(), my = click.y();
-        int btn = click.button();
+        net.minecraft.client.gui.Click layoutClick = GuiScaleUtil.toLayoutClick(click, panelScale);
+        double mx = layoutClick.x(), my = layoutClick.y();
+        int btn = layoutClick.button();
 
         if (btn == 0) {
             int tabBreite = (PANEL_B - RAND * 2 - 6) / 2;
@@ -469,7 +487,8 @@ public class CreditZahlungScreen extends BasisScreen {
             int xItem = pX + RAND + tabBreite + 6;
             if (isIn(mx, my, xGeld, yTabs, tabBreite, 20) && modus != Modus.GELD) {
                 modus = Modus.GELD; fehlerText = null; erfolgText = null;
-                gewähltesItem = ItemStack.EMPTY; gewählteAnzahl = 1;
+                selectedInventorySlots.clear();
+                refreshSelectedItemPreview();
                 init(); return true;
             }
             if (isIn(mx, my, xItem, yTabs, tabBreite, 20) && modus != Modus.ITEM) {
@@ -491,11 +510,8 @@ public class CreditZahlungScreen extends BasisScreen {
                             int sy = yInv + r * SLOT_SIZE;
                             if (isIn(mx, my, sx, sy, SLOT_SIZE, SLOT_SIZE)) {
                                 ItemStack s = inv.getStack(9 + r * INV_COLS + c);
-                                if (!s.isEmpty()) {
-                                    gewähltesItem  = s.copy();
-                                    gewählteAnzahl = s.getCount();
-                                    fehlerText     = null;
-                                }
+                                toggleInventorySlot(9 + r * INV_COLS + c, s);
+                                fehlerText = null;
                                 return true;
                             }
                         }
@@ -505,19 +521,16 @@ public class CreditZahlungScreen extends BasisScreen {
                         int sx = invStartX + c * SLOT_SIZE;
                         if (isIn(mx, my, sx, yHotbar, SLOT_SIZE, SLOT_SIZE)) {
                             ItemStack s = inv.getStack(c);
-                            if (!s.isEmpty()) {
-                                gewähltesItem  = s.copy();
-                                gewählteAnzahl = s.getCount();
-                                fehlerText     = null;
-                            }
+                            toggleInventorySlot(c, s);
+                            fehlerText = null;
                             return true;
                         }
                     }
 
                     int sy = yEingabe + 10 + 4;
                     if (isIn(mx, my, pX + RAND, sy, SLOT_SIZE, SLOT_SIZE)) {
-                        gewähltesItem  = ItemStack.EMPTY;
-                        gewählteAnzahl = 1;
+                        selectedInventorySlots.clear();
+                        refreshSelectedItemPreview();
                         return true;
                     }
                 }
@@ -539,11 +552,13 @@ public class CreditZahlungScreen extends BasisScreen {
             }
         }
 
-        return super.mouseClicked(click, doubled);
+        return super.mouseClicked(layoutClick, doubled);
     }
 
     @Override
     public boolean mouseScrolled(double mx, double my, double h, double v) {
+        mx /= panelScale;
+        my /= panelScale;
         if (modus == Modus.ITEM && !gewähltesItem.isEmpty()) {
             int sy = yEingabe + 10 + 4;
             if (isIn(mx, my, pX + RAND, sy, SLOT_SIZE, SLOT_SIZE)) {
@@ -595,6 +610,10 @@ public class CreditZahlungScreen extends BasisScreen {
     }
 
     private void eintragenItem() {
+        if (eintragenAusgewählteItems()) {
+            return;
+        }
+
         if (gewähltesItem.isEmpty()) {
             fehlerText = "Bitte zuerst ein Item aus dem Inventar wählen!";
             return;
@@ -660,28 +679,106 @@ public class CreditZahlungScreen extends BasisScreen {
     }
 
     private String serialisiereItemStack(ItemStack stack, int anzahl) {
-        if (stack == null || stack.isEmpty()) return null;
+        return ItemStackStorage.serialize(stack, anzahl);
+    }
 
-        MinecraftClient mc = MinecraftClient.getInstance();
-
-        RegistryWrapper.WrapperLookup lookup =
-                mc.player != null ? mc.player.getRegistryManager() : null;
-
-        if (lookup == null) {
-            return null;
+    private boolean eintragenAusgewählteItems() {
+        if (selectedInventorySlots.isEmpty()) {
+            fehlerText = "Bitte waehle mindestens ein Item aus.";
+            return true;
         }
 
-        ItemStack kopie = stack.copy();
-        kopie.setCount(Math.max(1, Math.min(anzahl, stack.getCount())));
+        if (feldVerrechnungswert == null || feldVerrechnungswert.getText().trim().isBlank()) {
+            fehlerText = "Bitte den gemeinsamen Verrechnungswert eingeben.";
+            return true;
+        }
 
-        NbtElement nbt = ItemStack.CODEC.encodeStart(
-                RegistryOps.of(NbtOps.INSTANCE, lookup),
-                kopie
-        ).resultOrPartial(error ->
-                System.out.println("[CreditManager] ItemStack konnte nicht serialisiert werden: " + error)
-        ).orElse(null);
+        double sharedValue;
+        try {
+            sharedValue = FormatUtil.parseMoney(feldVerrechnungswert.getText().trim());
+        } catch (IllegalArgumentException exception) {
+            fehlerText = "Bitte einen gueltigen positiven Verrechnungswert eingeben.";
+            return true;
+        }
 
-        return nbt != null ? nbt.toString() : null;
+        if (sharedValue > eintrag.getRemainingAmount()) {
+            fehlerText = "Der gemeinsame Wert ueberschreitet den Restbetrag.";
+            return true;
+        }
+
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.player == null) {
+            fehlerText = "Kein Spieler-Inventar verfuegbar.";
+            return true;
+        }
+
+        List<String> items = new ArrayList<>();
+        List<String> serializedItems = new ArrayList<>();
+        PlayerInventory inventory = client.player.getInventory();
+        for (Map.Entry<Integer, Integer> selection : selectedInventorySlots.entrySet()) {
+            ItemStack stack = inventory.getStack(selection.getKey());
+            if (stack.isEmpty()) {
+                continue;
+            }
+            int count = Math.max(1, Math.min(selection.getValue(), stack.getCount()));
+            String serialized = serialisiereItemStack(stack, count);
+            if (serialized == null || serialized.isBlank()) {
+                fehlerText = "Ein ausgewaehltes Item konnte nicht gespeichert werden.";
+                return true;
+            }
+            items.add(count + "x " + stack.getName().getString());
+            serializedItems.add(serialized);
+        }
+
+        if (items.isEmpty()) {
+            fehlerText = "Die ausgewaehlten Items sind nicht mehr im Inventar.";
+            return true;
+        }
+
+        try {
+            manager.addItemPayment(eintrag.getId(), ich, items, sharedValue, serializedItems);
+            manager.findCredit(eintrag.getDealName()).ifPresent(f -> eintrag = f);
+            erfolgText = items.size() + " Items mit gemeinsamem Wert von "
+                    + FormatUtil.formatiereBetrag(sharedValue) + " eingetragen!";
+            schedule();
+        } catch (CreditManager.CreditException exception) {
+            fehlerText = exception.getMessage();
+        }
+        return true;
+    }
+
+    private void toggleInventorySlot(int inventorySlot, ItemStack stack) {
+        if (stack.isEmpty()) {
+            return;
+        }
+        if (selectedInventorySlots.containsKey(inventorySlot)) {
+            selectedInventorySlots.remove(inventorySlot);
+        } else {
+            selectedInventorySlots.put(inventorySlot, stack.getCount());
+        }
+        refreshSelectedItemPreview();
+    }
+
+    private void refreshSelectedItemPreview() {
+        if (selectedInventorySlots.isEmpty()) {
+            gewähltesItem = ItemStack.EMPTY;
+            gewählteAnzahl = 1;
+            return;
+        }
+
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.player == null) {
+            return;
+        }
+        Map.Entry<Integer, Integer> first = selectedInventorySlots.entrySet().iterator().next();
+        ItemStack stack = client.player.getInventory().getStack(first.getKey());
+        if (stack.isEmpty()) {
+            selectedInventorySlots.remove(first.getKey());
+            refreshSelectedItemPreview();
+            return;
+        }
+        gewähltesItem = stack.copy();
+        gewählteAnzahl = Math.min(first.getValue(), stack.getCount());
     }
 
     private void schedule() {

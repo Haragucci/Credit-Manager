@@ -16,29 +16,32 @@ public abstract class BasisScreen extends Screen {
     private static final int NAV_HÖHE    = 20;
     private static final int KOPF_GESAMT = NAV_HÖHE + 2;
 
-    private static final int C_PANEL_BG    = 0xFF1E1E2E;
-    private static final int C_RAND_AUSSEN = 0xFF0D0D1A;
-    private static final int C_RAND_ECKE   = 0xFF161626;
-    private static final int C_HIGHLIGHT   = 0xFF2A2A3E;
-    private static final int C_SCHATTEN    = 0xFF0A0A14;
+    private static final int C_PANEL_BG    = ClassicUiColors.PANEL;
+    private static final int C_RAND_AUSSEN = ClassicUiColors.OUTER_BORDER;
+    private static final int C_RAND_ECKE   = ClassicUiColors.CORNER;
+    private static final int C_HIGHLIGHT   = ClassicUiColors.HIGHLIGHT;
+    private static final int C_SCHATTEN    = ClassicUiColors.SHADOW;
 
-    private static final int C_NAV_BG     = 0xFF12121F;
-    private static final int C_NAV_BORDER = 0xFF2E2E4A;
-    private static final int C_NAV_PREFIX = 0xFF666677;
-    private static final int C_NAV_PFEIL  = 0xFF4A9E4A;
-    private static final int C_NAV_SEITE  = 0xFFFFFFFF;
+    private static final int C_NAV_BG     = ClassicUiColors.NAVIGATION;
+    private static final int C_NAV_BORDER = ClassicUiColors.HIGHLIGHT;
+    private static final int C_NAV_PREFIX = ClassicUiColors.MUTED;
+    private static final int C_NAV_PFEIL  = ClassicUiColors.LIME;
+    private static final int C_NAV_SEITE  = ClassicUiColors.TEXT;
 
-    private static final int C_SLOT_D    = 0xFF0D0D1A;
-    private static final int C_SLOT_H    = 0xFF2E2E4A;
-    private static final int C_SLOT_BG   = 0xFF181828;
-    private static final int C_HOVER     = 0x40FFFFFF;
+    private static final int C_SLOT_D    = ClassicUiColors.OUTER_BORDER;
+    private static final int C_SLOT_H    = ClassicUiColors.SLOT_EDGE;
+    private static final int C_SLOT_BG   = ClassicUiColors.SLOT;
+    private static final int C_HOVER     = ClassicUiColors.HOVER;
 
-    private static final int C_TRENN_D   = 0xFF0A0A14;
-    private static final int C_TRENN_H   = 0xFF2A2A3E;
+    private static final int C_TRENN_D   = ClassicUiColors.SHADOW;
+    private static final int C_TRENN_H   = ClassicUiColors.HIGHLIGHT;
 
     protected int guiX, guiY, guiBreite;
     protected int anzahlSlots;
     protected ItemStack[] slots;
+
+    private final boolean responsiveSlotLayout;
+    private float layoutScale = 1.0F;
 
     private static final int KOPF_GESAMT_LEGACY = NAV_HÖHE - 2;
 
@@ -55,6 +58,7 @@ public abstract class BasisScreen extends Screen {
         this.slots       = new ItemStack[anzahlSlots];
         this.guiBreite   = COLS * SLOT_SIZE + RAND * 2;
         this.gesamtHöhe  = KOPF_GESAMT + guiReihen * SLOT_SIZE + RAND;
+        this.responsiveSlotLayout = true;
     }
 
     protected BasisScreen(Text titel, int reihen, boolean legacyLayout) {
@@ -64,6 +68,7 @@ public abstract class BasisScreen extends Screen {
         this.slots       = new ItemStack[anzahlSlots];
         this.guiBreite   = COLS * SLOT_SIZE + RAND * 2;
         this.gesamtHöhe  = KOPF_GESAMT_LEGACY + guiReihen * SLOT_SIZE + 4;
+        this.responsiveSlotLayout = false;
     }
 
     @Override
@@ -88,9 +93,25 @@ public abstract class BasisScreen extends Screen {
 
     @Override
     protected void init() {
-        guiX = (width  - guiBreite)  / 2;
-        guiY = (height - gesamtHöhe) / 2;
+        layoutScale = berechneLayoutScale();
+        guiX = Math.round((width / layoutScale - guiBreite) / 2.0F);
+        guiY = Math.round((height / layoutScale - gesamtHöhe) / 2.0F);
         fülleSlots();
+    }
+
+    /**
+     * The classic inventory layout stays deliberately compact. It only scales
+     * down on constrained GUI scales, leaving a clear border around the screen.
+     */
+    private float berechneLayoutScale() {
+        if (!responsiveSlotLayout) {
+            return 1.0F;
+        }
+
+        float maxWidth = width * 0.68F;
+        float maxHeight = height * 0.74F;
+        float fitScale = Math.min(maxWidth / guiBreite, maxHeight / gesamtHöhe);
+        return Math.max(0.55F, Math.min(1.0F, fitScale));
     }
 
     protected abstract void fülleSlots();
@@ -107,11 +128,21 @@ public abstract class BasisScreen extends Screen {
 
         tooltipStack = null;
 
+        boolean scaled = layoutScale != 1.0F;
+        if (scaled) {
+            ctx.getMatrices().pushMatrix();
+            ctx.getMatrices().scale(layoutScale, layoutScale);
+        }
+
         drawPanel(ctx);
         drawNav(ctx);
         drawTrennlinie(ctx);
         drawSlotVertiefungen(ctx);
         drawGuiSlots(ctx, mouseX, mouseY);
+
+        if (scaled) {
+            ctx.getMatrices().popMatrix();
+        }
 
         super.render(ctx, mouseX, mouseY, delta);
 
@@ -216,6 +247,8 @@ public abstract class BasisScreen extends Screen {
     protected boolean onSlotKlick(int slot, ItemStack stack) { return false; }
 
     protected boolean isHov(int sx, int sy, double mx, double my) {
+        mx /= layoutScale;
+        my /= layoutScale;
         return mx >= sx && mx < sx + SLOT_SIZE && my >= sy && my < sy + SLOT_SIZE;
     }
 

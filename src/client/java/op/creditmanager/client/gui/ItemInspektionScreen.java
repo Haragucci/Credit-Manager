@@ -31,33 +31,33 @@ public class ItemInspektionScreen extends BasisScreen {
     private static final int PANEL_H = NAV_H + 2 + 10 + 10 + 6 + SHOWCASE_SIZE
             + 8 + 10 + 6 + 10 + 5 + 10 + 5 + 10 + 5 + 10 + 14 + 20 + 10;
 
-    private static final int C_PANEL_BG  = 0xFF1E1E2E;
-    private static final int C_RAND_AUSS = 0xFF0D0D1A;
-    private static final int C_RAND_ECKE = 0xFF161626;
-    private static final int C_HIGHLIGHT = 0xFF2A2A3E;
-    private static final int C_DUNKEL    = 0xFF0A0A14;
+    private static final int C_PANEL_BG  = ClassicUiColors.PANEL;
+    private static final int C_RAND_AUSS = ClassicUiColors.OUTER_BORDER;
+    private static final int C_RAND_ECKE = ClassicUiColors.CORNER;
+    private static final int C_HIGHLIGHT = ClassicUiColors.HIGHLIGHT;
+    private static final int C_DUNKEL    = ClassicUiColors.SHADOW;
 
-    private static final int C_NAV_BG     = 0xFF12121F;
-    private static final int C_NAV_BORDER = 0xFF2E2E4A;
-    private static final int C_NAV_PREFIX = 0xFF666677;
-    private static final int C_NAV_PFEIL  = 0xFF4A9E4A;
-    private static final int C_NAV_SEITE  = 0xFFFFFFFF;
+    private static final int C_NAV_BG     = ClassicUiColors.NAVIGATION;
+    private static final int C_NAV_BORDER = ClassicUiColors.HIGHLIGHT;
+    private static final int C_NAV_PREFIX = ClassicUiColors.MUTED;
+    private static final int C_NAV_PFEIL  = ClassicUiColors.LIME;
+    private static final int C_NAV_SEITE  = ClassicUiColors.TEXT;
 
-    private static final int C_TRENN_D = 0xFF0A0A14;
-    private static final int C_TRENN_H = 0xFF2A2A3E;
-    private static final int C_LABEL   = 0xFF888899;
+    private static final int C_TRENN_D = ClassicUiColors.SHADOW;
+    private static final int C_TRENN_H = ClassicUiColors.HIGHLIGHT;
+    private static final int C_LABEL   = ClassicUiColors.MUTED;
 
-    private static final int C_SLOT_BG = 0xFF181828;
-    private static final int C_SLOT_D  = 0xFF0D0D1A;
-    private static final int C_SLOT_H  = 0xFF2E2E4A;
-    private static final int C_ITEM_GL = 0x308080FF;
-    private static final int C_HOVER   = 0x40FFFFFF;
+    private static final int C_SLOT_BG = ClassicUiColors.SLOT;
+    private static final int C_SLOT_D  = ClassicUiColors.OUTER_BORDER;
+    private static final int C_SLOT_H  = ClassicUiColors.SLOT_EDGE;
+    private static final int C_ITEM_GL = ClassicUiColors.ITEM_GLOW;
+    private static final int C_HOVER   = ClassicUiColors.HOVER;
 
-    private static final int C_BTN_BG  = 0xFF1A1A3A;
-    private static final int C_BTN_HOV = 0xFF252550;
-    private static final int C_WHITE   = 0xFFFFFFFF;
-    private static final int C_GRAY    = 0xFFAAAAAA;
-    private static final int C_DARK    = 0xFF555555;
+    private static final int C_BTN_BG  = ClassicUiColors.PRIMARY;
+    private static final int C_BTN_HOV = ClassicUiColors.PRIMARY_HOVER;
+    private static final int C_WHITE   = ClassicUiColors.TEXT;
+    private static final int C_GRAY    = ClassicUiColors.MUTED;
+    private static final int C_DARK    = ClassicUiColors.MUTED_DARK;
 
     private final Payment   zahlung;
     private final Screen    elternScreen;
@@ -66,6 +66,7 @@ public class ItemInspektionScreen extends BasisScreen {
     private final String    anzeigeAn;
 
     private int     pX, pY;
+    private float   panelScale = 1.0F;
     private boolean btnHover = false;
 
     public ItemInspektionScreen(Payment zahlung, Screen elternScreen) {
@@ -73,7 +74,8 @@ public class ItemInspektionScreen extends BasisScreen {
                 zahlung,
                 elternScreen,
                 zahlung != null ? zahlung.getFromPlayer() : "",
-                zahlung != null ? zahlung.getToPlayer() : ""
+                zahlung != null ? zahlung.getToPlayer() : "",
+                0
         );
     }
 
@@ -82,32 +84,48 @@ public class ItemInspektionScreen extends BasisScreen {
                 zahlung,
                 elternScreen,
                 eintrag != null ? eintrag.getDebtor() : (zahlung != null ? zahlung.getFromPlayer() : ""),
-                eintrag != null ? eintrag.getCreditor() : (zahlung != null ? zahlung.getToPlayer() : "")
+                eintrag != null ? eintrag.getCreditor() : (zahlung != null ? zahlung.getToPlayer() : ""),
+                0
         );
     }
 
-    private ItemInspektionScreen(Payment zahlung, Screen elternScreen, String von, String an) {
+    public ItemInspektionScreen(Payment zahlung, int itemIndex, Screen elternScreen) {
+        this(
+                zahlung,
+                elternScreen,
+                zahlung != null ? zahlung.getFromPlayer() : "",
+                zahlung != null ? zahlung.getToPlayer() : "",
+                itemIndex
+        );
+    }
+
+    private ItemInspektionScreen(Payment zahlung, Screen elternScreen, String von, String an, int itemIndex) {
         super(Text.literal("Item-Inspektion"), 0);
 
         this.zahlung = zahlung;
         this.elternScreen = elternScreen;
         this.anzeigeVon = safeName(von);
         this.anzeigeAn = safeName(an);
-        this.parsedStack = parseItemStack(zahlung);
+        List<ItemStack> itemStacks = resolvePaymentStacks(zahlung);
+        this.parsedStack = itemStacks.get(Math.max(0, Math.min(itemIndex, itemStacks.size() - 1)));
     }
 
     private String safeName(String name) {
         return name == null || name.isBlank() ? "Unbekannt" : name;
     }
 
-    private ItemStack parseItemStack(Payment zahlung) {
+    public static ItemStack resolvePaymentStack(Payment zahlung) {
+        if (zahlung == null) {
+            return new ItemStack(Items.BARRIER);
+        }
         String nbtStr = zahlung.getItemNbt();
 
         if (nbtStr != null && !nbtStr.isBlank()) {
             try {
                 MinecraftClient mc = MinecraftClient.getInstance();
                 RegistryWrapper.WrapperLookup lookup =
-                        mc.player != null ? mc.player.getRegistryManager() : null;
+                        mc.player != null ? mc.player.getRegistryManager()
+                                : mc.world != null ? mc.world.getRegistryManager() : null;
 
                 NbtCompound nbt = StringNbtReader.readCompound(nbtStr);
 
@@ -122,15 +140,41 @@ public class ItemInspektionScreen extends BasisScreen {
                 ItemStack simpleStack = tryDecodeSimpleNbtStack(nbt);
                 if (!simpleStack.isEmpty()) return simpleStack;
 
-            } catch (Exception e) {
-                System.out.println("[CreditManager] Item-NBT konnte nicht geladen werden: " + e.getMessage());
+            } catch (Exception ignored) {
             }
         }
 
         return fallbackStack(zahlung);
     }
 
-    private ItemStack tryDecodeFullStack(NbtCompound nbt, RegistryWrapper.WrapperLookup lookup) {
+    public static List<ItemStack> resolvePaymentStacks(Payment zahlung) {
+        if (zahlung == null) {
+            return List.of(new ItemStack(Items.BARRIER));
+        }
+
+        List<String> serializedStacks = zahlung.getItemNbtEntries();
+        List<String> descriptions = zahlung.getItems();
+        int count = Math.max(serializedStacks.size(), descriptions.size());
+        if (count == 0) {
+            return List.of(resolvePaymentStack(zahlung));
+        }
+
+        List<ItemStack> stacks = new ArrayList<>();
+        for (int index = 0; index < count; index++) {
+            String description = index < descriptions.size() ? descriptions.get(index) : "Unbekanntes Item";
+            String serialized = index < serializedStacks.size() ? serializedStacks.get(index)
+                    : index == 0 ? zahlung.getItemNbt() : null;
+            Payment singleStackPayment = new Payment(
+                    zahlung.getCreditId(), zahlung.getFromPlayer(), zahlung.getToPlayer(), zahlung.getAmount(),
+                    List.of(description), zahlung.getSource()
+            );
+            singleStackPayment.setItemNbt(serialized);
+            stacks.add(resolvePaymentStack(singleStackPayment));
+        }
+        return stacks;
+    }
+
+    private static ItemStack tryDecodeFullStack(NbtCompound nbt, RegistryWrapper.WrapperLookup lookup) {
         try {
             return ItemStack.CODEC.parse(
                     RegistryOps.of(NbtOps.INSTANCE, lookup),
@@ -141,7 +185,7 @@ public class ItemInspektionScreen extends BasisScreen {
         }
     }
 
-    private ItemStack tryDecodeComponentOnlyStack(NbtCompound components, RegistryWrapper.WrapperLookup lookup) {
+    private static ItemStack tryDecodeComponentOnlyStack(NbtCompound components, RegistryWrapper.WrapperLookup lookup) {
         try {
             Identifier itemId = findItemIdFromComponents(components);
             if (itemId == null) return ItemStack.EMPTY;
@@ -161,7 +205,7 @@ public class ItemInspektionScreen extends BasisScreen {
         }
     }
 
-    private ItemStack tryDecodeSimpleNbtStack(NbtCompound nbt) {
+    private static ItemStack tryDecodeSimpleNbtStack(NbtCompound nbt) {
         try {
             String idStr = nbt.getString("id", "");
 
@@ -187,7 +231,7 @@ public class ItemInspektionScreen extends BasisScreen {
         }
     }
 
-    private Identifier findItemIdFromComponents(NbtCompound components) {
+    private static Identifier findItemIdFromComponents(NbtCompound components) {
         try {
             String id = components.getString("id", "");
             Identifier found = findItemIdByString(id);
@@ -226,7 +270,7 @@ public class ItemInspektionScreen extends BasisScreen {
         return null;
     }
 
-    private int getCountFromComponentsOrDefault(NbtCompound components) {
+    private static int getCountFromComponentsOrDefault(NbtCompound components) {
         try {
             int maxStack = components.getInt("minecraft:max_stack_size", 1);
             if (maxStack > 1) return 1;
@@ -236,7 +280,10 @@ public class ItemInspektionScreen extends BasisScreen {
     }
 
 
-    private ItemStack fallbackStack(Payment zahlung) {
+    private static ItemStack fallbackStack(Payment zahlung) {
+        if (zahlung == null) {
+            return new ItemStack(Items.BARRIER);
+        }
         List<String> items = zahlung.getItems();
 
         if (items == null || items.isEmpty()) {
@@ -274,7 +321,7 @@ public class ItemInspektionScreen extends BasisScreen {
         return fallback;
     }
 
-    private Identifier findItemIdByRawName(String raw) {
+    private static Identifier findItemIdByRawName(String raw) {
         if (raw == null || raw.isBlank()) return null;
 
         String cleaned = cleanRawItemName(raw);
@@ -319,7 +366,7 @@ public class ItemInspektionScreen extends BasisScreen {
         return null;
     }
 
-    private Identifier findItemIdByString(String value) {
+    private static Identifier findItemIdByString(String value) {
         if (value == null || value.isBlank()) return null;
 
         String id = value.trim();
@@ -348,7 +395,7 @@ public class ItemInspektionScreen extends BasisScreen {
         return null;
     }
 
-    private String cleanRawItemName(String raw) {
+    private static String cleanRawItemName(String raw) {
         String s = raw;
 
         s = s.replaceAll("§[0-9a-fk-orA-FK-OR]", "");
@@ -376,7 +423,7 @@ public class ItemInspektionScreen extends BasisScreen {
         return s;
     }
 
-    private String normalizeItemNameToPath(String name) {
+    private static String normalizeItemNameToPath(String name) {
         String s = cleanRawItemName(name).toLowerCase();
 
         s = s.replace("minecraft:", "");
@@ -388,7 +435,7 @@ public class ItemInspektionScreen extends BasisScreen {
         return s;
     }
 
-    private int extractCount(String raw) {
+    private static int extractCount(String raw) {
         if (raw == null) return 1;
 
         try {
@@ -408,8 +455,9 @@ public class ItemInspektionScreen extends BasisScreen {
 
     @Override
     protected void init() {
-        pX        = (width  - PANEL_B) / 2;
-        pY        = (height - PANEL_H) / 2;
+        panelScale = GuiScaleUtil.compactPanelScale(width, height, PANEL_B, PANEL_H);
+        pX        = GuiScaleUtil.centeredX(width, panelScale, PANEL_B);
+        pY        = GuiScaleUtil.centeredY(height, panelScale, PANEL_H);
         guiX      = pX;
         guiY      = pY;
         guiBreite = PANEL_B;
@@ -421,17 +469,23 @@ public class ItemInspektionScreen extends BasisScreen {
     @Override
     public void render(DrawContext ctx, int mouseX, int mouseY, float delta) {
 
+        int layoutMouseX = GuiScaleUtil.toLayoutCoordinate(mouseX, panelScale);
+        int layoutMouseY = GuiScaleUtil.toLayoutCoordinate(mouseY, panelScale);
+        ctx.getMatrices().pushMatrix();
+        ctx.getMatrices().scale(panelScale, panelScale);
+
         int btnX = pX + RAND;
         int btnY = pY + PANEL_H - 30;
         int btnW = PANEL_B - RAND * 2;
         int btnH = 14;
-        btnHover = mouseX >= btnX && mouseX <= btnX + btnW
-                && mouseY >= btnY && mouseY <= btnY + btnH;
+        btnHover = layoutMouseX >= btnX && layoutMouseX <= btnX + btnW
+                && layoutMouseY >= btnY && layoutMouseY <= btnY + btnH;
 
         drawPanel(ctx);
         drawNav(ctx);
         drawTrennlinie(ctx);
-        drawInhalt(ctx, mouseX, mouseY);
+        drawInhalt(ctx, layoutMouseX, layoutMouseY);
+        ctx.getMatrices().popMatrix();
 
     }
 
@@ -543,7 +597,8 @@ public class ItemInspektionScreen extends BasisScreen {
                 ? "§6" + FormatUtil.formatiereBetrag(zahlung.getAmount())
                 : "§8– (Item-Tausch)";
 
-        drawZeile(ctx, x, curY, maxW, "Wert:", betrag);
+        String valueLabel = resolvePaymentStacks(zahlung).size() > 1 ? "Gemeinsamer Wert:" : "Wert:";
+        drawZeile(ctx, x, curY, maxW, valueLabel, betrag);
         curY += 12;
 
         drawZeile(ctx, x, curY, maxW, "Von:", "§f" + anzeigeVon);
@@ -590,8 +645,9 @@ public class ItemInspektionScreen extends BasisScreen {
 
     @Override
     public boolean mouseClicked(net.minecraft.client.gui.Click click, boolean doubled) {
-        double mouseX = click.x();
-        double mouseY = click.y();
+        net.minecraft.client.gui.Click layoutClick = GuiScaleUtil.toLayoutClick(click, panelScale);
+        double mouseX = layoutClick.x();
+        double mouseY = layoutClick.y();
 
         int btnX = pX + RAND;
         int btnY = pY + PANEL_H - 30;
@@ -606,7 +662,7 @@ public class ItemInspektionScreen extends BasisScreen {
             return true;
         }
 
-        return super.mouseClicked(click, doubled);
+        return super.mouseClicked(layoutClick, doubled);
     }
 
     @Override

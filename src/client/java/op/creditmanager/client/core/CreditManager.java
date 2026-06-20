@@ -32,7 +32,7 @@ public class CreditManager {
 
         validateNames(gläubiger, schuldner);
 
-        if (betrag <= 0)
+        if (!Double.isFinite(betrag) || betrag <= 0)
             throw new CreditException("Der Betrag muss größer als 0 sein.");
 
         String dealName = CreditEntry.buildDealName(schuldner, gläubiger, bezeichnung);
@@ -99,10 +99,21 @@ public class CreditManager {
                                   List<String> items, double wert,
                                   String nbt) throws CreditException {
 
+        return addItemPayment(dealId, vonSpieler, items, wert,
+                nbt == null || nbt.isBlank() ? List.of() : List.of(nbt));
+    }
+
+    public Payment addItemPayment(UUID dealId, String vonSpieler,
+                                  List<String> items, double wert,
+                                  List<String> nbtEntries) throws CreditException {
+
         CreditEntry entry = getSafeCredit(dealId);
 
         validateActive(entry);
         validateAmount(wert);
+        if (items == null || items.isEmpty()) {
+            throw new CreditException("Mindestens ein Item muss ausgewählt werden.");
+        }
 
         double finalValue = Math.min(wert, entry.getRemainingAmount());
 
@@ -115,7 +126,8 @@ public class CreditManager {
                 "MANUELL"
         );
 
-        payment.setItemNbt(nbt);
+        payment.setItemNbtEntries(nbtEntries);
+        payment.setItemNbt(nbtEntries == null || nbtEntries.isEmpty() ? null : nbtEntries.getFirst());
 
         entry.addPayment(payment);
         repository.saveCredit(entry);
@@ -223,7 +235,7 @@ public class CreditManager {
     }
 
     private void validateAmount(double amount) throws CreditException {
-        if (amount <= 0) {
+        if (!Double.isFinite(amount) || amount <= 0) {
             throw new CreditException("Betrag muss > 0 sein.");
         }
     }

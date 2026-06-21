@@ -71,7 +71,6 @@ public class ModernInfoScreen extends ModernBaseScreen {
         String[] paragraphs = {
                 "Verwalte Forderungen, Schulden, Zahlungen und erkannte Paylogs direkt im Client.",
                 "Deine Daten liegen lokal in CreditManagerLogs. Die Auswahl zwischen Classic- und Modern-GUI verändert weder Deals noch gespeicherte JSON-Dateien.",
-                "Die Modern-GUI bietet Themes, eine eigene Deal-Historie und Statistiken. Paylogs bleiben bewusst ein separates System."
         };
         List<String> result = new ArrayList<>();
         for (String paragraph : paragraphs) {

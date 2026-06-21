@@ -1,67 +1,80 @@
 # CreditManager
 
-CreditManager ist eine Minecraft Fabric Mod, mit der Spieler ihre Schulden, Forderungen und Zahlungen übersichtlich verwalten können.
+CreditManager ist eine clientseitige Fabric-Mod für Minecraft **1.21.11**, mit der du Forderungen, Schulden, Zahlungen, Item-Verrechnungen und Paylogs übersichtlich verwaltest. Sie wurde für die Nutzung auf **OPSUCHT.net** entwickelt und funktioniert über ein grafisches Menü oder über Client-Befehle.
 
-Die Mod wurde speziell für die Nutzung auf **OPSUCHT.net** entwickelt und bietet ein eigenes GUI-System, Paylogs, Item-Zahlungen mit Verrechnungswert und einen Expertenmodus über Befehle.
+**Version:** `1.0.2-beta` · **Java:** `21` · **Minecraft:** `1.21.11`
 
-## Features
+## Funktionen
 
-- Schulden und Forderungen zwischen Spielern verwalten
-- Übersichtliches Hauptmenü per GUI
-- Detailansicht für einzelne Deals
-- Zahlungen eintragen und verwalten
-- Item-Zahlungen mit eigenem Verrechnungswert
-- Paylogs mit gespeicherten Transaktionen
-- Datum und Uhrzeit bei Zahlungen und Einträgen
-- Filter für offene, teilweise bezahlte, bezahlte und stornierte Deals
-- Expertenmodus mit Befehlen statt GUI
+- Forderungen und Schulden mit Betrag, Fälligkeitsdatum, Bezeichnung und Notiz anlegen
+- Teilzahlungen, vollständige Zahlungen, Stornierungen und Löschbestätigungen verwalten
+- Item-Zahlungen aus der Hand mit Verrechnungswert und gespeicherten Item-Daten erfassen
+- Details zu Geld- und Item-Zahlungen inklusive Vanilla-Item-Tooltip anzeigen
+- Automatisch erkannte Transaktionen als Paylogs speichern
+- Paylogs nach Spieler, Betrag, Datum und Uhrzeit durchsuchen
+  - Teiltreffer wie `20`, `20.06` oder `12:20`
+  - Betragsfilter wie `>=100`, `<500` und Bereiche wie `100-500`
+  - fehlertolerante Spielernamenssuche
+- Statistiken zu offenen Forderungen, Schulden und Saldo mit Zeitraumfilter und Balkendiagramm
+- Sichere Statistik-Zurücksetzung mit Backup
 
-## Wofür ist CreditManager gedacht?
+## GUI
 
-CreditManager hilft dir dabei, den Überblick über Ingame-Schulden und Forderungen zu behalten.
+Beim ersten Öffnen kann zwischen zwei Oberflächen gewählt werden:
 
-Beispiele:
+- **Modern GUI:** dunkle, themenfähige Oberfläche mit Navigation, Scrollbars, Suchfeldern, Animationen, Toasts und Einstellungen
+- **Classic GUI:** kompakte Inventar-/Slot-Oberfläche mit einer passenden dunklen CreditManager-Farbpalette
 
-- Ein Spieler leiht dir Geld
-- Du leihst einem Spieler Geld
-- Eine Schuld wird teilweise bezahlt
-- Eine Zahlung wird mit Items verrechnet
-- Du willst später nachvollziehen, wann welche Zahlung eingetragen wurde
+Die Auswahl lässt sich später in den Einstellungen ändern oder zurücksetzen.
 
-Alle wichtigen Informationen können entweder bequem über das GUI oder schneller über Befehle verwaltet werden.
+### Modern GUI
 
-## GUI-Modus
+Die Modern GUI bietet:
 
-Der normale Modus ist das grafische Menü.
+- Übersicht, Forderungen, Schulden, Paylogs, Info und Einstellungen
+- scrollbar-sichere Karten, Buttons und Click-Flächen
+- animierte Sidebar, Hover-Zustände und AN/AUS-Switches
+- Detail- und Zahlungsansichten für Deals
+- moderne Item-Inspektion, wenn sie aus der Modern GUI geöffnet wird
+- Statistikansicht mit Zeitraumwahl, Saldo, Skala, Legende und Balkendiagramm
+- maximal drei nicht-blockierende Toast-Benachrichtigungen gleichzeitig
 
-Öffnen kannst du es mit:
+Das rote **X** und **ESC** schließen die Modern GUI vollständig. Die Inventar-Taste schließt sie ebenfalls, solange kein Textfeld aktiv ist.
+
+### Schriftart und Themes
+
+In den Modern-GUI-Einstellungen kannst du wählen zwischen:
+
+- der mitgelieferten CreditManager-Schriftart
+- der normalen Minecraft-/aktiven Resource-Pack-Schrift
+
+Diese Einstellung betrifft ausschließlich die CreditManager Modern GUI. Item-Namen, Item-Tooltips, Chat, Inventar und andere Vanilla-GUIs behalten immer ihre normale Schrift. Zusätzlich stehen Dark-, Light- und Custom-Themes mit eigener Haupt- und Akzentfarbe zur Verfügung.
+
+### Einstellungen
+
+Folgende Funktionen lassen sich direkt im GUI konfigurieren:
+
+- automatische Paylog-Erkennung
+- Prüfung von Overlay-/Actionbar-Nachrichten
+- Paylog-Benachrichtigungen im Chat
+- GUI-Modus, Schriftart und Theme
+- Custom-Farben
+- Standardzeitraum und Reset der Statistiken
+
+## Öffnen und Befehle
+
+Das Hauptmenü öffnest du mit:
 
 ```text
 /cm
 ```
 
-oder:
+Weitere verfügbare Befehlsnamen sind `/CreditManager`, `/OpCreditmanager` und `/OpCM`.
 
-```text
-/CreditManager
-```
-
-Im GUI kannst du deine Schulden, Forderungen, Zahlungen und Paylogs übersichtlich ansehen und verwalten.
-
-## Expertenmodus
-
-Für Spieler, die lieber schnell mit Befehlen arbeiten, gibt es den Expertenmodus.
-
-Die Befehlsübersicht öffnest du mit:
+Die vollständige Hilfe steht im Spiel bereit:
 
 ```text
 /cm befehle
-```
-
-oder:
-
-```text
-/CreditManager befehle
 ```
 
 ### Schulden
@@ -81,108 +94,52 @@ oder:
 /cm forderung eintragen <spieler> <betrag> [datum] [bezeichnung] [notiz]
 /cm forderung liste
 /cm forderung empfangen <deal> <betrag>
+/cm forderung itemzahlung <deal> <wert>
 /cm forderung löschen <deal>
 /cm forderung bestätigen <deal>
 ```
 
-### Übersicht
+### Übersicht und Paylogs
 
 ```text
 /cm übersicht
 /cm übersicht schulden
 /cm übersicht forderung
-```
-
-### Weitere Befehle
-
-```text
 /cm info <deal-name oder spieler>
 /cm paylogs [spieler|ich] [3t|2w|1m|TT.MM.JJJJ]
-/cm befehle
 ```
 
-## Paylogs
-
-CreditManager speichert alle Transaktionen von OPSUCHT in Paylogs.
-
-Dadurch kannst du später nachvollziehen:
-
-- wer gezahlt hat
-- an wen gezahlt wurde
-- wann gezahlt wurde
-- welcher Betrag gezahlt wurde
-
-## Item-Zahlungen
-
-Neben normalen Geldzahlungen können auch Items als Zahlung eingetragen werden.
-
-Dabei wird ein Verrechnungswert angegeben, damit Items wie eine normale Zahlung auf eine Schuld oder Forderung angerechnet werden können.
-
-Beispiel:
-
-```text
-/cm schulden itemzahlung UserXYZ-05Haragucci-deal 500k
-
-
-
-Hinweis:
-
-Beträge unterstützen Kurzformate wie k, m und mrd.
-
-Beispiel: 500k, 2m / 2mio , 1.5mr
-```
-
-Dabei wird das Item aus deiner Hand als Zahlung mit einem Wert von `500.000$` eingetragen.
-
-## Minecraft-Version
-
-Diese Mod ist aktuell für folgende Version gebaut:
-
-```text
-Minecraft: 1.21.11
-```
+Bei Item-Zahlungen muss das gewünschte Item in der Haupthand liegen. Datumseingaben verwenden das Format `TT.MM.JJJJ`. Beträge unterstützen Kurzformate wie `500k`, `2m`, `2mio` und `1.5mrd`.
 
 ## Installation
 
-1. Installiere den Fabric Loader.
-2. Installiere die passende Fabric API.
-3. Lade die CreditManager `.jar` herunter.
-4. https://modrinth.com/project/op-credit-manager
-5. Lege die `.jar` in deinen Minecraft-`mods`-Ordner.
-6. Starte Minecraft mit dem Fabric-Profil.
+1. Installiere den [Fabric Loader](https://fabricmc.net/use/installer/).
+2. Installiere die passende [Fabric API](https://modrinth.com/mod/fabric-api).
+3. Lade die CreditManager-`.jar` herunter, zum Beispiel über [Modrinth](https://modrinth.com/project/op-credit-manager).
+4. Lege die Datei in den Minecraft-Ordner `mods`.
+5. Starte Minecraft mit dem Fabric-Profil.
 
-## Development Setup
-
-Projekt klonen:
+## Entwicklung
 
 ```bash
 git clone https://github.com/Haragucci/Credit-Manager.git
 cd Credit-Manager
-```
-
-Client starten:
-
-```bash
 ./gradlew runClient
 ```
 
 Unter Windows:
 
 ```bat
-gradlew runClient
+.\gradlew.bat runClient
 ```
 
-Mod bauen:
+Build erstellen:
 
 ```bash
 ./gradlew build
 ```
 
-Die fertige `.jar` befindet sich danach im Ordner:
-
-```text
-build/libs/
-```
+Die fertigen Artefakte liegen danach in `build/libs/`.
 
 ## Screenshots
 
@@ -198,36 +155,18 @@ build/libs/
 
 ![Paylogs](docs/images/paylogs-preview.png)
 
-
-## Kontakt
-
-Bei Fragen, Bugs oder Vorschlägen kannst du mich erreichen:
-
+## Kontakt und Status
 
 ```text
 Ingame: 05Haragucci
 Discord: haragucci
+Status: Beta
 ```
 
-## Status
+## Hinweis
 
-```text
-Beta
-```
-
-Die Mod ist grundsätzlich funktionsfähig, kann aber noch Fehler enthalten.
-
-## Hinweis / Disclaimer
-
-CreditManager ist ein privates, inoffizielles Projekt und wurde für die persönliche Nutzung auf **OPSUCHT.net** entwickelt.
-
-Diese Mod steht in keiner offiziellen Verbindung zu **OPSUCHT.net**, Mojang, Microsoft oder Fabric.  
-Sie wird weder von OPSUCHT.net entwickelt, betrieben, geprüft, unterstützt noch offiziell empfohlen.
-
-Alle genannten Namen, Marken, Logos oder Servernamen gehören ihren jeweiligen Eigentümern und werden nur zur Beschreibung des Einsatzzwecks verwendet.
-
-Falls Rechteinhaber mit der Nutzung bestimmter Begriffe, Bilder oder Hinweise nicht einverstanden sind, können sie mich kontaktieren. Ich werde entsprechende Inhalte dann entfernen oder anpassen.
+CreditManager ist ein privates, inoffizielles Projekt und steht in keiner offiziellen Verbindung zu OPSUCHT.net, Mojang, Microsoft oder Fabric.
 
 ## Lizenz
 
-Siehe Datei `LICENSE`.
+Siehe [LICENSE](LICENSE).

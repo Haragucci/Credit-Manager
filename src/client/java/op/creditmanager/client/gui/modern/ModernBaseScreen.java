@@ -14,8 +14,8 @@ import op.creditmanager.client.gui.modern.theme.ModernThemePalette;
 import op.creditmanager.client.gui.modern.theme.ColorUtil;
 import op.creditmanager.client.gui.modern.toast.ModernToastManager;
 import op.creditmanager.client.gui.modern.toast.ModernToastType;
+import op.creditmanager.client.storage.DataHealth;
 
-/** Common layout, navigation and input behaviour for the modern GUI screens. */
 public abstract class ModernBaseScreen extends Screen {
 
     private static final Identifier LOGO_TEXTURE = Identifier.of("creditmanager", "textures/gui/logo.png");
@@ -64,6 +64,8 @@ public abstract class ModernBaseScreen extends Screen {
     }
 
     protected void renderShell(DrawContext context, int mouseX, int mouseY) {
+        String dataWarning = DataHealth.consumeWarning();
+        if (dataWarning != null) toastError(dataWarning);
         ModernThemePalette theme = ModernUi.theme();
         context.fill(0, 0, width, height, theme.overlay);
         ModernUi.panel(context, panelX, panelY, panelWidth, panelHeight, theme.panel);
@@ -89,7 +91,6 @@ public abstract class ModernBaseScreen extends Screen {
                     LOGO_TEXTURE_SIZE,
                     LOGO_TEXTURE_SIZE
             );
-            // A four-corner mask keeps the legacy square source texture visually rounded without a second asset.
             context.fill(brandX, brandY, brandX + 3, brandY + 3, theme.card);
             context.fill(brandX + LOGO_DRAW_SIZE - 3, brandY, brandX + LOGO_DRAW_SIZE, brandY + 3, theme.card);
             context.fill(brandX, brandY + LOGO_DRAW_SIZE - 3, brandX + 3, brandY + LOGO_DRAW_SIZE, theme.card);
@@ -136,6 +137,7 @@ public abstract class ModernBaseScreen extends Screen {
                 {"Forderungen", "claims"},
                 {"Schulden", "debts"},
                 {"Paylogs", "paylogs"},
+                {"History", "history"},
                 {"Info", "info"},
                 {"Einstellungen", "settings"}
         };
@@ -151,20 +153,17 @@ public abstract class ModernBaseScreen extends Screen {
         for (String[] entry : entries) {
             boolean active = entry[1].equals(activeNavigation);
             boolean hovered = ModernUi.contains(mouseX, mouseY, panelX + 8, y, sidebarWidth - 16, 22);
-            // A hover deliberately resembles the selected tab and eases back out after leaving it.
             float emphasis = ModernUi.animationProgress("navigation:" + entry[1], hovered);
             if (emphasis > 0.01F) {
                 int base = active ? ModernUi.theme().navActive : ModernUi.theme().panelAlt;
                 context.fill(panelX + 8, y, panelX + sidebarWidth - 8, y + 22,
                         ColorUtil.mix(base, ModernUi.theme().navActive, emphasis));
-                // Hover never receives a muted/grey marker: only the bright accent fades in and out.
                 context.fill(panelX + 8, y, panelX + 10, y + 22,
                         ColorUtil.withAlpha(ModernUi.theme().accent, Math.max(1, Math.round(255.0F * emphasis))));
             }
             y += 27;
         }
 
-        // Draw the moving active layer after every hover layer: its bright strip is never hidden by a hover.
         context.fill(panelX + 8, activeY, panelX + sidebarWidth - 8, activeY + 22, ModernUi.theme().navActive);
         context.fill(panelX + 8, activeY, panelX + 10, activeY + 22, ModernUi.theme().accent);
 
@@ -182,7 +181,7 @@ public abstract class ModernBaseScreen extends Screen {
             return false;
         }
         int y = panelY + 48;
-        String[] ids = {"overview", "claims", "debts", "paylogs", "info", "settings"};
+        String[] ids = {"overview", "claims", "debts", "paylogs", "history", "info", "settings"};
         for (String id : ids) {
             if (ModernUi.contains(click.x(), click.y(), panelX + 8, y, sidebarWidth - 16, 22)) {
                 openNavigation(id);
@@ -195,11 +194,10 @@ public abstract class ModernBaseScreen extends Screen {
 
     private void openNavigation(String id) {
         Screen next = switch (id) {
-            // Sidebar destinations are application roots, never children of the currently open sub-screen.
-            // That prevents a second navigation layer and keeps root pages free of a back button.
             case "claims" -> new ModernCreditListScreen(manager, false, null);
             case "debts" -> new ModernCreditListScreen(manager, true, null);
             case "paylogs" -> new ModernPaylogScreen(manager, null);
+            case "history" -> new ModernDealHistoryScreen(manager, null);
             case "info" -> new ModernInfoScreen(manager, null);
             case "settings" -> new ModernSettingsScreen(manager, null);
             default -> new ModernMainScreen(manager);
@@ -217,7 +215,9 @@ public abstract class ModernBaseScreen extends Screen {
     }
 
     protected void toastSuccess(String message) { toast(message, ModernToastType.SUCCESS); }
-    protected void toastError(String message) { toast(message, ModernToastType.ERROR); }
+    protected void toastError(String message) {
+        toast(message, ModernToastType.ERROR);
+    }
     protected void toastWarning(String message) { toast(message, ModernToastType.WARNING); }
     protected void toastInfo(String message) { toast(message, ModernToastType.INFO); }
 
@@ -233,7 +233,6 @@ public abstract class ModernBaseScreen extends Screen {
         return false;
     }
 
-    /** Kept for existing screen-specific shortcuts; use isAnyInputFocused in new code. */
     protected boolean isTextInputFocused() {
         return isAnyInputFocused();
     }
@@ -246,12 +245,10 @@ public abstract class ModernBaseScreen extends Screen {
     @Override
     public boolean keyPressed(net.minecraft.client.input.KeyInput input) {
         if (input.getKeycode() == 256) {
-            // ESC always closes the full modern GUI, even while editing a field.
             closeCompletely();
             return true;
         }
         if (shouldCloseFromKey(input)) {
-            // The user's inventory key closes the complete GUI only when it is not text input.
             closeCompletely();
             return true;
         }
@@ -262,7 +259,6 @@ public abstract class ModernBaseScreen extends Screen {
         return !isAnyInputFocused() && MinecraftClient.getInstance().options.inventoryKey.matchesKey(input);
     }
 
-    /** Uses the parent only for in-app navigation; the red X always closes the complete GUI. */
     protected void closeToParent() {
         navigateBack();
     }
@@ -285,12 +281,10 @@ public abstract class ModernBaseScreen extends Screen {
         return parent != null;
     }
 
-    /** Only sub-screens receive the one shared header back control. */
     protected boolean shouldShowBackButton() {
         return hasParentScreen();
     }
 
-    /** Override in screens that keep local selections, drag states, or temporary form modes. */
     protected void clearTransientState() {
         clearInputFocus();
     }
@@ -304,7 +298,6 @@ public abstract class ModernBaseScreen extends Screen {
         setFocused(null);
     }
 
-    /** Compatibility alias for existing integrations. */
     protected void resetInputFocus() {
         clearInputFocus();
     }

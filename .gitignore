@@ -44,6 +44,12 @@ desktop.ini
 *.rar
 *.7z
 
+# Optional local development-only test data helper. Never packaged or committed.
+devtools/
+local-dev/
+src/client/java/op/creditmanager/client/dev/
+creditmanager-test-data/
+
 .env
 .env.*
 !.env.example

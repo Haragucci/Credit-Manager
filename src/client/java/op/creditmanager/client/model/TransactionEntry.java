@@ -9,6 +9,16 @@ public class TransactionEntry {
     private String toPlayer;
     private double amount;
     private long timestamp;
+    /** Original chat line, retained for audits and reliable duplicate detection. */
+    private String rawText;
+    /** Search-normalized representation of the original chat line. */
+    private String normalizedText;
+    /** Origin of the entry, for example DETECTED or LEGACY_JSON. */
+    private String source;
+    /** Stable database fingerprint. Filled after a successful insert. */
+    private String hash;
+    /** Optional server or parser metadata. Kept as JSON/text to remain forward compatible. */
+    private String metadata;
 
     public TransactionEntry() {}
 
@@ -34,4 +44,19 @@ public class TransactionEntry {
 
     public long getTimestamp() { return timestamp; }
     public void setTimestamp(long timestamp) { this.timestamp = timestamp; }
+
+    public String getRawText() { return rawText; }
+    public void setRawText(String rawText) { this.rawText = rawText; }
+
+    public String getNormalizedText() { return normalizedText; }
+    public void setNormalizedText(String normalizedText) { this.normalizedText = normalizedText; }
+
+    public String getSource() { return source; }
+    public void setSource(String source) { this.source = source; }
+
+    public String getHash() { return hash; }
+    public void setHash(String hash) { this.hash = hash; }
+
+    public String getMetadata() { return metadata; }
+    public void setMetadata(String metadata) { this.metadata = metadata; }
 }

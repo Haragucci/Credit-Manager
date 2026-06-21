@@ -2,7 +2,6 @@ package op.creditmanager.client.model;
 
 import java.util.UUID;
 
-/** A durable, append-only snapshot of a successful credit operation. */
 public class CreditEventEntry {
     private UUID id;
     private long timestamp;

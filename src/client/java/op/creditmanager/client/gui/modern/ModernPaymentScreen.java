@@ -9,6 +9,7 @@ import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.ItemStack;
 import net.minecraft.text.Text;
 import op.creditmanager.client.core.CreditManager;
+import op.creditmanager.client.model.Payment;
 import op.creditmanager.client.gui.CenteredTextFieldWidget;
 import op.creditmanager.client.gui.ItemStackStorage;
 import op.creditmanager.client.gui.modern.widget.ModernScrollArea;
@@ -20,7 +21,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Modern payment form with multi-item inventory selection and one shared value. */
 public class ModernPaymentScreen extends ModernBaseScreen {
 
     private static final int INVENTORY_COLUMNS = 9;
@@ -155,6 +155,8 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         ModernUi.card(context, x, y, INVENTORY_SLOT_SIZE, INVENTORY_SLOT_SIZE, hovered);
         if (!stack.isEmpty()) {
             context.drawItem(stack, x + 3, y + 3);
+            ModernUi.drawGuiTextRightAligned(context, textRenderer, String.valueOf(stack.getCount()),
+                    x + INVENTORY_SLOT_SIZE - 2, y + INVENTORY_SLOT_SIZE - 9, ModernUi.theme().text);
         }
         if (selectedInventorySlots.containsKey(slot)) {
             context.fill(x + 2, y + 2, x + INVENTORY_SLOT_SIZE - 2, y + INVENTORY_SLOT_SIZE - 2, ModernUi.theme().selection);
@@ -247,19 +249,25 @@ public class ModernPaymentScreen extends ModernBaseScreen {
             return;
         }
         try {
+            Payment saved;
             if (itemMode) {
-                saveSelectedItems(amount);
+                saved = saveSelectedItems(amount);
             } else {
-                manager.addMoneyPayment(entry.getId(), currentPlayerName(), amount);
+                saved = manager.addMoneyPayment(entry.getId(), currentPlayerName(), amount);
             }
-            toastSuccess(itemMode ? "Item-Zahlung gespeichert." : "Zahlung gespeichert.");
+            if (saved.getAmount() + 0.0001D < amount) {
+                toastWarning("Es wurden nur " + FormatUtil.formatAmount(saved.getAmount())
+                        + " gebucht, da der Deal damit vollständig bezahlt ist.");
+            } else {
+                toastSuccess(itemMode ? "Item-Zahlung gespeichert." : "Zahlung gespeichert.");
+            }
             closeToParent();
         } catch (CreditManager.CreditException exception) {
             toastError(exception.getMessage());
         }
     }
 
-    private void saveSelectedItems(double sharedValue) throws CreditManager.CreditException {
+    private Payment saveSelectedItems(double sharedValue) throws CreditManager.CreditException {
         PlayerInventory inventory = playerInventory();
         if (inventory == null || selectedInventorySlots.isEmpty()) {
             throw new CreditManager.CreditException("Bitte mindestens ein Item aus dem Inventar auswählen.");
@@ -279,7 +287,7 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         if (descriptions.isEmpty()) {
             throw new CreditManager.CreditException("Die ausgewählten Items sind nicht mehr im Inventar.");
         }
-        manager.addItemPayment(entry.getId(), currentPlayerName(), descriptions, sharedValue, serializedStacks);
+        return manager.addItemPayment(entry.getId(), currentPlayerName(), descriptions, sharedValue, serializedStacks);
     }
 
     private PlayerInventory playerInventory() {

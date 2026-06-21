@@ -1,6 +1,5 @@
 package op.creditmanager.client.gui.modern.theme;
 
-/** Creates readable palettes from either built-in or user-selected colours. */
 public final class ModernThemeFactory {
     private ModernThemeFactory() {
     }

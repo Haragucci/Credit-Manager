@@ -1,6 +1,5 @@
 package op.creditmanager.client.gui.modern.theme;
 
-/** Immutable set of semantic colours used by the modern GUI. */
 public final class ModernThemePalette {
     public final int overlay;
     public final int panel;

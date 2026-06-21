@@ -8,7 +8,6 @@ import op.creditmanager.client.core.CreditManager;
 import op.creditmanager.client.gui.modern.theme.ModernThemePalette;
 import op.creditmanager.client.gui.modern.widget.ModernScrollArea;
 
-/** Settings dashboard. Individual categories keep the main screen calm and easy to scan. */
 public class ModernSettingsScreen extends ModernBaseScreen {
     private static final ModernSettingsDetailScreen.Category[] CATEGORIES = ModernSettingsDetailScreen.Category.values();
     private static final int CATEGORY_ROW_HEIGHT = 54;

@@ -2,7 +2,6 @@ package op.creditmanager.client.gui.modern.toast;
 
 import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.gui.DrawContext;
-import net.minecraft.text.Text;
 import op.creditmanager.client.gui.modern.ModernUi;
 import op.creditmanager.client.gui.modern.theme.ColorUtil;
 import op.creditmanager.client.gui.modern.theme.ModernThemePalette;
@@ -11,7 +10,6 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 
-/** Shared, non-blocking notifications for every modern screen. */
 public final class ModernToastManager {
     private static final ModernToastManager INSTANCE = new ModernToastManager();
     private static final int MAX_TOASTS = 3;
@@ -20,18 +18,13 @@ public final class ModernToastManager {
 
     private record ToastBounds(ModernToast toast, int x, int y, int width, int height) { }
 
-    private ModernToastManager() {
-    }
-
-    public static ModernToastManager getInstance() {
-        return INSTANCE;
-    }
+    private ModernToastManager() { }
+    public static ModernToastManager getInstance() { return INSTANCE; }
 
     public synchronized void show(String message, ModernToastType type) {
         if (message == null || message.isBlank()) return;
         long now = System.currentTimeMillis();
         toasts.removeIf(toast -> toast.dismissed || toast.visibility(now) <= 0.0F);
-        // Index zero is rendered first, which places the newest notification at the top.
         toasts.addFirst(new ModernToast(message, type));
         while (toasts.size() > MAX_TOASTS) toasts.removeLast();
     }
@@ -49,12 +42,10 @@ public final class ModernToastManager {
         while (iterator.hasNext()) {
             ModernToast toast = iterator.next();
             float visible = toast.visibility(now);
-            if (visible <= 0.0F) {
-                iterator.remove();
-                continue;
-            }
-            int width = Math.min(300, Math.max(156, ModernUi.getGuiTextWidth(renderer, toast.message) + 42));
-            int height = 28;
+            if (visible <= 0.0F) { iterator.remove(); continue; }
+            int width = Math.min(Math.max(156, screenWidth - 24), 360);
+            List<String> lines = wrap(renderer, toast.message, width - 22);
+            int height = 12 + lines.size() * 10;
             int x = (screenWidth - width) / 2;
             int animatedY = y - Math.round((1.0F - visible) * 38.0F);
             ModernThemePalette theme = ModernUi.theme();
@@ -68,10 +59,10 @@ public final class ModernToastManager {
             context.fill(x - 1, animatedY - 1, x + width + 1, animatedY + height + 1, ColorUtil.withAlpha(theme.shadow, 180));
             context.fill(x, animatedY, x + width, animatedY + height, theme.card);
             context.fill(x, animatedY, x + 3, animatedY + height, accent);
-            ModernUi.drawGuiText(context, renderer, ModernUi.trimGuiText(renderer, toast.message, width - 39), x + 11,
-                    animatedY + 10, theme.text);
-            ModernUi.drawGuiText(context, renderer, "×", x + width - 14, animatedY + 9,
-                    hovered ? accent : theme.muted);
+            for (int line = 0; line < lines.size(); line++) {
+                ModernUi.drawGuiText(context, renderer, lines.get(line), x + 11, animatedY + 7 + line * 10, theme.text);
+            }
+            ModernUi.drawGuiText(context, renderer, "x", x + width - 14, animatedY + 7, hovered ? accent : theme.muted);
             bounds.add(new ToastBounds(toast, x, animatedY, width, height));
             y += height + 6;
         }
@@ -87,5 +78,28 @@ public final class ModernToastManager {
             }
         }
         return false;
+    }
+
+    private static List<String> wrap(TextRenderer renderer, String message, int maxWidth) {
+        List<String> lines = new ArrayList<>();
+        StringBuilder line = new StringBuilder();
+        for (String word : message.split("\\s+")) {
+            String candidate = line.isEmpty() ? word : line + " " + word;
+            if (!line.isEmpty() && ModernUi.getGuiTextWidth(renderer, candidate) > maxWidth) {
+                lines.add(line.toString());
+                line.setLength(0);
+            }
+            if (ModernUi.getGuiTextWidth(renderer, word) > maxWidth) {
+                String remaining = word;
+                while (!remaining.isEmpty()) {
+                    int end = remaining.length();
+                    while (end > 1 && ModernUi.getGuiTextWidth(renderer, remaining.substring(0, end)) > maxWidth) end--;
+                    lines.add(remaining.substring(0, end));
+                    remaining = remaining.substring(end);
+                }
+            } else { if (!line.isEmpty()) line.append(' '); line.append(word); }
+        }
+        if (!line.isEmpty()) lines.add(line.toString());
+        return lines.isEmpty() ? List.of("") : lines;
     }
 }

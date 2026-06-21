@@ -46,6 +46,7 @@ public final class SkinHeadUtil {
     private static final long NAME_FAILED_COOLDOWN_MS = 24L * 60L * 60L * 1000L;
     private static final long GLOBAL_RATE_LIMIT_COOLDOWN_MS = 15L * 60L * 1000L;
     private static final long REQUEST_PAUSE_MS = 7000L;
+    private static final int MAX_CACHED_SKINS = 256;
 
     private static final Pattern VALID_MINECRAFT_NAME =
             Pattern.compile("^[A-Za-z0-9_]{3,16}$");
@@ -397,6 +398,19 @@ public final class SkinHeadUtil {
         putAlias(cachedSkin.name().toLowerCase(Locale.ROOT), cachedSkin);
         putAlias(cachedSkin.uuid().toString(), cachedSkin);
         putAlias(cachedSkin.uuid().toString().replace("-", ""), cachedSkin);
+        pruneCache();
+    }
+
+    private static void pruneCache() {
+        while (SKIN_BY_UUID.size() > MAX_CACHED_SKINS) {
+            UUID oldest = SKIN_BY_UUID.entrySet().stream()
+                    .min(java.util.Comparator.comparingLong(entry -> entry.getValue().fetchedAt()))
+                    .map(Map.Entry::getKey)
+                    .orElse(null);
+            if (oldest == null) break;
+            SKIN_BY_UUID.remove(oldest);
+        }
+        SKIN_ALIASES.entrySet().removeIf(entry -> !SKIN_BY_UUID.containsKey(entry.getValue().uuid()));
     }
 
     private static void putAlias(String keyOrName, CachedSkin cachedSkin) {

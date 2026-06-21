@@ -2,6 +2,8 @@ package op.creditmanager.client.util;
 
 import op.creditmanager.client.model.CreditEntry;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.text.NumberFormat;
 import java.util.Locale;
 
@@ -16,6 +18,50 @@ public class FormatUtil {
 
     public static String formatAmount(double betrag) {
         return BETRAG_FORMAT.format(betrag) + "$";
+    }
+
+    public static String formatChartAmount(double amount) {
+        return formatChartAmount(amount, false);
+    }
+
+    public static String formatChartAmount(double amount, boolean showPlus) {
+        if (!Double.isFinite(amount)) return "0$";
+
+        double absolute = Math.abs(amount);
+        String sign = amount < 0.0D ? "-" : showPlus && amount > 0.0D ? "+" : "";
+        double divisor = 1.0D;
+        String suffix = "";
+
+        if (absolute >= 999_999_500.0D) {
+            divisor = 1_000_000_000.0D;
+            suffix = "Mrd";
+        } else if (absolute >= 999_500.0D) {
+            divisor = 1_000_000.0D;
+            suffix = "M";
+        } else if (absolute >= 999.5D) {
+            divisor = 1_000.0D;
+            suffix = "k";
+        }
+
+        if (divisor == 1.0D) return sign + formatChartNumber(absolute) + "$";
+
+        double compact = absolute / divisor;
+
+        if (compact >= 1_000_000_000.0D) {
+            return sign + String.format(Locale.ROOT, "%.2e", compact).replace('.', ',') + suffix + "$";
+        }
+
+        return sign + formatChartNumber(compact) + suffix + "$";
+    }
+
+    private static String formatChartNumber(double value) {
+        if (value < 0.005D) return "0";
+
+        return BigDecimal.valueOf(value)
+                .setScale(2, RoundingMode.HALF_UP)
+                .stripTrailingZeros()
+                .toPlainString()
+                .replace('.', ',');
     }
 
     @Deprecated
@@ -33,12 +79,16 @@ public class FormatUtil {
     }
 
     public static String getStatusDisplay(String status) {
+        if (status == null || status.isBlank()) {
+            return "§7UNBEKANNT";
+        }
+
         return switch (status) {
-            case "OPEN"      -> "§4§lOFFEN";
-            case "PARTIAL"   -> "§e§lZAHLUNG LÄUFT";
-            case "PAID"      -> "§a§lBEZAHLT";
+            case "OPEN" -> "§4§lOFFEN";
+            case "PARTIAL" -> "§e§lZAHLUNG LÄUFT";
+            case "PAID" -> "§a§lBEZAHLT";
             case "CANCELLED" -> "§8§lSTORNIERT";
-            default          -> "§7" + status;
+            default -> "§7" + status;
         };
     }
 
@@ -48,7 +98,12 @@ public class FormatUtil {
     }
 
     public static String shortId(CreditEntry eintrag) {
-        return eintrag.getId().toString().substring(0, 8);
+        if (eintrag == null || eintrag.getId() == null) {
+            return "unknown";
+        }
+
+        String id = eintrag.getId().toString();
+        return id.length() <= 8 ? id : id.substring(0, 8);
     }
 
     @Deprecated
@@ -57,16 +112,25 @@ public class FormatUtil {
     }
 
     public static String formatCreditSummary(CreditEntry e) {
-        String name = e.getDealName() != null ? e.getDealName() : shortId(e);
+        if (e == null) {
+            return "§cUngültiger Eintrag";
+        }
+
+        String name = e.getDealName() != null && !e.getDealName().isBlank()
+                ? e.getDealName()
+                : shortId(e);
+
+        String debtor = safeName(e.getDebtor());
+        String creditor = safeName(e.getCreditor());
 
         StringBuilder sb = new StringBuilder();
 
         sb.append("§7[§b").append(name).append("§7]\n");
 
-        sb.append("§7Von → An: §f")
-                .append(e.getDebtor())
+        sb.append("§7Schuldner → Gläubiger: §f")
+                .append(debtor)
                 .append(" §7→ §f")
-                .append(e.getCreditor())
+                .append(creditor)
                 .append("\n");
 
         sb.append("§7Betrag: ")
@@ -83,7 +147,25 @@ public class FormatUtil {
         return sb.toString();
     }
 
+    private static String safeName(String name) {
+        if (name == null || name.isBlank()) {
+            return "Unbekannt";
+        }
+
+        return name;
+    }
+
     public static double parseMoney(String input) {
+        double result = parseDisplayAmount(input);
+
+        if (result <= 0) {
+            throw new IllegalArgumentException("Betrag muss > 0 sein");
+        }
+
+        return result;
+    }
+
+    public static double parseDisplayAmount(String input) {
         if (input == null || input.isBlank()) {
             throw new IllegalArgumentException("Leerer Betrag");
         }
@@ -128,6 +210,7 @@ public class FormatUtil {
         String normalized = normalizeNumberString(s, multiplier != 1.0);
 
         double value;
+
         try {
             value = Double.parseDouble(normalized);
         } catch (NumberFormatException e) {
@@ -140,8 +223,8 @@ public class FormatUtil {
             throw new IllegalArgumentException("Ungültiger Betrag");
         }
 
-        if (result <= 0) {
-            throw new IllegalArgumentException("Betrag muss > 0 sein");
+        if (result < 0) {
+            throw new IllegalArgumentException("Ungültiger Betrag");
         }
 
         return result;
@@ -182,9 +265,9 @@ public class FormatUtil {
 
             if (lastDot > lastComma) {
                 return s.replace(",", "");
-            } else {
-                return s.replace(".", "").replace(',', '.');
             }
+
+            return s.replace(".", "").replace(',', '.');
         }
 
         if (hasDot) {
@@ -222,9 +305,9 @@ public class FormatUtil {
 
             if (lastDot > lastComma) {
                 return s.replace(",", "");
-            } else {
-                return s.replace(".", "").replace(',', '.');
             }
+
+            return s.replace(".", "").replace(',', '.');
         }
 
         if (hasDot) {

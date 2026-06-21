@@ -18,22 +18,13 @@ import op.creditmanager.client.gui.modern.theme.ModernThemePalette;
 import java.util.HashMap;
 import java.util.Map;
 
-/** Shared rendering primitives for the non-inventory CreditManager interface. */
 public final class ModernUi {
 
-    /**
-     * This font is deliberately applied as a Text style instead of replacing Minecraft's global renderer.
-     * Item tooltips, chat, inventory labels and every non-CreditManager screen therefore keep their own font.
-     */
     public static final Identifier GUI_FONT = Identifier.of("creditmanager", "gui");
     private static final Style MODERN_GUI_STYLE = Style.EMPTY.withFont(new StyleSpriteSource.Font(GUI_FONT));
     private static final Map<String, HoverAnimation> HOVER_ANIMATIONS = new HashMap<>();
     private static final Map<String, PositionAnimation> POSITION_ANIMATIONS = new HashMap<>();
 
-    /*
-     * Compatibility colours for older sub-screens. New code must use theme().<semantic colour>.
-     * Shells, cards, navigation and the redesigned screens already resolve their palette dynamically.
-     */
     @Deprecated public static final int OVERLAY = 0xB8101519;
     @Deprecated public static final int PANEL = 0xFF151A20;
     @Deprecated public static final int PANEL_ALT = 0xFF1C242C;
@@ -116,7 +107,6 @@ public final class ModernUi {
                 x + width / 2, y + (height - 8) / 2, ColorUtil.contrastText(background));
     }
 
-    /** Compact destructive action used by the shared close control in every modern screen. */
     public static void closeButton(DrawContext context, TextRenderer textRenderer, int x, int y, boolean hovered) {
         ModernThemePalette theme = theme();
         int background = ColorUtil.lighten(theme.buttonDanger, 0.13F * animationProgress("close:" + x + ':' + y, hovered));
@@ -125,7 +115,6 @@ public final class ModernUi {
         drawGuiTextCentered(context, textRenderer, "×", x + 9, y + 5, ColorUtil.contrastText(background));
     }
 
-    /** Compact animated switch for true/false settings. The whole setting row may still remain clickable. */
     public static void toggle(DrawContext context, int x, int y, int width, int height, boolean enabled, boolean hovered) {
         ModernThemePalette theme = theme();
         String key = "toggle:" + x + ':' + y + ':' + width + ':' + height;
@@ -144,21 +133,16 @@ public final class ModernUi {
                 ColorUtil.mix(theme.muted, theme.text, state));
     }
 
-    /**
-     * Returns text for the modern CreditManager interface only. The default branch intentionally has
-     * no explicit font style, so Minecraft resolves the player's active resource-pack font normally.
-     */
+
     public static Text guiText(String value) {
         return Text.literal(value == null ? "" : value).setStyle(guiTextStyle());
     }
 
-    /** Applies the selected modern-GUI font to editable text without touching classic or vanilla fields. */
     public static <T extends TextFieldWidget> T configureGuiTextField(T field) {
         field.addFormatter((value, firstCharacterIndex) -> OrderedText.styledForwardsVisitedString(value, guiTextStyle()));
         return field;
     }
 
-    /** Sets a placeholder styled for the currently selected modern-GUI font. */
     public static void setGuiPlaceholder(TextFieldWidget field, String value) {
         field.setPlaceholder(Text.literal(value == null ? "" : value)
                 .setStyle(guiTextStyle().withColor(Formatting.DARK_GRAY)));
@@ -201,7 +185,6 @@ public final class ModernUi {
         return safe.substring(0, end) + suffix;
     }
 
-    // Compatibility aliases keep existing modern screens compact while still routing through the custom font.
     public static void drawCentered(DrawContext context, TextRenderer textRenderer, String value,
                                     int centerX, int y, int color) {
         drawGuiTextCentered(context, textRenderer, value, centerX, y, color);
@@ -220,7 +203,6 @@ public final class ModernUi {
         return mouseX >= x && mouseX < x + width && mouseY >= y && mouseY < y + height;
     }
 
-    /** Shared, dependency-free hover easing for every modern control. */
     public static float animationProgress(String key, boolean target) {
         long now = System.nanoTime();
         HoverAnimation animation = HOVER_ANIMATIONS.get(key);
@@ -236,7 +218,6 @@ public final class ModernUi {
         return animation.value;
     }
 
-    /** Eases a shared visual position without changing the corresponding hitboxes. */
     public static int animatedPosition(String key, int target) {
         long now = System.nanoTime();
         PositionAnimation animation = POSITION_ANIMATIONS.get(key);

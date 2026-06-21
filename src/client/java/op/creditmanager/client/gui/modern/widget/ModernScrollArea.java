@@ -7,7 +7,6 @@ import op.creditmanager.client.gui.modern.ModernUi;
 import op.creditmanager.client.gui.modern.theme.ColorUtil;
 import op.creditmanager.client.gui.modern.theme.ModernThemePalette;
 
-/** Smooth pixel-scroll model with a proportional, directly draggable scrollbar. */
 public final class ModernScrollArea {
     private double position;
     private double target;
@@ -37,7 +36,6 @@ public final class ModernScrollArea {
         target = 0.0;
     }
 
-    /** Clears a potentially active thumb drag before a screen is hidden or replaced. */
     public void reset() {
         position = 0.0;
         target = 0.0;

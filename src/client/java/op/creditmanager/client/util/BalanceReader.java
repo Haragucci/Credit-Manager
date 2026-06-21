@@ -7,13 +7,13 @@ import net.minecraft.scoreboard.ScoreboardObjective;
 import net.minecraft.scoreboard.Team;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.OptionalDouble;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** Reads the server's sidebar balance in one place for commands and the modern overview. */
 public final class BalanceReader {
-    private static final Pattern AMOUNT_PATTERN = Pattern.compile("[\\d][\\d.,]*");
+    private static final Pattern AMOUNT_PATTERN = Pattern.compile("[\\d][\\d.,]*(?:mrd|mio|kk|[kmb])?", Pattern.CASE_INSENSITIVE);
 
     private BalanceReader() {
     }
@@ -32,13 +32,12 @@ public final class BalanceReader {
                     .filter(value -> value != null && !value.isBlank())
                     .toList();
             for (int index = 0; index < lines.size() - 1; index++) {
-                if (stripFormatting(lines.get(index)).contains("Konto")) {
+                if (stripFormatting(lines.get(index)).toLowerCase(Locale.ROOT).contains("konto")) {
                     Double amount = parseAmount(stripFormatting(lines.get(index + 1)));
                     if (amount != null) return OptionalDouble.of(amount);
                 }
             }
         } catch (Exception ignored) {
-            // Servers are free to change their scoreboard while it is rendered.
         }
         return OptionalDouble.empty();
     }
@@ -59,8 +58,8 @@ public final class BalanceReader {
         Matcher matcher = AMOUNT_PATTERN.matcher(text == null ? "" : text);
         if (!matcher.find()) return null;
         try {
-            return Double.parseDouble(matcher.group().replace(".", "").replace(",", ""));
-        } catch (NumberFormatException ignored) {
+            return FormatUtil.parseDisplayAmount(matcher.group());
+        } catch (IllegalArgumentException ignored) {
             return null;
         }
     }

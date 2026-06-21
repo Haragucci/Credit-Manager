@@ -1,58 +1,47 @@
 package op.creditmanager.client.core;
 
-import com.google.gson.reflect.TypeToken;
 import op.creditmanager.client.CreditManagerClient;
 import op.creditmanager.client.model.TransactionEntry;
-import op.creditmanager.client.storage.FileManager;
-import op.creditmanager.client.storage.JsonStorage;
+import op.creditmanager.client.storage.db.DatabaseManager;
 
-import java.lang.reflect.Type;
-import java.util.*;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.List;
 
-public class TransactionRepository {
+/** Database-backed Paylog facade.  It intentionally never retains the full table in memory. */
+public final class TransactionRepository {
+    private static final TransactionRepository INSTANCE = new TransactionRepository();
+    private long revision;
+    private boolean recoveryRequired;
 
-    private static volatile TransactionRepository instance;
+    private TransactionRepository() { }
+    public static TransactionRepository getInstance() { return INSTANCE; }
 
-    private final List<TransactionEntry> transactions = new CopyOnWriteArrayList<>();
-    private static final Type LIST_TYPE = new TypeToken<List<TransactionEntry>>() {}.getType();
-
-    private TransactionRepository() {}
-
-    public static TransactionRepository getInstance() {
-        if (instance == null) {
-            synchronized (TransactionRepository.class) {
-                if (instance == null) {
-                    instance = new TransactionRepository();
-                }
-            }
+    public synchronized void load() {
+        try {
+            DatabaseManager.getInstance().initialize();
+            revision = DatabaseManager.getInstance().revision();
+            recoveryRequired = !DatabaseManager.getInstance().isHealthy();
+        } catch (RuntimeException exception) {
+            recoveryRequired = true;
+            CreditManagerClient.LOGGER.error("Could not initialise Paylog database access", exception);
         }
-        return instance;
     }
 
-    public void load() {
-        List<TransactionEntry> loaded = JsonStorage.load(
-                FileManager.getTransactionsFile(), LIST_TYPE, new ArrayList<>());
-        transactions.clear();
-        if (loaded != null) {
-            for (TransactionEntry e : loaded) {
-                if (e.getId() == null) e.setId(UUID.randomUUID());
-                transactions.add(e);
-            }
-        }
-        CreditManagerClient.LOGGER.info("Loaded " + transactions.size() + " transactions.");
+    public synchronized boolean add(TransactionEntry entry) {
+        if (entry == null || recoveryRequired) return false;
+        boolean saved = DatabaseManager.getInstance().addPaylog(entry);
+        if (saved) revision = DatabaseManager.getInstance().revision();
+        return saved;
     }
 
-    public void add(TransactionEntry entry) {
-        transactions.add(entry);
-        save();
+    /** The default view is deliberately limited to the newest 500 rows. */
+    public List<TransactionEntry> getAll() { return query("", 0, "", 500, 0); }
+    public List<TransactionEntry> query(String player, int direction, String query, int limit, int offset) {
+        return DatabaseManager.getInstance().queryPaylogs(player, direction, query, limit, offset);
     }
-
-    public List<TransactionEntry> getAll() {
-        return Collections.unmodifiableList(transactions);
+    public DatabaseManager.QueryPage<TransactionEntry> queryPage(String player, int direction, String query, int limit, int offset) {
+        return DatabaseManager.getInstance().queryPaylogPage(player, direction, query, limit, offset);
     }
-
-    private void save() {
-        JsonStorage.save(FileManager.getTransactionsFile(), new ArrayList<>(transactions));
-    }
+    public synchronized long getRevision() { return revision; }
+    public synchronized boolean isWritable() { return !recoveryRequired && DatabaseManager.getInstance().isHealthy(); }
+    public synchronized boolean resetCorruptTransactionsWithBackup() { return false; }
 }

@@ -1,6 +1,5 @@
 package op.creditmanager.client.search;
 
-/** Lightweight ranking suitable for the small lists shown by Minecraft client screens. */
 public final class FuzzySearch {
     private FuzzySearch() {
     }

@@ -6,6 +6,7 @@ import net.fabricmc.loader.api.FabricLoader;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Comparator;
 
 public class FileManager {
 
@@ -36,6 +37,10 @@ public class FileManager {
         return dataDirectory.resolve("credits.json");
     }
 
+    public static Path getCreditStateFile() {
+        return dataDirectory.resolve("credit_state.json");
+    }
+
     public static Path getPlayersFile() {
         return dataDirectory.resolve("players.json");
     }
@@ -48,19 +53,51 @@ public class FileManager {
         return dataDirectory.resolve("transactions.json");
     }
 
-    /** Dedicated history for credit/deal statistics, intentionally separate from Paylogs. */
     public static Path getCreditEventsFile() {
         return dataDirectory.resolve("credit_events.json");
     }
 
-    /** Client preferences are intentionally kept separate from user data. */
     public static Path getClientConfigFile() {
         return dataDirectory.resolve("client_config.json");
     }
 
-    public static Path getBackupFile(String originalName) {
-        String backupName = originalName.replace(".json",
-                "_backup_" + System.currentTimeMillis() + ".json");
-        return dataDirectory.resolve(backupName);
+    /** H2 creates the actual <code>.mv.db</code> file next to this base path. */
+    public static Path getDatabaseFile() {
+        return dataDirectory.resolve("creditmanager");
     }
+
+    public static Path getDatabaseStorageFile() {
+        return dataDirectory.resolve("creditmanager.mv.db");
+    }
+
+    public static Path getLegacyArchiveDirectory() {
+        return dataDirectory.resolve("legacy-json");
+    }
+
+    public static Path getBackupFile(String originalName) {
+        boolean h2Database = originalName.endsWith(".mv.db");
+        int extension = h2Database ? originalName.length() - ".mv.db".length() : originalName.lastIndexOf('.');
+        String base = extension > 0 ? originalName.substring(0, extension) : originalName;
+        String suffix = h2Database ? ".mv.db" : extension > 0 ? originalName.substring(extension) : ".bak";
+        String backupName = base + "_backup_" + System.currentTimeMillis() + suffix;
+        return dataDirectory.resolve("backups").resolve(backupName);
+    }
+
+    public static void tidyAfterSuccessfulSave() {
+        try {
+            Path backups = dataDirectory.resolve("backups");
+            Files.createDirectories(backups);
+            try (var files = Files.list(dataDirectory)) {
+                files.filter(path -> path.getFileName().toString().endsWith(".tmp")).forEach(FileManager::deleteQuietly);
+            }
+            try (var files = Files.list(backups)) {
+                files.filter(Files::isRegularFile).sorted(Comparator.comparingLong(FileManager::modified).reversed()).skip(12).forEach(FileManager::deleteQuietly);
+            }
+        } catch (IOException exception) {
+            CreditManagerClient.LOGGER.warn("Could not tidy CreditManager data directory", exception);
+        }
+    }
+
+    private static long modified(Path path) { try { return Files.getLastModifiedTime(path).toMillis(); } catch (IOException ignored) { return 0L; } }
+    private static void deleteQuietly(Path path) { try { Files.deleteIfExists(path); } catch (IOException ignored) { } }
 }

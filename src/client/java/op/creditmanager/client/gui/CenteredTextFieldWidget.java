@@ -5,7 +5,6 @@ import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.text.Text;
 
-/** A borderless field whose text and placeholder are vertically centred. */
 public class CenteredTextFieldWidget extends TextFieldWidget {
 
     private final int textOffset;

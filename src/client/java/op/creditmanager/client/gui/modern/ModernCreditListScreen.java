@@ -23,7 +23,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** Searchable, scrollable replacement for the legacy deal-slot list. */
 public class ModernCreditListScreen extends ModernBaseScreen {
 
     private final boolean debts;
@@ -35,8 +34,10 @@ public class ModernCreditListScreen extends ModernBaseScreen {
     private List<CreditEntry> renderedEntries = List.of();
     private int renderedStart;
     private final Map<String, ItemStack> playerHeads = new ConcurrentHashMap<>();
+    private String filteredCacheKey = "";
+    private List<CreditEntry> filteredCache = List.of();
 
-    private static final String[] FILTERS = {"Alle", "Offen", "Teilweise", "Bezahlt", "Storniert"};
+    private static final String[] FILTERS = {"Aktiv", "Offen", "Teilweise"};
 
     public ModernCreditListScreen(CreditManager manager, boolean debts, Screen parent) {
         super(manager, parent, debts ? "Schulden" : "Forderungen", debts ? "debts" : "claims");
@@ -108,7 +109,9 @@ public class ModernCreditListScreen extends ModernBaseScreen {
         int accent = statusColor(entry.getStatus());
         String otherPlayer = debts ? entry.getCreditor() : entry.getDebtor();
         context.drawItem(headFor(otherPlayer), x + 8, y + 13);
-        String players = safe(entry.getDebtor()) + " -> " + safe(entry.getCreditor());
+        String players = debts
+                ? "Von dir an " + safe(entry.getCreditor())
+                : "Von " + safe(entry.getDebtor()) + " an dich";
         ModernUi.drawTruncated(context, textRenderer, players, x + 30, y + 7, Math.max(40, width - 170), ModernUi.theme().text);
         ModernUi.drawTruncated(context, textRenderer, entry.getDealName(), x + 30, y + 22,
                 Math.max(40, width - 170), ModernUi.theme().muted);
@@ -134,24 +137,26 @@ public class ModernCreditListScreen extends ModernBaseScreen {
 
     private List<CreditEntry> filteredEntries() {
         String player = currentPlayerName();
-        List<CreditEntry> source = debts ? manager.getAllCreditsAsDebtor(player) : manager.getAllCreditsAsCreditor(player);
         String query = searchField == null ? "" : searchField.getText().trim();
-        return source.stream()
+        String key = debts + "|" + player + '|' + statusIndex + '|' + query + '|' + manager.getRevision();
+        if (key.equals(filteredCacheKey)) return filteredCache;
+        List<CreditEntry> source = debts ? manager.getAllCreditsAsDebtor(player) : manager.getAllCreditsAsCreditor(player);
+        filteredCache = source.stream()
                 .filter(entry -> statusMatches(entry.getStatus()))
                 .filter(entry -> query.isEmpty()
                         || score(entry, query) > 0)
                 .sorted(Comparator.<CreditEntry>comparingInt(entry -> score(entry, query)).reversed()
                         .thenComparing(Comparator.comparingLong(CreditEntry::getCreatedAt).reversed()))
                 .toList();
+        filteredCacheKey = key;
+        return filteredCache;
     }
 
     private boolean statusMatches(String status) {
         return switch (statusIndex) {
             case 1 -> CreditManager.STATUS_OPEN.equals(status);
             case 2 -> CreditManager.STATUS_PARTIAL.equals(status);
-            case 3 -> CreditManager.STATUS_PAID.equals(status);
-            case 4 -> CreditManager.STATUS_CANCELLED.equals(status);
-            default -> true;
+            default -> CreditManager.STATUS_OPEN.equals(status) || CreditManager.STATUS_PARTIAL.equals(status);
         };
     }
 
@@ -225,6 +230,8 @@ public class ModernCreditListScreen extends ModernBaseScreen {
     protected void clearTransientState() {
         scroll.reset();
         if (searchField != null) searchField.setText("");
+        filteredCacheKey = "";
+        filteredCache = List.of();
         super.clearTransientState();
     }
 }

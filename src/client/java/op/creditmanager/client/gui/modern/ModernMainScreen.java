@@ -14,7 +14,6 @@ import op.creditmanager.client.util.FormatUtil;
 import java.util.List;
 import java.util.OptionalDouble;
 
-/** Modern landing page with immediately useful totals, server balance and primary actions. */
 public class ModernMainScreen extends ModernBaseScreen {
     private int claimsX;
     private int debtsX;

@@ -14,7 +14,6 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Readable, scrollable product information with safe Minecraft link confirmation. */
 public class ModernInfoScreen extends ModernBaseScreen {
     private static final String GITHUB_URL = "https://github.com/Haragucci/Credit-Manager";
     private static final String DISCORD_URL = "https://discord.gg/C8x4qCJ5KA";
@@ -69,8 +68,11 @@ public class ModernInfoScreen extends ModernBaseScreen {
 
     private List<String> contentLines(int maxWidth) {
         String[] paragraphs = {
-                "Verwalte Forderungen, Schulden, Zahlungen und erkannte Paylogs direkt im Client.",
-                "Deine Daten liegen lokal in CreditManagerLogs. Die Auswahl zwischen Classic- und Modern-GUI verändert weder Deals noch gespeicherte JSON-Dateien.",
+                "Verwalte Forderungen, Schulden, Geld- und Item-Zahlungen sowie erkannte Paylogs direkt im Client.",
+                "CreditManager wird vollständig über das GUI bedient.",
+                "Deine Daten liegen lokal in CreditManagerLogs. Bei beschädigten Daten wird ein Backup angelegt und Änderungen bleiben gesperrt, bis du die Daten geprüft hast.",
+                "Item-Zahlungen dokumentieren die ausgewählten Items clientseitig; sie führen keine serverseitige Übertragung aus.",
+                "Support und Fehlerberichte: bitte GitHub oder den Discord unten verwenden. CreditManager ist ein inoffizielles Privatprojekt ohne Verbindung zu OPSUCHT.net, Mojang, Microsoft oder Fabric."
         };
         List<String> result = new ArrayList<>();
         for (String paragraph : paragraphs) {

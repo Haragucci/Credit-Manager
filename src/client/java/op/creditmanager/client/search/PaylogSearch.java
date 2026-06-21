@@ -11,7 +11,6 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.Locale;
 
-/** Combined player, amount, date, time and free-text filter for Paylog entries. */
 public final class PaylogSearch {
     private static final DateTimeFormatter GERMAN_DATE = DateTimeFormatter.ofPattern("dd.MM.uuuu");
     private static final DateTimeFormatter GERMAN_DATE_TIME = DateTimeFormatter.ofPattern("dd.MM.uuuu HH:mm");
@@ -49,7 +48,6 @@ public final class PaylogSearch {
         return Math.max(1, score);
     }
 
-    /** Comparators and ranges remain explicit filters. A bare number is searchable text and can match a partial amount. */
     private static boolean isAmountFilter(String token) {
         return token.matches("[<>]=?[0-9][0-9.,]*") || token.matches("[0-9][0-9.,]*-[0-9][0-9.,]*");
     }
@@ -89,6 +87,7 @@ public final class PaylogSearch {
         return String.join(" ",
                 safe(entry.getFromPlayer()), safe(entry.getToPlayer()), amount,
                 String.format(Locale.ROOT, "%.2f", entry.getAmount()),
+                safe(entry.getRawText()), safe(entry.getNormalizedText()), safe(entry.getHash()), safe(entry.getMetadata()),
                 GERMAN_DATE.format(time), GERMAN_DATE_TIME.format(time), ISO_DATE_TIME.format(time),
                 String.format(Locale.ROOT, "%02d:%02d", time.getHour(), time.getMinute()));
     }

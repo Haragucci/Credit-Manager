@@ -6,10 +6,7 @@ import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.text.Text;
 import op.creditmanager.client.config.ClientConfigManager;
 import op.creditmanager.client.config.GuiFontMode;
-import op.creditmanager.client.config.GuiMode;
-import op.creditmanager.client.core.CreditEventRepository;
 import op.creditmanager.client.core.CreditManager;
-import op.creditmanager.client.gui.GuiRouter;
 import op.creditmanager.client.gui.modern.theme.ColorUtil;
 import op.creditmanager.client.gui.modern.theme.ModernThemeMode;
 import op.creditmanager.client.gui.modern.theme.ModernThemePalette;
@@ -17,14 +14,13 @@ import op.creditmanager.client.gui.modern.widget.ModernScrollArea;
 
 import java.util.List;
 
-/** Scrollable settings category with a stable, persistent back action. */
 public class ModernSettingsDetailScreen extends ModernBaseScreen {
     public enum Category {
         DETECTION("Detection System", "Erkennung von Paylogs und Overlay-Nachrichten"),
-        GUI("GUI", "Modus, Themes, Farben und Darstellung"),
+        GUI("GUI", "Themes, Farben, Schriftart und Darstellung"),
         PAYLOGS("Paylogs", "Benachrichtigungen und Suchverhalten"),
-        STATISTICS("Statistiken", "Zeitraum und sicheres Zurücksetzen"),
-        GENERAL("Allgemein", "Auswahl der GUI beim nächsten Öffnen");
+        STATISTICS("Statistiken", "Zeitraum und Diagramm"),
+        ;
 
         private final String label;
         private final String description;
@@ -43,7 +39,6 @@ public class ModernSettingsDetailScreen extends ModernBaseScreen {
 
     private final Category category;
     private final ModernScrollArea contentScroll = new ModernScrollArea();
-    private boolean resetArmed;
     private int scrollY;
     private int scrollHeight;
 
@@ -88,7 +83,6 @@ public class ModernSettingsDetailScreen extends ModernBaseScreen {
                     new SettingOption("Paylogs automatisch erkennen", "", ClientConfigManager.isAutomaticPaylogDetection()),
                     new SettingOption("Overlay-/Actionbar-Nachrichten prüfen", "", ClientConfigManager.isDetectPaylogsInOverlay()));
             case GUI -> List.of(
-                    new SettingOption("GUI-Modus", ClientConfigManager.getGuiMode() == GuiMode.CLASSIC ? "Classic" : "Modern"),
                     new SettingOption("Schriftart", guiFontModeLabel(ClientConfigManager.getGuiFontMode())),
                     new SettingOption("Theme", themeModeLabel(ClientConfigManager.getModernThemeMode())),
                     new SettingOption("Main-Farbe", ColorUtil.toHex(ClientConfigManager.getCustomMainColor())),
@@ -99,11 +93,7 @@ public class ModernSettingsDetailScreen extends ModernBaseScreen {
                     new SettingOption("Suche", "Name · Betrag · Datum · Tippfehler"));
             case STATISTICS -> List.of(
                     new SettingOption("Standard-Zeitraum", periodLabel(ClientConfigManager.getStatisticsDefaultPeriodDays())),
-                    new SettingOption(resetArmed ? "Statistiken wirklich zurücksetzen" : "Statistiken zurücksetzen", "mit Backup"),
                     new SettingOption("Statistik öffnen", "Diagramm & Filter"));
-            case GENERAL -> List.of(
-                    new SettingOption("GUI-Auswahl beim nächsten Öffnen", "Zurücksetzen"),
-                    new SettingOption("Gespeicherte Daten", "bleiben unverändert"));
         };
     }
 
@@ -167,51 +157,41 @@ public class ModernSettingsDetailScreen extends ModernBaseScreen {
     private void activate(int row) {
         switch (category) {
             case DETECTION -> {
-                if (row == 0) ClientConfigManager.setAutomaticPaylogDetection(!ClientConfigManager.isAutomaticPaylogDetection());
-                if (row == 1) ClientConfigManager.setDetectPaylogsInOverlay(!ClientConfigManager.isDetectPaylogsInOverlay());
-                toastSuccess("Erkennung gespeichert.");
+                boolean saved = row == 0
+                        ? ClientConfigManager.setAutomaticPaylogDetection(!ClientConfigManager.isAutomaticPaylogDetection())
+                        : row == 1 && ClientConfigManager.setDetectPaylogsInOverlay(!ClientConfigManager.isDetectPaylogsInOverlay());
+                toastSettingResult(saved, "Erkennung gespeichert.");
             }
             case GUI -> activateGuiOption(row);
             case PAYLOGS -> {
                 if (row == 0) {
-                    ClientConfigManager.setShowPaylogNotifications(!ClientConfigManager.isShowPaylogNotifications());
-                    toastSuccess("Paylog-Einstellung gespeichert.");
+                    toastSettingResult(ClientConfigManager.setShowPaylogNotifications(!ClientConfigManager.isShowPaylogNotifications()),
+                            "Paylog-Einstellung gespeichert.");
                 }
             }
             case STATISTICS -> activateStatisticsOption(row);
-            case GENERAL -> {
-                if (row == 0) {
-                    ClientConfigManager.setGuiMode(GuiMode.UNSELECTED);
-                    toastSuccess("GUI-Auswahl beim nächsten Öffnen.");
-                }
-            }
         }
     }
 
     private void activateGuiOption(int row) {
         switch (row) {
-            case 0 -> GuiRouter.selectModeAndOpen(manager,
-                    ClientConfigManager.getGuiMode() == GuiMode.CLASSIC ? GuiMode.MODERN : GuiMode.CLASSIC);
-            case 1 -> {
+            case 0 -> {
                 GuiFontMode next = ClientConfigManager.getGuiFontMode() == GuiFontMode.MOD
                         ? GuiFontMode.MINECRAFT
                         : GuiFontMode.MOD;
-                ClientConfigManager.setGuiFontMode(next);
-                toastSuccess("Schriftart: " + guiFontModeLabel(next));
+                toastSettingResult(ClientConfigManager.setGuiFontMode(next), "Schriftart: " + guiFontModeLabel(next));
             }
-            case 2 -> {
+            case 1 -> {
                 ModernThemeMode current = ClientConfigManager.getModernThemeMode();
-                ClientConfigManager.setModernThemeMode(current == ModernThemeMode.DARK ? ModernThemeMode.LIGHT
-                        : current == ModernThemeMode.LIGHT ? ModernThemeMode.CUSTOM : ModernThemeMode.DARK);
-                toastSuccess("Theme übernommen.");
+                ModernThemeMode next = current == ModernThemeMode.DARK ? ModernThemeMode.LIGHT
+                        : current == ModernThemeMode.LIGHT ? ModernThemeMode.CUSTOM : ModernThemeMode.DARK;
+                toastSettingResult(ClientConfigManager.setModernThemeMode(next), "Theme übernommen.");
             }
-            case 3 -> open(new ModernColorPickerScreen(manager, this, false));
-            case 4 -> open(new ModernColorPickerScreen(manager, this, true));
-            case 5 -> {
-                ClientConfigManager.setCustomMainColor(0xFF1F7A3A);
-                ClientConfigManager.setCustomAccentColor(0xFF7EE787);
-                ClientConfigManager.setModernThemeMode(ModernThemeMode.CUSTOM);
-                toastSuccess("Farben zurückgesetzt.");
+            case 2 -> open(new ModernColorPickerScreen(manager, this, false));
+            case 3 -> open(new ModernColorPickerScreen(manager, this, true));
+            case 4 -> {
+                toastSettingResult(ClientConfigManager.setCustomTheme(0xFF1F7A3A, 0xFF7EE787, ModernThemeMode.CUSTOM),
+                        "Farben zurückgesetzt.");
             }
             default -> { }
         }
@@ -220,25 +200,15 @@ public class ModernSettingsDetailScreen extends ModernBaseScreen {
     private void activateStatisticsOption(int row) {
         if (row == 0) {
             int current = ClientConfigManager.getStatisticsDefaultPeriodDays();
-            ClientConfigManager.setStatisticsDefaultPeriodDays(current == 7 ? 30 : current == 30 ? 90 : current == 90 ? 0 : 7);
-            toastSuccess("Zeitraum gespeichert.");
-        } else if (row == 1 && !resetArmed) {
-            resetArmed = true;
-            toastWarning("Erneut klicken, um Statistiken zurückzusetzen.");
-        } else if (row == 1 && CreditEventRepository.getInstance().resetWithBackup()) {
-            resetArmed = false;
-            toastSuccess("Statistiken zurückgesetzt.");
+            toastSettingResult(ClientConfigManager.setStatisticsDefaultPeriodDays(current == 7 ? 30 : current == 30 ? 90 : current == 90 ? 0 : 7),
+                    "Zeitraum gespeichert.");
         } else if (row == 1) {
-            resetArmed = false;
-            toastError("Backup fehlgeschlagen.");
-        } else if (row == 2) {
             open(new ModernStatisticsScreen(manager, this));
         }
     }
 
     @Override
     protected void clearTransientState() {
-        resetArmed = false;
         contentScroll.reset();
         super.clearTransientState();
     }
@@ -248,4 +218,8 @@ public class ModernSettingsDetailScreen extends ModernBaseScreen {
     }
     private String themeModeLabel(ModernThemeMode mode) { return switch (mode) { case DARK -> "Dark"; case LIGHT -> "Light"; case CUSTOM -> "Custom"; }; }
     private String periodLabel(int days) { return days == 0 ? "Alle" : days + " Tage"; }
+
+    private void toastSettingResult(boolean saved, String success) {
+        if (saved) toastSuccess(success); else toastError("Einstellung konnte nicht gespeichert werden.");
+    }
 }

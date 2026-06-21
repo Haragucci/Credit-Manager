@@ -51,7 +51,7 @@ public class PaymentDetector {
             String anSpieler = gesendetMatcher.group(1).toLowerCase();
             double betrag = parseBetrag(gesendetMatcher.group(2));
             if (betrag > 0) {
-                transaktioneintragen(ichSpieler, anSpieler, betrag);
+                transaktioneintragen(ichSpieler, anSpieler, betrag, bereinigt);
             }
             return;
         }
@@ -61,12 +61,12 @@ public class PaymentDetector {
             String vonSpieler = empfangenMatcher.group(1).toLowerCase();
             double betrag = parseBetrag(empfangenMatcher.group(2));
             if (betrag > 0) {
-                transaktioneintragen(vonSpieler, ichSpieler, betrag);
+                transaktioneintragen(vonSpieler, ichSpieler, betrag, bereinigt);
             }
         }
     }
 
-    private void transaktioneintragen(String vonSpieler, String anSpieler, double betrag) {
+    private void transaktioneintragen(String vonSpieler, String anSpieler, double betrag, String rawText) {
         String schlüssel = vonSpieler + "->" + anSpieler + ":" + betrag;
         long jetzt = System.currentTimeMillis();
 
@@ -78,7 +78,12 @@ public class PaymentDetector {
         kürzlicheTransaktionen.put(schlüssel, jetzt);
 
         TransactionEntry eintrag = new TransactionEntry(vonSpieler, anSpieler, betrag);
-        TransactionRepository.getInstance().add(eintrag);
+        eintrag.setRawText(rawText);
+        eintrag.setSource("DETECTED");
+        if (!TransactionRepository.getInstance().add(eintrag)) {
+            CreditManagerClient.LOGGER.error("[PaymentDetector] Paylog konnte nicht sicher gespeichert werden.");
+            return;
+        }
 
         NumberFormat nf = NumberFormat.getNumberInstance(Locale.GERMANY);
         nf.setMinimumFractionDigits(2);

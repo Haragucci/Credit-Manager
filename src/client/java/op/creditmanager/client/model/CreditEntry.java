@@ -17,6 +17,9 @@ public class CreditEntry {
     private String status;
     private List<Payment> payments;
     private String note;
+    /** Set once when a deal becomes final; never recomputed on a later save. */
+    private Long completedAt;
+    private boolean archived;
 
     public CreditEntry() {
         this.payments = new ArrayList<>();
@@ -40,8 +43,11 @@ public class CreditEntry {
     public static String buildDealName(String debtor, String creditor, String label) {
         String base = debtor + "-" + creditor;
         if (label != null && !label.isBlank()) {
-            String sanitized = label.trim().replace(" ", "-");
-            return (base + "-" + sanitized).toLowerCase();
+            String sanitized = label.trim()
+                    .replaceAll("\\s+", "-")
+                    .replaceAll("-+", "-")
+                    .replaceAll("^-|-$", "");
+            if (!sanitized.isBlank()) return (base + "-" + sanitized).toLowerCase();
         }
         return base.toLowerCase();
     }
@@ -111,7 +117,27 @@ public class CreditEntry {
     public List<Payment> getPayments() { return payments; }
     public void setPayments(List<Payment> payments) { this.payments = payments; }
 
+    public void replacePayments(List<Payment> payments) {
+        this.payments = payments == null ? new ArrayList<>() : new ArrayList<>(payments);
+        this.paidAmount = this.payments.stream()
+                .map(Payment::getAmount)
+                .filter(value -> value != null && Double.isFinite(value) && value > 0)
+                .mapToDouble(Double::doubleValue)
+                .sum();
+        updateStatus();
+    }
+
+    public void refreshPaymentState() {
+        updateStatus();
+    }
+
     public String getNote() { return note; }
     public void setNote(String note) { this.note = note; }
+
+    public Long getCompletedAt() { return completedAt; }
+    public void setCompletedAt(Long completedAt) { this.completedAt = completedAt; }
+
+    public boolean isArchived() { return archived; }
+    public void setArchived(boolean archived) { this.archived = archived; }
 
 }

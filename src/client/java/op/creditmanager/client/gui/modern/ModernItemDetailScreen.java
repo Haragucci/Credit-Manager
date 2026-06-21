@@ -1,16 +1,17 @@
 package op.creditmanager.client.gui.modern;
 
 import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.gui.Click;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
 import op.creditmanager.client.core.CreditManager;
 import op.creditmanager.client.gui.modern.theme.ModernThemePalette;
 import op.creditmanager.client.model.Payment;
+import op.creditmanager.client.model.CreditEntry;
 import op.creditmanager.client.util.FormatUtil;
 import op.creditmanager.client.util.TimeUtil;
 
-/** Detail view used only by the modern payment-item flow. Vanilla item text and tooltips stay untouched. */
 public final class ModernItemDetailScreen extends ModernBaseScreen {
     private final Payment payment;
     private final ItemStack stack;
@@ -48,7 +49,6 @@ public final class ModernItemDetailScreen extends ModernBaseScreen {
 
         int detailsX = itemX + 66;
         int detailsWidth = Math.max(40, contentX + cardWidth - detailsX - 12);
-        // The item name is intentionally drawn as vanilla Text, so resource packs retain their own item font.
         context.enableScissor(detailsX, cardY + 28, detailsX + detailsWidth, cardY + 43);
         context.drawText(textRenderer, stack.getName(), detailsX, cardY + 30, theme.text, false);
         context.disableScissor();
@@ -59,8 +59,11 @@ public final class ModernItemDetailScreen extends ModernBaseScreen {
         int rowY = cardY + 100;
         String amount = payment.getAmount() == null || payment.getAmount() <= 0.0 ? "Item-Tausch" : FormatUtil.formatAmount(payment.getAmount());
         drawRow(context, "Wert", amount, rowY, theme);
-        drawRow(context, "Von", safe(payment.getFromPlayer()), rowY + 16, theme);
-        drawRow(context, "An", safe(payment.getToPlayer()), rowY + 32, theme);
+        CreditEntry credit = manager.findCredit(payment.getCreditId().toString()).orElse(null);
+        String from = credit == null ? payment.getFromPlayer() : credit.getDebtor();
+        String to = credit == null ? payment.getToPlayer() : credit.getCreditor();
+        drawRow(context, "Von", safe(from), rowY + 16, theme);
+        drawRow(context, "An", safe(to), rowY + 32, theme);
         drawRow(context, "Zeitpunkt", TimeUtil.formatDateTime(payment.getTimestamp()), rowY + 48, theme);
 
         if (ModernUi.contains(mouseX, mouseY, itemX - 4, itemY - 4, 56, 56)) {
@@ -76,5 +79,11 @@ public final class ModernItemDetailScreen extends ModernBaseScreen {
 
     private static String safe(String value) {
         return value == null || value.isBlank() ? "Unbekannt" : value;
+    }
+
+    @Override
+    public boolean mouseClicked(Click click, boolean doubled) {
+        if (handleSidebarClick(click)) return true;
+        return super.mouseClicked(click, doubled);
     }
 }

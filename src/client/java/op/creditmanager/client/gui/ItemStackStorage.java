@@ -9,7 +9,6 @@ import net.minecraft.registry.RegistryOps;
 import net.minecraft.registry.RegistryWrapper;
 import net.minecraft.util.Identifier;
 
-/** Serialises every payment item through the same path, with a normal-item fallback. */
 public final class ItemStackStorage {
 
     private ItemStackStorage() {

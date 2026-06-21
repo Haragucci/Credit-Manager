@@ -12,7 +12,6 @@ import op.creditmanager.client.gui.modern.theme.ModernThemeMode;
 import op.creditmanager.client.gui.modern.theme.ModernThemePalette;
 import op.creditmanager.client.gui.modern.widget.ModernScrollArea;
 
-/** HSV picker plus hex input for the two persisted custom theme colours. */
 public class ModernColorPickerScreen extends ModernBaseScreen {
     private final boolean accent;
     private float hue;
@@ -111,8 +110,14 @@ public class ModernColorPickerScreen extends ModernBaseScreen {
                 toastError("Bitte eine Hex-Farbe wie #42D66B eingeben.");
                 return true;
             }
-            if (accent) ClientConfigManager.setCustomAccentColor(parsed); else ClientConfigManager.setCustomMainColor(parsed);
-            ClientConfigManager.setModernThemeMode(ModernThemeMode.CUSTOM);
+            boolean saved = ClientConfigManager.setCustomTheme(
+                    accent ? ClientConfigManager.getCustomMainColor() : parsed,
+                    accent ? parsed : ClientConfigManager.getCustomAccentColor(),
+                    ModernThemeMode.CUSTOM);
+            if (!saved) {
+                toastError("Farbe konnte nicht gespeichert werden.");
+                return true;
+            }
             toastSuccess("Farbe gespeichert.");
             closeToParent();
             return true;

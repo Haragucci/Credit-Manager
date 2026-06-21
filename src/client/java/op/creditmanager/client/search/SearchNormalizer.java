@@ -3,7 +3,6 @@ package op.creditmanager.client.search;
 import java.text.Normalizer;
 import java.util.Locale;
 
-/** Normalises player/deal names so searches handle case, umlauts and separators consistently. */
 public final class SearchNormalizer {
     private SearchNormalizer() {
     }

@@ -26,14 +26,34 @@ loom {
 
 }
 
+sourceSets {
+	test {
+		compileClasspath += sourceSets.client.output
+		runtimeClasspath += sourceSets.client.output
+	}
+	// Deliberately isolated from main/client/release classpaths. Local sources
+	// are ignored by Git and only compiled on an explicit dev-test-data request.
+	devTestData {
+		java.srcDir 'local-dev'
+		compileClasspath += sourceSets.client.runtimeClasspath
+		runtimeClasspath += sourceSets.client.runtimeClasspath
+	}
+}
+
+
 dependencies {
 	// To change the versions see the gradle.properties file
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
 	mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
 	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	// H2 is a pure-Java embedded database.  Loom packages it into the client jar,
+	// so CreditManager has no native or online database dependency at runtime.
+	implementation include("com.h2database:h2:2.3.232")
 
 	// Fabric API. This is technically optional, but you probably want it anyway.
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+	testImplementation "org.junit.jupiter:junit-jupiter:5.11.4"
+	testRuntimeOnly "org.junit.platform:junit-platform-launcher:1.11.4"
 	
 }
 
@@ -48,6 +68,49 @@ processResources {
 
 tasks.withType(JavaCompile).configureEach {
 	it.options.release = 21
+}
+
+tasks.named('test') {
+	failOnNoDiscoveredTests = false
+	useJUnitPlatform()
+}
+
+tasks.register('compileDevTestData') {
+	group = 'development'
+	description = 'Compiles the ignored local test-data helper when explicitly enabled.'
+	onlyIf { Boolean.getBoolean('creditmanager.devTestData') }
+	dependsOn tasks.named('devTestDataClasses')
+}
+
+tasks.register('verifyAmountParser', JavaExec) {
+	group = 'verification'
+	description = 'Runs deterministic balance-format parser smoke tests.'
+	dependsOn tasks.named('compileTestJava')
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'op.creditmanager.client.util.FormatUtilSelfTest'
+}
+
+tasks.register('verifyReleaseJar') {
+	group = 'verification'
+	description = 'Verifies that the release jar contains H2 but no local development test tool.'
+	dependsOn tasks.named('remapJar')
+	doLast {
+		def releaseJar = tasks.named('remapJar').get().archiveFile.get().asFile
+		def entries = new java.util.zip.ZipFile(releaseJar).withCloseable { zip ->
+			zip.entries().collect { it.name }
+		}
+		if (!entries.any { it ==~ /META-INF\/jars\/h2-.+\.jar/ }) {
+			throw new GradleException("Release jar does not embed H2: ${releaseJar}")
+		}
+		def forbidden = entries.findAll { it.startsWith('local-dev/') || it.contains('CreditManagerTestDataTool') || it.contains('/dev/') }
+		if (!forbidden.isEmpty()) {
+			throw new GradleException("Release jar contains development-only files: ${forbidden}")
+		}
+	}
+}
+
+tasks.named('check') {
+	dependsOn tasks.named('verifyReleaseJar')
 }
 
 java {
@@ -67,6 +130,9 @@ jar {
 	from("LICENSE") {
 		rename { "${it}_$projectName"}
 	}
+	// IntelliJ needs the hook on the local client classpath, but it must never
+	// be shipped in the remapped production jar.
+	exclude 'op/creditmanager/client/devtools/**'
 }
 
 // configure the maven publication

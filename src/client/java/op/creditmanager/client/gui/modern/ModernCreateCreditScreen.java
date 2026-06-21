@@ -11,7 +11,6 @@ import op.creditmanager.client.gui.CenteredTextFieldWidget;
 import op.creditmanager.client.util.FormatUtil;
 import op.creditmanager.client.util.TimeUtil;
 
-/** Modern form for creating both claims and debts. */
 public class ModernCreateCreditScreen extends ModernBaseScreen {
 
     private final boolean debts;
@@ -141,7 +140,6 @@ public class ModernCreateCreditScreen extends ModernBaseScreen {
             if (parent instanceof ModernCreditListScreen) {
                 closeToParent();
             } else {
-                // Claims and debts are root navigation pages, so they never inherit a second back layer.
                 open(new ModernCreditListScreen(manager, debts, null));
             }
         } catch (CreditManager.CreditException exception) {

@@ -2,7 +2,6 @@ package op.creditmanager.client.gui.modern.theme;
 
 import java.util.Locale;
 
-/** Small ARGB colour helper kept independent from Minecraft rendering APIs. */
 public final class ColorUtil {
     private ColorUtil() {
     }

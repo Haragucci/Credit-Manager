@@ -7,20 +7,19 @@ import op.creditmanager.client.core.PaymentDetector;
 import op.creditmanager.client.core.TransactionRepository;
 import op.creditmanager.client.core.CreditEventRepository;
 import op.creditmanager.client.storage.FileManager;
+import op.creditmanager.client.storage.db.DatabaseManager;
+import op.creditmanager.client.storage.db.DatabaseHealthChecker;
+import op.creditmanager.client.storage.db.LegacyJsonMigrationService;
 import op.creditmanager.client.config.ClientConfigManager;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
-import net.fabricmc.fabric.api.resource.ResourceManagerHelper;
-import net.fabricmc.fabric.api.resource.ResourcePackActivationType;
-import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.util.Identifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class CreditManagerClient implements ClientModInitializer {
 
-	public static final String MOD_ID = "assets/creditmanager";
+	public static final String MOD_ID = "creditmanager";
 	public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
 	private static CreditManager creditManager;
@@ -31,19 +30,15 @@ public class CreditManagerClient implements ClientModInitializer {
 	public void onInitializeClient() {
 		LOGGER.info("[CreditManager] Initialisierung...");
 
-		FabricLoader.getInstance().getModContainer("creditmanager").ifPresent(container -> {
-			ResourceManagerHelper.registerBuiltinResourcePack(
-					Identifier.of("creditmanager", "resources"),
-					container,
-					ResourcePackActivationType.ALWAYS_ENABLED
-			);
-		});
-
 		FileManager.initialize();
 		ClientConfigManager.reload();
+		DatabaseManager.getInstance().initialize();
+		DatabaseHealthChecker.getInstance().check();
+		LegacyJsonMigrationService.getInstance().inspectAtStartup();
 
 		creditRepository = new CreditRepository();
 		creditRepository.load();
+		CreditEventRepository.getInstance().bind(creditRepository);
 
 		creditManager = new CreditManager(creditRepository);
 

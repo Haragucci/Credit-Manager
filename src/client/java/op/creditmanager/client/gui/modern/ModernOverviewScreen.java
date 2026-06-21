@@ -15,7 +15,6 @@ import op.creditmanager.client.util.FormatUtil;
 import java.util.List;
 import java.util.OptionalDouble;
 
-/** Detailed balance dashboard with a compact route to the statistics history. */
 public class ModernOverviewScreen extends ModernBaseScreen {
     private int claimsY;
     private int debtsY;

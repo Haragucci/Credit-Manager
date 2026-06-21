@@ -23,26 +23,23 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.OptionalDouble;
 
-/** Scrollable credit-only statistics with a persistent reset/back footer. */
 public class ModernStatisticsScreen extends ModernBaseScreen {
     private static final String[] PERIODS = {"7 Tage", "30 Tage", "90 Tage", "Alle", "Custom"};
-    private static final int FOOTER_HEIGHT = 22;
     private static final int METRIC_HEIGHT = 34;
-    private static final int CHART_HEIGHT = 148;
+    private static final int CHART_HEIGHT = 172;
 
     private final ModernScrollArea contentScroll = new ModernScrollArea();
     private int periodIndex;
-    private boolean resetArmed;
     private TextFieldWidget startDate;
     private TextFieldWidget endDate;
     private int periodY;
-    private int footerY;
     private int viewportY;
     private int viewportHeight;
     private int safeContentWidth;
     private int periodControlWidth;
-    private int resetWidth;
     private boolean metricsTwoColumns;
+    private String statisticsCacheKey = "";
+    private CreditStatistics cachedStatistics;
 
     public ModernStatisticsScreen(CreditManager manager, Screen parent) {
         super(manager, parent, "Statistiken", "overview");
@@ -70,19 +67,14 @@ public class ModernStatisticsScreen extends ModernBaseScreen {
         long now = System.currentTimeMillis();
         long from = rangeStart(now);
         long to = rangeEnd(now);
-        List<CreditEntry> claims = manager.getOpenCreditsAsCreditor(currentPlayerName());
-        List<CreditEntry> debts = manager.getOpenCreditsAsDebtor(currentPlayerName());
-        CreditStatistics stats = CreditStatisticsCalculator.calculate(currentPlayerName(), claims, debts,
-                CreditEventRepository.getInstance().getAll(), from, to);
+        CreditStatistics stats = statisticsForCurrentView(now, from, to);
         OptionalDouble accountBalance = BalanceReader.readCurrentBalance(MinecraftClient.getInstance());
 
-        footerY = contentY + contentHeight - FOOTER_HEIGHT;
         viewportY = contentY + 6;
-        viewportHeight = Math.max(32, footerY - viewportY - 7);
-        int metricsOffset = periodIndex == 4 ? 58 : 30;
-        // Reserve the scrollbar inset while deciding the grid so the chart never overlaps a wrapped metric row.
+        viewportHeight = Math.max(32, contentY + contentHeight - viewportY - 7);
+        int metricsOffset = periodIndex == 4 ? (contentWidth >= 200 ? 58 : 82) : 30;
         metricsTwoColumns = contentWidth >= 350;
-        int metricsHeight = metricsTwoColumns ? METRIC_HEIGHT * 2 + 6 : METRIC_HEIGHT * 4 + 18;
+        int metricsHeight = metricsTwoColumns ? METRIC_HEIGHT * 5 + 24 : METRIC_HEIGHT * 10 + 54;
         int chartsY = metricsOffset + metricsHeight + 9;
         int scrollContentHeight = chartsY + CHART_HEIGHT + 20;
         contentScroll.setBounds(contentX, viewportY, contentWidth, viewportHeight, scrollContentHeight);
@@ -100,11 +92,6 @@ public class ModernStatisticsScreen extends ModernBaseScreen {
         context.disableScissor();
         contentScroll.renderScrollbar(context, mouseX, mouseY);
 
-        int gap = 6;
-        resetWidth = Math.min(safeContentWidth, Math.max(94, (safeContentWidth - gap) * 2 / 3));
-        ModernUi.button(context, textRenderer, contentX, footerY, resetWidth, FOOTER_HEIGHT,
-                resetArmed ? "Reset bestätigen" : "Statistiken zurücksetzen", theme.buttonDanger,
-                ModernUi.contains(mouseX, mouseY, contentX, footerY, resetWidth, FOOTER_HEIGHT));
         super.render(context, mouseX, mouseY, delta);
     }
 
@@ -119,17 +106,30 @@ public class ModernStatisticsScreen extends ModernBaseScreen {
 
     private void drawMetrics(DrawContext context, CreditStatistics stats, OptionalDouble accountBalance, int y) {
         ModernThemePalette theme = ModernUi.theme();
-        int metricWidth = metricsTwoColumns ? (safeContentWidth - 8) / 2 : safeContentWidth;
-        drawMetric(context, contentX, y, metricWidth, "Offene Forderungen", FormatUtil.formatAmount(stats.openClaims()), theme.success);
-        drawMetric(context, contentX + (metricsTwoColumns ? metricWidth + 8 : 0), metricsTwoColumns ? y : y + 40,
-                metricWidth, "Offene Schulden", FormatUtil.formatAmount(stats.openDebts()), theme.danger);
-        int secondRowY = metricsTwoColumns ? y + 40 : y + 80;
-        drawMetric(context, contentX, secondRowY, metricWidth, "Saldo", (stats.balance() >= 0 ? "+" : "") + FormatUtil.formatAmount(stats.balance()),
-                stats.balance() >= 0 ? theme.success : theme.danger);
         String forecast = accountBalance.isPresent() ? FormatUtil.formatAmount(accountBalance.getAsDouble() + stats.balance())
                 : "Kontostand nicht erkennbar";
-        drawMetric(context, contentX + (metricsTwoColumns ? metricWidth + 8 : 0), metricsTwoColumns ? secondRowY : secondRowY + 40,
-                metricWidth, "Nach Verrechnung", forecast, accountBalance.isPresent() ? theme.accent : theme.muted);
+        List<Metric> metrics = List.of(
+                new Metric("Aktuell: offene Forderungen", FormatUtil.formatAmount(stats.openClaims()), theme.success),
+                new Metric("Aktuell: offene Schulden", FormatUtil.formatAmount(stats.openDebts()), theme.danger),
+                new Metric("Aktueller Saldo", (stats.balance() >= 0 ? "+" : "") + FormatUtil.formatAmount(stats.balance()),
+                        stats.balance() >= 0 ? theme.success : theme.danger),
+                new Metric("Kontostand nach Verrechnung", forecast, accountBalance.isPresent() ? theme.accent : theme.muted),
+                new Metric("Zeitraum: neue Forderungen", FormatUtil.formatAmount(stats.createdClaimsInPeriod()), theme.success),
+                new Metric("Zeitraum: neue Schulden", FormatUtil.formatAmount(stats.createdDebtsInPeriod()), theme.danger),
+                new Metric("Zeitraum: Zahlungen erhalten", FormatUtil.formatAmount(stats.paidClaimsInPeriod()), theme.success),
+                new Metric("Zeitraum: Zahlungen geleistet", FormatUtil.formatAmount(stats.paidDebtsInPeriod()), theme.danger),
+                new Metric("Zeitraum: Netto-Veränderung", (stats.netChange() >= 0 ? "+" : "") + FormatUtil.formatAmount(stats.netChange()),
+                        stats.netChange() >= 0 ? theme.success : theme.danger),
+                new Metric("Zeitraum: Aktionen", String.valueOf(stats.actionCount()), theme.muted)
+        );
+        int columns = metricsTwoColumns ? 2 : 1;
+        int metricWidth = metricsTwoColumns ? (safeContentWidth - 8) / 2 : safeContentWidth;
+        for (int index = 0; index < metrics.size(); index++) {
+            int column = index % columns;
+            int row = index / columns;
+            drawMetric(context, contentX + column * (metricWidth + 8), y + row * 40, metricWidth,
+                    metrics.get(index).label(), metrics.get(index).value(), metrics.get(index).color());
+        }
     }
 
     private void drawMetric(DrawContext context, int x, int y, int width, String label, String value, int color) {
@@ -139,18 +139,19 @@ public class ModernStatisticsScreen extends ModernBaseScreen {
         ModernUi.drawTruncated(context, textRenderer, value, x + 9, y + 18, width - 18, color);
     }
 
+    private record Metric(String label, String value, int color) { }
+
     @Override
     public boolean mouseClicked(Click click, boolean doubled) {
         if (handleSidebarClick(click)) return true;
-        if (click.button() == 0 && ModernUi.contains(click.x(), click.y(), contentX, footerY, resetWidth, FOOTER_HEIGHT)) {
-            resetStatistics();
-            return true;
-        }
         if (contentScroll.mouseClicked(click.x(), click.y(), click.button())) return true;
         if (click.button() == 0 && ModernUi.contains(click.x(), click.y(), contentX, periodY, periodControlWidth, 22)) {
             periodIndex = (periodIndex + 1) % PERIODS.length;
-            if (periodIndex != 4) ClientConfigManager.setStatisticsDefaultPeriodDays(periodIndex == 0 ? 7 : periodIndex == 2 ? 90 : periodIndex == 3 ? 0 : 30);
-            resetArmed = false;
+            if (periodIndex != 4 && !ClientConfigManager.setStatisticsDefaultPeriodDays(
+                    periodIndex == 0 ? 7 : periodIndex == 2 ? 90 : periodIndex == 3 ? 0 : 30)) {
+                toastError("Zeitraum konnte nicht gespeichert werden.");
+            }
+            statisticsCacheKey = "";
             return true;
         }
         return super.mouseClicked(click, doubled);
@@ -165,17 +166,18 @@ public class ModernStatisticsScreen extends ModernBaseScreen {
         return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
     }
 
-    private void resetStatistics() {
-        if (!resetArmed) {
-            resetArmed = true;
-            toastWarning("Erneut klicken, um Statistiken zurückzusetzen.");
-        } else if (CreditEventRepository.getInstance().resetWithBackup()) {
-            resetArmed = false;
-            toastSuccess("Statistiken zurückgesetzt.");
-        } else {
-            resetArmed = false;
-            toastError("Backup fehlgeschlagen.");
-        }
+    private CreditStatistics statisticsForCurrentView(long now, long from, long to) {
+        String player = currentPlayerName();
+        String customRange = startDate == null ? "" : startDate.getText() + "|" + endDate.getText();
+        String key = player + '|' + periodIndex + '|' + customRange + '|' + (now / 60_000L) + '|'
+                + manager.getRevision() + '|' + CreditEventRepository.getInstance().getRevision();
+        if (key.equals(statisticsCacheKey) && cachedStatistics != null) return cachedStatistics;
+        List<CreditEntry> claims = manager.getOpenCreditsAsCreditor(player);
+        List<CreditEntry> debts = manager.getOpenCreditsAsDebtor(player);
+        cachedStatistics = CreditStatisticsCalculator.calculate(player, claims, debts,
+                CreditEventRepository.getInstance().getAll(), from, to);
+        statisticsCacheKey = key;
+        return cachedStatistics;
     }
 
     private long rangeStart(long now) {
@@ -205,23 +207,30 @@ public class ModernStatisticsScreen extends ModernBaseScreen {
     }
 
     private void updateCustomFieldVisibility(int fieldY, int scrollOffset) {
-        boolean visible = periodIndex == 4 && fieldY + 18 > viewportY && fieldY < viewportY + viewportHeight;
+        boolean stacked = safeContentWidth < 200;
+        boolean startVisible = periodIndex == 4 && fieldY + 18 > viewportY && fieldY < viewportY + viewportHeight;
+        int endY = fieldY + (stacked ? 22 : 0);
+        boolean endVisible = periodIndex == 4 && endY + 18 > viewportY && endY < viewportY + viewportHeight;
+        int fieldWidth = stacked ? Math.max(88, safeContentWidth - 12) : 88;
         if (startDate != null) {
             startDate.setPosition(contentX + 6, fieldY);
-            startDate.setVisible(visible);
+            startDate.setWidth(fieldWidth);
+            startDate.setVisible(startVisible);
         }
         if (endDate != null) {
-            endDate.setPosition(contentX + 100, fieldY);
-            endDate.setVisible(visible);
+            endDate.setPosition(contentX + (stacked ? 6 : 100), endY);
+            endDate.setWidth(fieldWidth);
+            endDate.setVisible(endVisible);
         }
     }
 
     @Override
     protected void clearTransientState() {
-        resetArmed = false;
         contentScroll.reset();
         if (startDate != null) startDate.setText("");
         if (endDate != null) endDate.setText("");
+        statisticsCacheKey = "";
+        cachedStatistics = null;
         super.clearTransientState();
     }
 }

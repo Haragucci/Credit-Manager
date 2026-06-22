@@ -22,8 +22,13 @@ public class CreditManager {
     public static final String STATUS_OPEN = "OPEN";
     public static final String STATUS_PARTIAL = "PARTIAL";
     public static final String STATUS_PAID = "PAID";
+    public static final String STATUS_CLOSED = "CLOSED";
     public static final String STATUS_CANCELLED = "CANCELLED";
     private static final double EPSILON = 0.0001D;
+    private static final double MAX_AMOUNT = 1_000_000_000_000_000D;
+    private static final int MAX_PLAYER_NAME_LENGTH = 32;
+    private static final int MAX_LABEL_LENGTH = 128;
+    private static final int MAX_NOTE_LENGTH = 4_096;
 
     private final CreditRepository repository;
     private static final UUID CONFIG_RECOVERY_TOKEN = UUID.nameUUIDFromBytes("creditmanager-config-recovery".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -39,6 +44,7 @@ public class CreditManager {
         requireWritable();
         validateNames(creditor, debtor);
         validateAmount(amount);
+        validateDealInput(label, note, dueDate);
 
         String dealName = CreditEntry.buildDealName(debtor, creditor, label);
         boolean exists = repository.getAllCredits().stream().anyMatch(entry -> dealName.equalsIgnoreCase(entry.getDealName())
@@ -69,15 +75,15 @@ public class CreditManager {
         return payment;
     }
 
-    /**
-     * Manually consumes the still available portion of a paylog. A larger
-     * paylog never overpays the deal; its unused remainder stays linkable.
-     */
-    public synchronized PaylogLinkResult linkPaylogToDeal(UUID paylogId, UUID dealId) throws CreditException {
-        return linkPaylogToDeal(paylogId, dealId, false);
+    public synchronized PaylogLinkResult addPaylogPayment(UUID dealId, UUID paylogId, double requestedAmount,
+                                                           long timestamp, String note) throws CreditException {
+        return linkPaylogToDeal(paylogId, dealId, false, requestedAmount, timestamp, note, "PAYLOG_SELECTED");
     }
 
-    /** Uses the oldest matching deal only when this one deal can cover the whole paylog. */
+    public synchronized PaylogLinkResult linkPaylogToDeal(UUID paylogId, UUID dealId) throws CreditException {
+        return linkPaylogToDeal(paylogId, dealId, false, Double.NaN, 0L, null, "PAYLOG_MANUAL");
+    }
+
     public synchronized PaylogLinkResult autoLinkDetectedPaylog(UUID paylogId) throws CreditException {
         requireWritable();
         TransactionEntry paylog = getPaylog(paylogId);
@@ -85,7 +91,7 @@ public class CreditManager {
         List<CreditEntry> candidates = matchingActiveDeals(paylog);
         for (CreditEntry candidate : candidates) {
             if (candidate.getRemainingAmount() + EPSILON >= paylog.getRemainingAmount()) {
-                return linkPaylogToDeal(paylogId, candidate.getId(), true);
+                return linkPaylogToDeal(paylogId, candidate.getId(), true, paylog.getRemainingAmount(), paylog.getTimestamp(), null, "PAYLOG_AUTO");
             }
         }
         return candidates.isEmpty() ? PaylogLinkResult.noMatchingDeal(paylog) : PaylogLinkResult.noSingleDealFits(paylog);
@@ -123,15 +129,12 @@ public class CreditManager {
         return archiveCredit(dealId);
     }
 
-    /** Archives a deal while retaining all payments and its audit trail. */
     public CreditEntry archiveCredit(UUID dealId) throws CreditException {
         CreditEntry entry = getSafeCredit(dealId);
         requireWritable();
         if (entry.isArchived()) return entry;
         double remainingBefore = entry.getRemainingAmount();
-        if (!STATUS_PAID.equals(entry.getStatus())) entry.setStatus(STATUS_CANCELLED);
         entry.setArchived(true);
-        entry.setCompletedAt(System.currentTimeMillis());
         repository.putCredit(entry);
         persistEvent(CreditEventType.CREDIT_ARCHIVED, entry, entry.getAmount(), remainingBefore,
                 "Deal archiviert", null, "ARCHIVE", false);
@@ -139,21 +142,29 @@ public class CreditManager {
     }
 
     public CreditEntry closeCredit(UUID dealId) throws CreditException {
-        return archiveCredit(dealId);
+        CreditEntry entry = getSafeCredit(dealId);
+        requireWritable();
+        validateActive(entry);
+        double remainingBefore = entry.getRemainingAmount();
+        entry.setStatus(STATUS_CLOSED);
+        entry.setCompletedAt(System.currentTimeMillis());
+        repository.putCredit(entry);
+        persistEvent(CreditEventType.CREDIT_CLOSED, entry, entry.getAmount(), remainingBefore,
+                "Deal manuell abgeschlossen", null, "CLOSE", false);
+        return entry;
     }
 
-    /** Restores an archived deal to its state derived from the recorded payments. */
     public CreditEntry reactivateCredit(UUID dealId) throws CreditException {
         CreditEntry entry = getSafeCredit(dealId);
         requireWritable();
-        if (!entry.isArchived() && !STATUS_CANCELLED.equals(entry.getStatus())) return entry;
+        if (!entry.isArchived() && !STATUS_CANCELLED.equals(entry.getStatus()) && !STATUS_CLOSED.equals(entry.getStatus())) return entry;
         double remainingBefore = entry.getRemainingAmount();
         entry.setArchived(false);
         entry.setCompletedAt(null);
         entry.setStatus(STATUS_OPEN);
         entry.refreshPaymentState();
         repository.putCredit(entry);
-        persistEvent(CreditEventType.CREDIT_UPDATED, entry, entry.getAmount(), remainingBefore,
+        persistEvent(CreditEventType.CREDIT_REACTIVATED, entry, entry.getAmount(), remainingBefore,
                 "Deal reaktiviert", null, "REACTIVATE", false);
         return entry;
     }
@@ -179,6 +190,7 @@ public class CreditManager {
         requireWritable();
         validateNames(creditor, debtor);
         validateAmount(amount);
+        validateDealInput(label, note, dueDate);
         if (amount + 0.0001D < entry.getPaidAmount()) throw new CreditException("Der Gesamtbetrag darf nicht kleiner als bereits bezahlt sein.");
         boolean counterpartyChanged = !lower(creditor).equals(entry.getCreditor()) || !lower(debtor).equals(entry.getDebtor());
         if (counterpartyChanged && !entry.getPayments().isEmpty()) {
@@ -319,12 +331,13 @@ public class CreditManager {
     }
 
     private void validateActive(CreditEntry entry) throws CreditException {
-        if (entry.isArchived() || STATUS_PAID.equals(entry.getStatus()) || STATUS_CANCELLED.equals(entry.getStatus())) {
+        if (entry.isArchived() || STATUS_PAID.equals(entry.getStatus()) || STATUS_CLOSED.equals(entry.getStatus()) || STATUS_CANCELLED.equals(entry.getStatus())) {
             throw new CreditException("Deal ist abgeschlossen oder storniert.");
         }
     }
 
-    private PaylogLinkResult linkPaylogToDeal(UUID paylogId, UUID dealId, boolean automatic) throws CreditException {
+    private PaylogLinkResult linkPaylogToDeal(UUID paylogId, UUID dealId, boolean automatic, double requestedAmount,
+                                              long requestedTimestamp, String note, String source) throws CreditException {
         requireWritable();
         TransactionEntry paylog = getPaylog(paylogId);
         CreditEntry entry = getSafeCredit(dealId);
@@ -337,10 +350,14 @@ public class CreditManager {
         double remainingBefore = entry.getRemainingAmount();
         if (automatic && available > remainingBefore + EPSILON) return PaylogLinkResult.noSingleDealFits(paylog);
 
-        double booked = Math.min(available, remainingBefore);
+        double wanted = Double.isFinite(requestedAmount) ? requestedAmount : available;
+        validateAmount(wanted);
+        double booked = Math.min(Math.min(wanted, available), remainingBefore);
         Payment payment = new Payment(entry.getId(), entry.getDebtor(), entry.getCreditor(), booked, null,
-                automatic ? "PAYLOG_AUTO" : "PAYLOG_MANUAL");
+                source == null ? automatic ? "PAYLOG_AUTO" : "PAYLOG_MANUAL" : source);
         payment.setPaylogId(paylog.getId());
+        payment.setTimestamp(requestedTimestamp > 0 ? requestedTimestamp : paylog.getTimestamp());
+        payment.setNote(normalizeNote(note));
         entry.addPayment(payment);
         entry.setArchived(false);
         repository.putPayment(payment);
@@ -370,13 +387,38 @@ public class CreditManager {
     }
 
     private void validateAmount(double amount) throws CreditException {
+        if (!Double.isFinite(amount) || amount <= 0 || amount > MAX_AMOUNT) {
+            throw new CreditException("Betrag liegt außerhalb des erlaubten Bereichs.");
+        }
         if (!Double.isFinite(amount) || amount <= 0) throw new CreditException("Betrag muss größer als 0 sein.");
     }
 
     private void validateNames(String creditor, String debtor) throws CreditException {
+        validatePlayerName(creditor, "Gläubiger");
+        validatePlayerName(debtor, "Schuldner");
         if (creditor == null || creditor.isBlank()) throw new CreditException("Ungültiger Gläubiger.");
         if (debtor == null || debtor.isBlank()) throw new CreditException("Ungültiger Schuldner.");
         if (creditor.equalsIgnoreCase(debtor)) throw new CreditException("Gläubiger und Schuldner dürfen nicht identisch sein.");
+    }
+
+    private void validatePlayerName(String value, String role) throws CreditException {
+        if (value == null || !value.matches("[A-Za-z0-9_]{1," + MAX_PLAYER_NAME_LENGTH + "}")) {
+            throw new CreditException("Ungültiger " + role + ".");
+        }
+    }
+
+    private void validateDealInput(String label, String note, Long dueDate) throws CreditException {
+        if (label != null && label.length() > MAX_LABEL_LENGTH) throw new CreditException("Die Deal-Bezeichnung ist zu lang.");
+        if (note != null && note.length() > MAX_NOTE_LENGTH) throw new CreditException("Die Notiz ist zu lang.");
+        if (dueDate != null && (dueDate <= 0 || dueDate > System.currentTimeMillis() + 3_155_760_000_000L)) {
+            throw new CreditException("Ungültiges Fälligkeitsdatum.");
+        }
+    }
+
+    private String normalizeNote(String note) throws CreditException {
+        if (note == null || note.isBlank()) return null;
+        if (note.length() > MAX_NOTE_LENGTH) throw new CreditException("Die Notiz ist zu lang.");
+        return note.trim();
     }
 
     private String lower(String value) { return value.trim().toLowerCase(Locale.ROOT); }

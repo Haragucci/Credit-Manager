@@ -11,12 +11,19 @@ import op.creditmanager.client.model.TransactionEntry;
 import op.creditmanager.client.util.FormatUtil;
 
 import java.util.Locale;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 
-/** Creates an auditable manual paylog without pretending it was detected from chat. */
 public final class ModernCreatePaylogScreen extends ModernBaseScreen {
     private TextFieldWidget payerField;
     private TextFieldWidget receiverField;
     private TextFieldWidget amountField;
+    private TextFieldWidget dateField;
+    private TextFieldWidget timeField;
+    private TextFieldWidget noteField;
     private int formX, formWidth, saveY;
 
     public ModernCreatePaylogScreen(op.creditmanager.client.core.CreditManager manager, Screen parent) {
@@ -33,6 +40,10 @@ public final class ModernCreatePaylogScreen extends ModernBaseScreen {
         receiverField = field("Empfänger", contentY + 82, "Spielername");
         amountField = field("Betrag", contentY + 131, "Betrag eingeben");
         amountField.setMaxLength(20);
+        dateField = field("Datum", contentY + 180, "TT.MM.JJJJ");
+        timeField = field("Uhrzeit", contentY + 229, "HH:MM");
+        noteField = field("Notiz", contentY + 278, "Optionaler Rohtext");
+        noteField.setMaxLength(256);
     }
 
     private TextFieldWidget field(String label, int y, String placeholder) {
@@ -49,7 +60,10 @@ public final class ModernCreatePaylogScreen extends ModernBaseScreen {
         drawField(context, "Zahler", payerField.getY() - 20);
         drawField(context, "Empfänger", receiverField.getY() - 20);
         drawField(context, "Betrag", amountField.getY() - 20);
-        saveY = amountField.getY() + 32;
+        drawField(context, "Datum", dateField.getY() - 20);
+        drawField(context, "Uhrzeit", timeField.getY() - 20);
+        drawField(context, "Notiz", noteField.getY() - 20);
+        saveY = noteField.getY() + 32;
         int buttonWidth = Math.max(80, (formWidth - 8) / 2);
         ModernUi.button(context, textRenderer, formX, saveY, buttonWidth, 23, "Paylog speichern", ModernUi.theme().buttonPrimary,
                 ModernUi.contains(mouseX, mouseY, formX, saveY, buttonWidth, 23));
@@ -84,23 +98,49 @@ public final class ModernCreatePaylogScreen extends ModernBaseScreen {
     private void save() {
         String payer = payerField.getText().trim();
         String receiver = receiverField.getText().trim();
-        if (payer.isBlank() || receiver.isBlank()) {
-            toastError("Zahler und Empfänger sind erforderlich.");
+        if (!isValidPlayerName(payer) || !isValidPlayerName(receiver) || payer.equalsIgnoreCase(receiver)) {
+            toastError("Zahler und Empfänger müssen gültige, verschiedene Spielernamen sein.");
             return;
         }
         try {
             double amount = FormatUtil.parseMoney(amountField.getText());
             TransactionEntry entry = new TransactionEntry(payer.toLowerCase(Locale.ROOT), receiver.toLowerCase(Locale.ROOT), amount);
+            entry.setTimestamp(parseTimestamp());
             entry.setSource("MANUAL");
-            entry.setRawText("[Manuell] " + payer + " -> " + receiver + ": " + amount);
+            String note = noteField.getText().trim();
+            entry.setRawText("[Manuell] " + payer + " -> " + receiver + ": " + FormatUtil.formatAmount(amount)
+                    + " am " + DateTimeFormatter.ofPattern("dd.MM.uuuu HH:mm").format(java.time.Instant.ofEpochMilli(entry.getTimestamp()).atZone(ZoneId.systemDefault()))
+                    + (note.isBlank() ? "" : " | " + note));
             if (!TransactionRepository.getInstance().add(entry)) {
                 toastError("Paylog konnte nicht gespeichert werden.");
                 return;
             }
             toastSuccess("Manueller Paylog gespeichert.");
             closeToParent();
-        } catch (IllegalArgumentException exception) {
-            toastError("Bitte einen gültigen positiven Betrag eingeben.");
+        } catch (IllegalArgumentException | DateTimeParseException exception) {
+            toastError("Bitte Betrag, Datum und Uhrzeit prüfen.");
         }
+    }
+
+    private long parseTimestamp() {
+        LocalDate date = dateField.getText().isBlank() ? LocalDate.now() : parseDate(dateField.getText().trim());
+        LocalTime time = timeField.getText().isBlank() ? LocalTime.now().withSecond(0).withNano(0) : LocalTime.parse(timeField.getText().trim(), DateTimeFormatter.ofPattern("H:mm"));
+        return date.atTime(time).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+    }
+
+    private LocalDate parseDate(String value) {
+        try { return LocalDate.parse(value); }
+        catch (DateTimeParseException ignored) { return LocalDate.parse(value, DateTimeFormatter.ofPattern("dd.MM.uuuu")); }
+    }
+
+    private boolean isValidPlayerName(String value) {
+        if (value.isBlank() || value.length() > 32) return false;
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            boolean asciiLetter = character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z';
+            boolean digit = character >= '0' && character <= '9';
+            if (!asciiLetter && !digit && character != '_') return false;
+        }
+        return true;
     }
 }

@@ -11,7 +11,6 @@ import op.creditmanager.client.util.FormatUtil;
 
 import java.util.List;
 
-/** Lets the user apply a paylog to one matching deal, preserving any overpay remainder. */
 public final class ModernPaylogLinkScreen extends ModernBaseScreen {
     private final TransactionEntry paylog;
     private final ModernScrollArea scroll = new ModernScrollArea();

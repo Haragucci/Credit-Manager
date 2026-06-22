@@ -345,6 +345,7 @@ public final class ModernEditCreditScreen extends ModernBaseScreen {
         return switch (status) {
             case CreditManager.STATUS_PAID -> ModernUi.theme().success;
             case CreditManager.STATUS_PARTIAL -> ModernUi.theme().warning;
+            case CreditManager.STATUS_CLOSED -> ModernUi.theme().muted;
             case CreditManager.STATUS_CANCELLED -> ModernUi.theme().muted;
             default -> ModernUi.theme().danger;
         };
@@ -354,6 +355,7 @@ public final class ModernEditCreditScreen extends ModernBaseScreen {
         return switch (status) {
             case CreditManager.STATUS_PAID -> "Bezahlt";
             case CreditManager.STATUS_PARTIAL -> "Teilweise bezahlt";
+            case CreditManager.STATUS_CLOSED -> "Abgeschlossen";
             case CreditManager.STATUS_CANCELLED -> "Storniert";
             default -> "Offen";
         };

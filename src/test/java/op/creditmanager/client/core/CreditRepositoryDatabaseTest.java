@@ -258,8 +258,11 @@ class CreditRepositoryDatabaseTest {
         duplicate.setTimestamp(9_000_000L); duplicate.setRawText("TEST_DUPLICATE");
         assertTrue(DatabaseManager.getInstance().addPaylog(duplicate));
         TransactionEntry repeated = new TransactionEntry("same", "receiver", 5D);
-        repeated.setTimestamp(9_000_001L); repeated.setRawText("TEST_DUPLICATE");
+        repeated.setTimestamp(9_000_000L); repeated.setRawText("TEST_DUPLICATE");
         assertFalse(DatabaseManager.getInstance().addPaylog(repeated));
+        TransactionEntry distinctRapid = new TransactionEntry("same", "receiver", 5D);
+        distinctRapid.setTimestamp(9_000_001L); distinctRapid.setRawText("TEST_DUPLICATE");
+        assertTrue(DatabaseManager.getInstance().addPaylog(distinctRapid));
         assertTrue(DatabaseManager.getInstance().createBackup());
         try (var files = Files.list(FileManager.getDataDirectory().resolve("backups"))) {
             assertTrue(files.anyMatch(path -> path.getFileName().toString().matches("creditmanager_backup_.*\\.mv\\.db")));

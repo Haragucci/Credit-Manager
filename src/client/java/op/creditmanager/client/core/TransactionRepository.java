@@ -8,7 +8,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-/** Database-backed Paylog facade.  It intentionally never retains the full table in memory. */
 public final class TransactionRepository {
     private static final TransactionRepository INSTANCE = new TransactionRepository();
     private long revision;
@@ -35,7 +34,6 @@ public final class TransactionRepository {
         return saved;
     }
 
-    /** The default view is deliberately limited to the newest 500 rows. */
     public List<TransactionEntry> getAll() { return query("", 0, "", 500, 0); }
     public List<TransactionEntry> query(String player, int direction, String query, int limit, int offset) {
         return DatabaseManager.getInstance().queryPaylogs(player, direction, query, limit, offset);
@@ -43,14 +41,13 @@ public final class TransactionRepository {
     public DatabaseManager.QueryPage<TransactionEntry> queryPage(String player, int direction, String query, int limit, int offset) {
         return DatabaseManager.getInstance().queryPaylogPage(player, direction, query, limit, offset);
     }
+    public DatabaseManager.QueryPage<TransactionEntry> queryAvailableForDeal(String payer, String receiver, String query, int limit, int offset) {
+        return DatabaseManager.getInstance().queryAvailablePaylogs(payer, receiver, query, limit, offset);
+    }
     public Optional<TransactionEntry> find(UUID id) { return DatabaseManager.getInstance().findPaylog(id); }
     public synchronized long getRevision() { return revision; }
     public synchronized boolean isWritable() { return !recoveryRequired && DatabaseManager.getInstance().isHealthy(); }
-    /**
-     * Paylogs share the transactional database with deals. A repair must
-     * therefore reset that database as a whole, never silently discard the
-     * obsolete transactions.json compatibility file.
-     */
+
     public synchronized boolean resetCorruptTransactionsWithBackup() {
         if (!recoveryRequired) return false;
         if (!DatabaseManager.getInstance().resetCorruptDatabaseWithBackup()) return false;

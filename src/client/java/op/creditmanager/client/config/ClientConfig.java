@@ -8,7 +8,6 @@ public class ClientConfig {
 
     private int configVersion = CURRENT_VERSION;
     private boolean automaticPaylogDetection = true;
-    /** Separately controls whether stored, detected paylogs are booked to a matching deal. */
     private boolean autoLinkDetectedPaylogsToDeals;
     private boolean detectPaylogsInOverlay = true;
     private boolean showPaylogNotifications = false;

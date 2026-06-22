@@ -10,6 +10,8 @@ import op.creditmanager.client.core.CreditManager;
 import op.creditmanager.client.core.TransactionRepository;
 import op.creditmanager.client.gui.CenteredTextFieldWidget;
 import op.creditmanager.client.gui.modern.widget.ModernScrollArea;
+import op.creditmanager.client.gui.modern.query.ModernQueryDebouncer;
+import op.creditmanager.client.gui.modern.query.ModernQueryExecutor;
 import op.creditmanager.client.model.TransactionEntry;
 import op.creditmanager.client.storage.db.DatabaseManager;
 import op.creditmanager.client.util.FormatUtil;
@@ -18,7 +20,6 @@ import op.creditmanager.client.util.TimeUtil;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
-/** Database-paged paylog view. Query futures are never allowed to mutate this screen off-thread. */
 public final class ModernPaylogScreen extends ModernBaseScreen {
     private static final int PAGE_SIZE = DatabaseManager.PAGE_SIZE;
     private static final String[] DIRECTION_FILTERS = {"Alle", "Eingehend", "Ausgehend"};
@@ -36,6 +37,8 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
     private DatabaseManager.QueryPage<TransactionEntry> page = new DatabaseManager.QueryPage<>(List.of(), 0, 0, PAGE_SIZE);
     private String appliedKey = "";
     private String requestedFilterKey = "";
+    private final ModernQueryDebouncer debouncer = new ModernQueryDebouncer(300L);
+    private boolean forceQuery;
     private PendingQuery pending;
     private long requestSequence;
     private boolean disposed;
@@ -46,6 +49,7 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
     @Override protected void init() {
         super.init();
         disposed = false;
+        forceQuery = true;
         clearChildren();
         manualButtonWidth = 82;
         searchField = ModernUi.configureGuiTextField(new CenteredTextFieldWidget(textRenderer, contentX + 8, contentY + 4,
@@ -63,11 +67,12 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
             requestedFilterKey = filterKey;
             pageOffset = 0;
             scroll.reset();
-            schedule(filterKey);
+            debouncer.update(filterKey, System.currentTimeMillis());
         } else if (pending != null && pending.future().isDone()) {
             applyFinishedQuery(pending);
             pending = null;
-        } else if (!pageKey(filterKey).equals(appliedKey) && pending == null) {
+        } else if (pending == null && (forceQuery || debouncer.ready(System.currentTimeMillis()) || !pageKey(filterKey).equals(appliedKey) && !filterKey.equals(requestedFilterKey))) {
+            forceQuery = false;
             schedule(filterKey);
         }
     }
@@ -79,7 +84,7 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
         String query = searchField == null ? "" : searchField.getText().trim();
         int direction = directionIndex;
         int offset = pageOffset;
-        pending = new PendingQuery(sequence, key, CompletableFuture.supplyAsync(() -> TransactionRepository.getInstance().queryPage(player, direction, query, PAGE_SIZE, offset)));
+        pending = new PendingQuery(sequence, key, CompletableFuture.supplyAsync(() -> TransactionRepository.getInstance().queryPage(player, direction, query, PAGE_SIZE, offset), ModernQueryExecutor.get()));
         queryError = null;
     }
 
@@ -175,13 +180,14 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
         if (ModernUi.contains(click.x(), click.y(), contentX, toolbarY + 39, filterWidth, 24)) {
             directionIndex = (directionIndex + 1) % DIRECTION_FILTERS.length;
             requestedFilterKey = "";
+            forceQuery = true;
             return true;
         }
         if (ModernUi.contains(click.x(), click.y(), previousX, pageControlsY, pageButtonWidth, 23) && pending == null && pageOffset > 0) {
-            pageOffset = Math.max(0, pageOffset - PAGE_SIZE); schedule(filterKey()); return true;
+            pageOffset = Math.max(0, pageOffset - PAGE_SIZE); forceQuery = false; schedule(filterKey()); return true;
         }
         if (ModernUi.contains(click.x(), click.y(), nextX, pageControlsY, pageButtonWidth, 23) && pending == null && page.hasNext()) {
-            pageOffset += PAGE_SIZE; schedule(filterKey()); return true;
+            pageOffset += PAGE_SIZE; forceQuery = false; schedule(filterKey()); return true;
         }
         if (scroll.mouseClicked(click.x(), click.y(), click.button())) return true;
         if (ModernUi.contains(click.x(), click.y(), contentX, listY, contentWidth, listHeight)) {
@@ -210,7 +216,7 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
         scroll.reset();
         if (searchField != null) searchField.setText("");
         page = new DatabaseManager.QueryPage<>(List.of(), 0, 0, PAGE_SIZE);
-        appliedKey = ""; requestedFilterKey = ""; pending = null; queryError = null; pageOffset = 0;
+        appliedKey = ""; requestedFilterKey = ""; pending = null; queryError = null; pageOffset = 0; forceQuery = false;
         super.clearTransientState();
     }
 

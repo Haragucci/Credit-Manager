@@ -14,12 +14,18 @@ import op.creditmanager.client.gui.CenteredTextFieldWidget;
 import op.creditmanager.client.gui.ItemStackStorage;
 import op.creditmanager.client.gui.modern.widget.ModernScrollArea;
 import op.creditmanager.client.model.CreditEntry;
+import op.creditmanager.client.model.TransactionEntry;
 import op.creditmanager.client.util.FormatUtil;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 
 public class ModernPaymentScreen extends ModernBaseScreen {
 
@@ -33,6 +39,14 @@ public class ModernPaymentScreen extends ModernBaseScreen {
     private final ModernScrollArea formScroll = new ModernScrollArea();
 
     private TextFieldWidget amountField;
+    private TextFieldWidget dateField;
+    private TextFieldWidget timeField;
+    private TextFieldWidget noteField;
+    private TransactionEntry selectedPaylog;
+    private String amountDraft = "";
+    private String dateDraft = "";
+    private String timeDraft = "";
+    private String noteDraft = "";
     private boolean itemMode;
     private int fieldX;
     private int fieldWidth;
@@ -45,6 +59,7 @@ public class ModernPaymentScreen extends ModernBaseScreen {
     private String itemHint;
     private int formViewportY;
     private int formViewportHeight;
+    private int paylogButtonY;
 
     public ModernPaymentScreen(CreditManager manager, CreditEntry entry, boolean debts, Screen parent) {
         super(manager, parent, debts ? "Zahlung leisten" : "Zahlung empfangen", debts ? "debts" : "claims");
@@ -70,6 +85,16 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         amountField.setMaxLength(20);
         ModernUi.setGuiPlaceholder(amountField, itemMode ? "Gemeinsamer Wert aller Items" : "Betrag eingeben");
         addDrawableChild(amountField);
+        dateField = textField(modeY + 119, "TT.MM.JJJJ");
+        timeField = textField(modeY + 143, "HH:MM");
+        noteField = textField(modeY + 167, "Paylog-Notiz");
+        noteField.setMaxLength(256);
+        restoreDraft();
+    }
+
+    private TextFieldWidget textField(int y, String placeholder) {
+        TextFieldWidget field = ModernUi.configureGuiTextField(new CenteredTextFieldWidget(textRenderer, fieldX + 5, y, fieldWidth - 10, 19, Text.empty()));
+        field.setMaxLength(32); ModernUi.setGuiPlaceholder(field, placeholder); addDrawableChild(field); return field;
     }
 
     @Override
@@ -77,13 +102,14 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         renderShell(context, mouseX, mouseY);
         formViewportY = contentY;
         formViewportHeight = Math.max(28, contentHeight);
-        int formContentHeight = itemMode ? 204 : 122;
+        int formContentHeight = itemMode ? 204 : selectedPaylog == null ? 150 : 228;
         formScroll.setBounds(fieldX, formViewportY, fieldWidth, formViewportHeight, formContentHeight);
         formScroll.tick(mouseX, mouseY);
         modeY = formViewportY - formScroll.offset();
         int fieldY = modeY + 63;
         amountField.setPosition(fieldX + 5, fieldY);
         amountField.setVisible(fieldY + 19 > formViewportY && fieldY < formViewportY + formViewportHeight);
+        positionPaylogFields();
         context.enableScissor(fieldX, formViewportY, fieldX + fieldWidth, formViewportY + formViewportHeight);
         drawModeAndAmount(context, mouseX, mouseY);
 
@@ -112,8 +138,19 @@ public class ModernPaymentScreen extends ModernBaseScreen {
     }
 
     private void drawMoneyActions(DrawContext context, int mouseX, int mouseY) {
-        saveY = modeY + 96;
+        paylogButtonY = modeY + 88;
         int buttonWidth = Math.max(42, Math.min(132, (fieldWidth - 8) / 2));
+        ModernUi.button(context, textRenderer, fieldX, paylogButtonY, buttonWidth, 20, "Aus Paylog", ModernUi.theme().buttonNeutral,
+                ModernUi.contains(mouseX, mouseY, fieldX, paylogButtonY, buttonWidth, 20));
+        if (selectedPaylog != null) {
+            ModernUi.drawTruncated(context, textRenderer, "Paylog: " + selectedPaylog.getFromPlayer() + " → " + selectedPaylog.getToPlayer(), fieldX, modeY + 113, fieldWidth, ModernUi.theme().muted);
+            ModernUi.card(context, fieldX, modeY + 119, fieldWidth, 19, false);
+            ModernUi.card(context, fieldX, modeY + 143, fieldWidth, 19, false);
+            ModernUi.card(context, fieldX, modeY + 167, fieldWidth, 19, false);
+            saveY = modeY + 198;
+        } else {
+            saveY = modeY + 116;
+        }
         ModernUi.button(context, textRenderer, fieldX, saveY, buttonWidth, 23, "Zahlung speichern", ModernUi.theme().buttonPrimary,
                 ModernUi.contains(mouseX, mouseY, fieldX, saveY, buttonWidth, 23));
         ModernUi.button(context, textRenderer, fieldX + buttonWidth + 8, saveY, buttonWidth, 23, "Abbrechen", ModernUi.theme().buttonNeutral,
@@ -188,6 +225,11 @@ public class ModernPaymentScreen extends ModernBaseScreen {
             return true;
         }
 
+        if (!itemMode && ModernUi.contains(click.x(), click.y(), fieldX, paylogButtonY, Math.max(42, Math.min(132, (fieldWidth - 8) / 2)), 20)) {
+            open(new ModernPaylogPaymentSelectionScreen(manager, entry, this));
+            return true;
+        }
+
         int buttonWidth = Math.max(42, Math.min(132, (fieldWidth - 8) / 2));
         int itemButtonHeight = itemMode ? 20 : 23;
         if (ModernUi.contains(click.x(), click.y(), fieldX, saveY, buttonWidth, itemButtonHeight)) {
@@ -252,6 +294,8 @@ public class ModernPaymentScreen extends ModernBaseScreen {
             Payment saved;
             if (itemMode) {
                 saved = saveSelectedItems(amount);
+            } else if (selectedPaylog != null) {
+                saved = manager.addPaylogPayment(entry.getId(), selectedPaylog.getId(), amount, parseSelectedTimestamp(), noteField.getText()).payment();
             } else {
                 saved = manager.addMoneyPayment(entry.getId(), currentPlayerName(), amount);
             }
@@ -263,6 +307,8 @@ public class ModernPaymentScreen extends ModernBaseScreen {
             }
             closeToParent();
         } catch (CreditManager.CreditException exception) {
+            toastError(exception.getMessage());
+        } catch (IllegalArgumentException exception) {
             toastError(exception.getMessage());
         }
     }
@@ -295,14 +341,54 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         return client.player == null ? null : client.player.getInventory();
     }
 
+    public void usePaylog(TransactionEntry paylog) {
+        selectedPaylog = paylog;
+        amountDraft = String.valueOf(Math.min(entry.getRemainingAmount(), paylog.getRemainingAmount()));
+        var time = java.time.Instant.ofEpochMilli(paylog.getTimestamp()).atZone(ZoneId.systemDefault());
+        dateDraft = DateTimeFormatter.ofPattern("dd.MM.uuuu").format(time);
+        timeDraft = DateTimeFormatter.ofPattern("HH:mm").format(time);
+        noteDraft = paylog.getRawText() == null ? "" : paylog.getRawText();
+        restoreDraft();
+    }
+
+    private void restoreDraft() {
+        if (amountField != null) amountField.setText(amountDraft);
+        if (dateField != null) dateField.setText(dateDraft);
+        if (timeField != null) timeField.setText(timeDraft);
+        if (noteField != null) noteField.setText(noteDraft);
+    }
+
+    private void positionPaylogFields() {
+        if (dateField == null) return;
+        boolean visible = !itemMode && selectedPaylog != null;
+        dateField.setPosition(fieldX + 5, modeY + 119); timeField.setPosition(fieldX + 5, modeY + 143); noteField.setPosition(fieldX + 5, modeY + 167);
+        dateField.setVisible(visible); timeField.setVisible(visible); noteField.setVisible(visible);
+    }
+
+    private long parseSelectedTimestamp() {
+        try {
+            LocalDate date = dateField.getText().isBlank() ? LocalDate.now() : parseDate(dateField.getText().trim());
+            LocalTime time = timeField.getText().isBlank() ? LocalTime.now().withSecond(0).withNano(0) : LocalTime.parse(timeField.getText().trim(), DateTimeFormatter.ofPattern("H:mm"));
+            return date.atTime(time).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+        } catch (DateTimeParseException exception) { throw new IllegalArgumentException("Ungültiges Datum oder Uhrzeit"); }
+    }
+
+    private LocalDate parseDate(String value) {
+        try { return LocalDate.parse(value); }
+        catch (DateTimeParseException ignored) { return LocalDate.parse(value, DateTimeFormatter.ofPattern("dd.MM.uuuu")); }
+    }
+
     @Override
     protected void clearTransientState() {
+        if (amountField != null) amountDraft = amountField.getText();
+        if (dateField != null) dateDraft = dateField.getText();
+        if (timeField != null) timeDraft = timeField.getText();
+        if (noteField != null) noteDraft = noteField.getText();
         itemMode = false;
         itemHint = null;
         inventoryScrollRows = 0;
         formScroll.reset();
         selectedInventorySlots.clear();
-        if (amountField != null) amountField.setText("");
         super.clearTransientState();
     }
 }

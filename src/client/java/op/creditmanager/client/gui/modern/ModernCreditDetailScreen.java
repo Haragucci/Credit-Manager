@@ -65,10 +65,10 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
         ModernUi.drawGuiTextRightAligned(context, textRenderer, remaining, contentX + contentWidth - 14, topY + 44,
                 debts ? ModernUi.theme().danger : ModernUi.theme().success);
 
-        String status = statusLabel(entry.getStatus());
+        String status = (entry.isArchived() ? "Archiviert · " : "") + statusLabel(entry.getStatus());
 
         ModernUi.drawGuiTextRightAligned(context, textRenderer, status, contentX + contentWidth - 14, topY + 58,
-                statusColor(entry.getStatus()));
+                entry.isArchived() ? ModernUi.theme().muted : statusColor(entry.getStatus()));
 
         if (entry.getDueDate() != null) {
             ModernUi.drawTruncated(context, textRenderer, "Fällig: " + TimeUtil.formatDate(entry.getDueDate()),
@@ -80,8 +80,8 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
         actionWidth = Math.max(48, (contentWidth - 16) / 3);
 
         boolean finished = CreditManager.STATUS_PAID.equals(entry.getStatus())
-                || CreditManager.STATUS_CANCELLED.equals(entry.getStatus());
-        boolean canReactivate = entry.isArchived() || CreditManager.STATUS_CANCELLED.equals(entry.getStatus());
+                || CreditManager.STATUS_CLOSED.equals(entry.getStatus()) || CreditManager.STATUS_CANCELLED.equals(entry.getStatus());
+        boolean canReactivate = entry.isArchived() || CreditManager.STATUS_CLOSED.equals(entry.getStatus()) || CreditManager.STATUS_CANCELLED.equals(entry.getStatus());
 
         ModernUi.button(context, textRenderer, contentX, actionY, actionWidth, 23,
                 finished ? canReactivate ? "Reaktivieren" : "Abgeschlossen" : "Zahlung",
@@ -93,7 +93,7 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
                 ModernUi.contains(mouseX, mouseY, contentX + actionWidth + 8, actionY, actionWidth, 23));
 
         ModernUi.button(context, textRenderer, contentX + (actionWidth + 8) * 2, actionY, actionWidth, 23,
-                pendingDealAction == DealAction.ARCHIVE ? "Bestätigen" : "Archivieren",
+                entry.isArchived() ? "Archiviert" : pendingDealAction == DealAction.ARCHIVE ? "Bestätigen" : "Archivieren",
                 ModernUi.theme().buttonNeutral,
                 ModernUi.contains(mouseX, mouseY, contentX + (actionWidth + 8) * 2, actionY, actionWidth, 23));
 
@@ -171,7 +171,7 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
         int actionY = topY + 92;
         if (click.button() == 0) {
             if (ModernUi.contains(click.x(), click.y(), contentX, actionY, actionWidth, 23)) {
-                if (entry.isArchived() || CreditManager.STATUS_CANCELLED.equals(entry.getStatus())) {
+                if (entry.isArchived() || CreditManager.STATUS_CLOSED.equals(entry.getStatus()) || CreditManager.STATUS_CANCELLED.equals(entry.getStatus())) {
                     reactivateDeal();
                 } else if (CreditManager.STATUS_PAID.equals(entry.getStatus())) {
                     toastInfo("Zahlungen können in der Liste per Rechtsklick gelöscht werden.");
@@ -181,7 +181,7 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
                 return true;
             }
             if (ModernUi.contains(click.x(), click.y(), contentX + actionWidth + 8, actionY, actionWidth, 23)) {
-                if (CreditManager.STATUS_PAID.equals(entry.getStatus()) || CreditManager.STATUS_CANCELLED.equals(entry.getStatus())) {
+                if (CreditManager.STATUS_PAID.equals(entry.getStatus()) || CreditManager.STATUS_CLOSED.equals(entry.getStatus()) || CreditManager.STATUS_CANCELLED.equals(entry.getStatus())) {
                     open(new ModernEditCreditScreen(manager, entry, debts, this));
                 } else {
                     closeDeal();
@@ -189,7 +189,7 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
                 return true;
             }
             if (ModernUi.contains(click.x(), click.y(), contentX + (actionWidth + 8) * 2, actionY, actionWidth, 23)) {
-                archiveDeal();
+                if (!entry.isArchived()) archiveDeal();
                 return true;
             }
             if (ModernUi.contains(click.x(), click.y(), contentX, paymentListY, contentWidth, paymentListHeight)) {
@@ -238,7 +238,7 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
         try {
             manager.closeCredit(entry.getId());
             pendingDealAction = null;
-            toastSuccess("Deal abgeschlossen und archiviert.");
+            toastSuccess("Deal abgeschlossen.");
         } catch (CreditManager.CreditException exception) {
             pendingDealAction = null;
             toastError(exception.getMessage());
@@ -290,6 +290,7 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
             case CreditManager.STATUS_PAID -> ModernUi.theme().success;
             case CreditManager.STATUS_PARTIAL -> ModernUi.theme().warning;
             case CreditManager.STATUS_CANCELLED -> ModernUi.theme().muted;
+            case CreditManager.STATUS_CLOSED -> ModernUi.theme().warning;
             default -> ModernUi.theme().danger;
         };
     }
@@ -298,7 +299,8 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
         return switch (status) {
             case CreditManager.STATUS_PAID -> "Bezahlt";
             case CreditManager.STATUS_PARTIAL -> "Teilweise bezahlt";
-            case CreditManager.STATUS_CANCELLED -> "Abgeschlossen";
+            case CreditManager.STATUS_CANCELLED -> "Storniert";
+            case CreditManager.STATUS_CLOSED -> "Abgeschlossen";
             default -> "Offen";
         };
     }

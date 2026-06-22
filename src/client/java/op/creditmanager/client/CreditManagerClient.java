@@ -6,7 +6,6 @@ import op.creditmanager.client.core.CreditRepository;
 import op.creditmanager.client.core.PaymentDetector;
 import op.creditmanager.client.core.TransactionRepository;
 import op.creditmanager.client.core.CreditEventRepository;
-import op.creditmanager.client.devtools.TestDataChatHook;
 import op.creditmanager.client.storage.FileManager;
 import op.creditmanager.client.storage.db.DatabaseManager;
 import op.creditmanager.client.storage.db.DatabaseHealthChecker;
@@ -92,10 +91,11 @@ public class CreditManagerClient implements ClientModInitializer {
 	private static void registerDevHooks() {
 		if (TEST_DATA_PROPERTY == "") return;
 		try {
-			TestDataChatHook.register(creditManager);
+			Class<?> hook = Class.forName("op.creditmanager.client.devtools.TestDataChatHook");
+			hook.getMethod("register", CreditManager.class).invoke(null, creditManager);
 			LOGGER.warn("[CreditManager] TestDataChatHook aktiv. @TestData bleibt lokal.");
 		} catch (Throwable error) {
-			LOGGER.warn("[CreditManager] TestDataChatHook konnte nicht registriert werden.", error);
+			LOGGER.debug("[CreditManager] Optionaler TestDataChatHook ist nicht verfügbar.", error);
 		}
 	}
 }

@@ -12,6 +12,7 @@ public final class SearchNormalizer {
         String normalized = Normalizer.normalize(value, Normalizer.Form.NFD)
                 .replaceAll("\\p{M}", "")
                 .toLowerCase(Locale.ROOT)
+                .replace("\u00DF", "ss")
                 .replace("ß", "ss")
                 .replaceAll("[\\s_-]+", " ")
                 .replaceAll("[^a-z0-9 ]", "")

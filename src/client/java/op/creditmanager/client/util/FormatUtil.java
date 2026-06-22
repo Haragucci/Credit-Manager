@@ -87,6 +87,7 @@ public class FormatUtil {
             case "OPEN" -> "§4§lOFFEN";
             case "PARTIAL" -> "§e§lZAHLUNG LÄUFT";
             case "PAID" -> "§a§lBEZAHLT";
+            case "CLOSED" -> "§8§lABGESCHLOSSEN";
             case "CANCELLED" -> "§8§lSTORNIERT";
             default -> "§7" + status;
         };

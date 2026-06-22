@@ -4,6 +4,7 @@ import op.creditmanager.client.CreditManagerClient;
 import op.creditmanager.client.config.ClientConfigManager;
 import op.creditmanager.client.gui.modern.toast.ModernToastManager;
 import op.creditmanager.client.model.TransactionEntry;
+import op.creditmanager.client.search.SearchNormalizer;
 import op.creditmanager.client.util.FormatUtil;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
@@ -73,7 +74,7 @@ public class PaymentDetector {
     }
 
     private void transaktioneintragen(String vonSpieler, String anSpieler, double betrag, String rawText) {
-        String schlüssel = vonSpieler + "->" + anSpieler + ":" + betrag;
+        String schlüssel = vonSpieler + "->" + anSpieler + ":" + betrag + ':' + SearchNormalizer.normalize(rawText);
         long jetzt = System.currentTimeMillis();
 
         if (kürzlicheTransaktionen.containsKey(schlüssel)

@@ -30,7 +30,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
-/** Fully automatic, lossless import of the pre-database JSON format. */
 public final class LegacyJsonMigrationService {
     private static final LegacyJsonMigrationService INSTANCE = new LegacyJsonMigrationService();
     private static final Gson GSON = new Gson();
@@ -38,11 +37,6 @@ public final class LegacyJsonMigrationService {
     private LegacyJsonMigrationService() { }
     public static LegacyJsonMigrationService getInstance() { return INSTANCE; }
 
-    /**
-     * Imports legacy JSON found at startup. Valid rows are written as normal domain data;
-     * malformed source values are retained verbatim in legacy_records and the
-     * original JSON is archived only after the transaction committed.
-     */
     public synchronized void inspectAtStartup() {
         DatabaseManager database = DatabaseManager.getInstance();
         database.initialize();
@@ -67,7 +61,6 @@ public final class LegacyJsonMigrationService {
                 result.credits(), result.payments(), result.events(), result.paylogs(), result.preservedRecords());
     }
 
-    /** Manual migration and repair screens no longer gate writable state. */
     public boolean isPending() { return false; }
 
     private AutomaticPayload readPayload() {
@@ -86,7 +79,6 @@ public final class LegacyJsonMigrationService {
 
         for (Path backup : paymentBackupFiles()) readPayments(readObject(backup, preserved), payments, preserved, false, backup.getFileName().toString());
         readCredits(creditSource, credits, payments, preserved);
-        // payments.json is authoritative when a UUID also occurs in a backup.
         readPayments(paymentSource, payments, preserved, true, "payments.json");
         readEvents(eventSource, events, preserved);
         readPaylogs(paylogSource, paylogs, preserved);
@@ -135,7 +127,6 @@ public final class LegacyJsonMigrationService {
         }
     }
 
-    /** Keeps a single UUID deterministic while retaining divergent source rows for audit/recovery. */
     private void mergePayment(Map<UUID, Payment> payments, Payment incoming, String originalId, String raw,
                               List<DatabaseManager.LegacyRecord> preserved, boolean incomingWins, String sourceName) {
         Payment existing = payments.get(incoming.getId());
@@ -247,11 +238,6 @@ public final class LegacyJsonMigrationService {
         }
     }
 
-    /**
-     * Old JSON sometimes stored only paidAmount while the individual payment
-     * list was missing. Preserve that information as an explicit migration
-     * payment so the database never starts with contradictory derived state.
-     */
     private void reconcileCreditPaymentState(Map<UUID, CreditEntry> credits, Map<UUID, Payment> payments,
                                              List<DatabaseManager.LegacyRecord> preserved) {
         for (CreditEntry credit : credits.values()) {

@@ -21,7 +21,6 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** In-memory query cache backed exclusively by the local transactional database. */
 public class CreditRepository {
     private final Map<UUID, CreditEntry> credits = new ConcurrentHashMap<>();
     private final Map<String, PlayerCreditData> players = new ConcurrentHashMap<>();
@@ -51,8 +50,6 @@ public class CreditRepository {
                     continue;
                 }
                 CreditEntry credit = credits.get(payment.getCreditId());
-                // Legacy imports can legitimately retain a historical payment
-                // direction that differs from a later reconstructed deal.
                 if (payment.getFromPlayer() == null || payment.getFromPlayer().isBlank()) payment.setFromPlayer(credit.getDebtor());
                 if (payment.getToPlayer() == null || payment.getToPlayer().isBlank()) payment.setToPlayer(credit.getCreditor());
                 payments.put(payment.getId(), payment);
@@ -129,11 +126,7 @@ public class CreditRepository {
     }
     public synchronized boolean ignoreRecovery(UUID token) { RecoveryRecord record = recoveryRecords.stream().filter(value -> value.token().equals(token)).findFirst().orElse(null); if (record == null) return false; recoveryRecords.remove(record); return persistRecoveredWhenComplete(record); }
     public synchronized boolean createRecoveryBackup(UUID token) { return recoveryRecords.stream().anyMatch(value -> value.token().equals(token)) && DatabaseManager.getInstance().createBackup(); }
-    /**
-     * Repairs every record for which a deterministic, non-destructive default
-     * exists. If the embedded database itself cannot be read, it is backed up
-     * and rebuilt instead of leaving the recovery action as a no-op.
-     */
+
     public synchronized int repairWithSafeDefaults() {
         if (recoveryRequired && recoveryRecords.isEmpty()) {
             if (!DatabaseManager.getInstance().resetCorruptDatabaseWithBackup()) return 0;

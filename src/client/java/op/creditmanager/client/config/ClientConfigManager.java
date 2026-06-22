@@ -151,7 +151,6 @@ public final class ClientConfigManager {
         getConfig();
     }
 
-    /** Explicit user action for a corrupt configuration; the original file is kept as a backup. */
     public static synchronized boolean resetCorruptConfigWithDefaults() {
         getConfig();
         if (!recoveryRequired) return false;

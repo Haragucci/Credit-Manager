@@ -14,10 +14,12 @@ import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.UUID;
+import java.sql.DriverManager;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PaylogLinkingDatabaseTest {
@@ -65,6 +67,54 @@ class PaylogLinkingDatabaseTest {
     }
 
     @Test
+    void paylogDedupeKeepsDifferentRapidEventsButRejectsAnExactDuplicate() throws Exception {
+        manager();
+        TransactionEntry first = new TransactionEntry("debtor", "creditor", 10D);
+        first.setTimestamp(1_000L); first.setRawText("payment event one"); first.setSource("DETECTED");
+        TransactionEntry exactDuplicate = new TransactionEntry("debtor", "creditor", 10D);
+        exactDuplicate.setTimestamp(1_000L); exactDuplicate.setRawText("payment event one"); exactDuplicate.setSource("DETECTED");
+        TransactionEntry distinctRapid = new TransactionEntry("debtor", "creditor", 10D);
+        distinctRapid.setTimestamp(1_001L); distinctRapid.setRawText("payment event two"); distinctRapid.setSource("DETECTED");
+        assertTrue(TransactionRepository.getInstance().add(first));
+        assertFalse(TransactionRepository.getInstance().add(exactDuplicate));
+        assertTrue(TransactionRepository.getInstance().add(distinctRapid));
+    }
+
+    @Test
+    void paylogSearchCombinesNormalizedSourceAmountAndLinkStateTokens() throws Exception {
+        CreditManager manager = manager();
+        CreditEntry credit = manager.createCredit("creditor", "debtor", 2_000D, null, "search", null);
+        TransactionEntry paylog = new TransactionEntry("debtor", "creditor", 1_000D);
+        paylog.setTimestamp(1_700_000_000_000L);
+        paylog.setRawText("manuelle Testzahlung mit Notiz");
+        paylog.setSource("MANUAL");
+        assertTrue(TransactionRepository.getInstance().add(paylog));
+        assertTrue(manager.addPaylogPayment(credit.getId(), paylog.getId(), 500D, paylog.getTimestamp(), null).linked());
+
+        var result = op.creditmanager.client.storage.db.DatabaseManager.getInstance()
+                .queryPaylogPage("debtor", 0, "manuell teilweise 1k testzahlung", 500, 0);
+        assertEquals(1, result.entries().size());
+        assertEquals(paylog.getId(), result.entries().getFirst().getId());
+    }
+
+    @Test
+    void selectedPaylogPaymentRetainsEditableTimestampAndNote() throws Exception {
+        CreditManager manager = manager();
+        CreditEntry credit = manager.createCredit("creditor", "debtor", 100D, null, "selected", null);
+        TransactionEntry paylog = paylog(80D);
+        long timestamp = 1_700_000_000_000L;
+        CreditManager.PaylogLinkResult result = manager.addPaylogPayment(credit.getId(), paylog.getId(), 40D, timestamp, "vom Nutzer angepasst");
+        assertTrue(result.linked());
+        assertEquals(40D, result.payment().getAmount());
+        assertEquals(timestamp, result.payment().getTimestamp());
+        assertEquals("vom Nutzer angepasst", result.payment().getNote());
+        assertEquals("PAYLOG_SELECTED", result.payment().getSource());
+        CreditRepository reload = new CreditRepository(); reload.load();
+        assertEquals("vom Nutzer angepasst", reload.getPaymentsByCreditId(credit.getId()).getFirst().getNote());
+        assertEquals(40D, TransactionRepository.getInstance().find(paylog.getId()).orElseThrow().getRemainingAmount());
+    }
+
+    @Test
     void manualLinkCapsOverpayAndPaymentDeletionReopensAndReleasesThePaylog() throws Exception {
         CreditManager manager = manager();
         CreditEntry credit = manager.createCredit("creditor", "debtor", 50D, null, "single", null);
@@ -89,15 +139,80 @@ class PaylogLinkingDatabaseTest {
         assertEquals(80D, TransactionRepository.getInstance().find(paylog.getId()).orElseThrow().getRemainingAmount());
 
         manager.closeCredit(credit.getId());
-        assertTrue(credit.isArchived());
-        assertEquals(CreditManager.STATUS_CANCELLED, credit.getStatus());
+        assertFalse(credit.isArchived());
+        assertEquals(CreditManager.STATUS_CLOSED, credit.getStatus());
         CreditRepository archivedReload = new CreditRepository();
         archivedReload.load();
-        assertTrue(archivedReload.findCreditById(credit.getId()).orElseThrow().isArchived());
-        assertEquals(CreditManager.STATUS_CANCELLED, archivedReload.findCreditById(credit.getId()).orElseThrow().getStatus());
+        assertFalse(archivedReload.findCreditById(credit.getId()).orElseThrow().isArchived());
+        assertEquals(CreditManager.STATUS_CLOSED, archivedReload.findCreditById(credit.getId()).orElseThrow().getStatus());
         manager.reactivateCredit(credit.getId());
         assertFalse(credit.isArchived());
         assertEquals(CreditManager.STATUS_OPEN, credit.getStatus());
+    }
+
+    @Test
+    void historyHidesArchivesByDefaultKeepsThemLastAndSearchesNormalizedFields() throws Exception {
+        CreditManager manager = manager();
+        CreditEntry visible = manager.createCredit("creditor", "spieler_name", 1_000D, null, "visible", "sichtbare Notiz");
+        manager.addMoneyPayment(visible.getId(), "spieler_name", 1_000D);
+        CreditEntry closed = manager.createCredit("creditor", "other_player", 50D, null, "closed", null);
+        manager.closeCredit(closed.getId());
+        CreditEntry archived = manager.createCredit("creditor", "archived_player", 20D, null, "archive", null);
+        manager.addMoneyPayment(archived.getId(), "archived_player", 20D);
+        manager.archiveCredit(archived.getId());
+        assertEquals(CreditManager.STATUS_PAID, archived.getStatus());
+
+        var defaultHistory = op.creditmanager.client.storage.db.DatabaseManager.getInstance()
+                .queryDealHistoryPage("creditor", "spieler name", false, op.creditmanager.client.storage.db.DatabaseManager.DealHistorySort.NEWEST, 500, 0);
+        assertEquals(1, defaultHistory.entries().size());
+        assertEquals(visible.getId(), defaultHistory.entries().getFirst().getId());
+
+        var allHistory = op.creditmanager.client.storage.db.DatabaseManager.getInstance()
+                .queryDealHistoryPage("creditor", "", true, op.creditmanager.client.storage.db.DatabaseManager.DealHistorySort.AMOUNT_ASC, 500, 0);
+        assertTrue(allHistory.entries().getLast().isArchived());
+        assertEquals(1, op.creditmanager.client.storage.db.DatabaseManager.getInstance()
+                .queryDealHistoryPage("creditor", "abgeschlossen", false, op.creditmanager.client.storage.db.DatabaseManager.DealHistorySort.NEWEST, 500, 0).entries().size());
+        assertEquals(1, op.creditmanager.client.storage.db.DatabaseManager.getInstance()
+                .queryDealHistoryPage("creditor", "1k", false, op.creditmanager.client.storage.db.DatabaseManager.DealHistorySort.NEWEST, 500, 0).entries().size());
+        assertEquals(1, op.creditmanager.client.storage.db.DatabaseManager.getInstance()
+                .queryDealHistoryPage("creditor", "1000", false, op.creditmanager.client.storage.db.DatabaseManager.DealHistorySort.NEWEST, 500, 0).entries().size());
+        assertEquals(1, op.creditmanager.client.storage.db.DatabaseManager.getInstance()
+                .queryDealHistoryPage("creditor", "1.000,00", false, op.creditmanager.client.storage.db.DatabaseManager.DealHistorySort.NEWEST, 500, 0).entries().size());
+        assertEquals(1, op.creditmanager.client.storage.db.DatabaseManager.getInstance()
+                .queryDealHistoryPage("creditor", visible.getId().toString().substring(0, 8), false, op.creditmanager.client.storage.db.DatabaseManager.DealHistorySort.NEWEST, 500, 0).entries().size());
+        assertEquals(1, op.creditmanager.client.storage.db.DatabaseManager.getInstance()
+                .queryDealHistoryPage("creditor", "archiviert bezahlt", true, op.creditmanager.client.storage.db.DatabaseManager.DealHistorySort.NEWEST, 500, 0).entries().size());
+    }
+
+    @Test
+    void coreRejectsInvalidNamesAmountsLabelsAndDueDates() throws Exception {
+        CreditManager manager = manager();
+        assertThrows(CreditManager.CreditException.class,
+                () -> manager.createCredit("creditor!", "debtor", 1D, null, null, null));
+        assertThrows(CreditManager.CreditException.class,
+                () -> manager.createCredit("creditor", "debtor", Double.POSITIVE_INFINITY, null, null, null));
+        assertThrows(CreditManager.CreditException.class,
+                () -> manager.createCredit("creditor", "debtor", 1D, null, "x".repeat(129), null));
+        assertThrows(CreditManager.CreditException.class,
+                () -> manager.createCredit("creditor", "debtor", 1D, System.currentTimeMillis() + 3_155_846_400_000L, null, null));
+    }
+
+    @Test
+    void healthCheckFindsBrokenPaylogLinks() throws Exception {
+        CreditManager manager = manager();
+        CreditEntry credit = manager.createCredit("creditor", "debtor", 100D, null, "health", null);
+        TransactionEntry paylog = paylog(10D);
+        String jdbc = "jdbc:h2:file:" + FileManager.getDatabaseFile().toAbsolutePath() + ";MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;AUTO_SERVER=FALSE";
+        try (var connection = DriverManager.getConnection(jdbc); var statement = connection.createStatement()) {
+            statement.executeUpdate("INSERT INTO payments (id, credit_id, from_player, to_player, amount, items_json, created_at, source, paylog_id, revision) VALUES ('" + UUID.randomUUID() + "', '" + credit.getId() + "', 'wrong', 'direction', 20, '[]', 1, 'MANUELL', '" + paylog.getId() + "', 0)");
+            statement.executeUpdate("INSERT INTO payments (id, credit_id, from_player, to_player, amount, items_json, created_at, source, paylog_id, revision) VALUES ('" + UUID.randomUUID() + "', '" + credit.getId() + "', 'debtor', 'creditor', 1, '[]', 1, 'PAYLOG_SELECTED', '" + UUID.randomUUID() + "', 0)");
+        }
+        var findings = op.creditmanager.client.storage.db.DatabaseManager.getInstance().runHealthCheck();
+        assertTrue(findings.stream().anyMatch(record -> "PAYLOG_LINK_DIRECTION".equals(record.type())));
+        assertTrue(findings.stream().anyMatch(record -> "PAYLOG_LINK_SOURCE".equals(record.type())));
+        assertTrue(findings.stream().anyMatch(record -> "PAYLOG_LINK_AMOUNT".equals(record.type())));
+        assertTrue(findings.stream().anyMatch(record -> "PAYLOG_LINK_ORPHAN".equals(record.type())));
+        assertTrue(findings.stream().anyMatch(record -> "PAYLOG_LINK_OVERBOOKED".equals(record.type())));
     }
 
     private CreditManager manager() throws Exception {

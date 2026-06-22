@@ -8,9 +8,9 @@ import op.creditmanager.client.model.CreditEventEntry;
 import op.creditmanager.client.model.CreditEventType;
 import op.creditmanager.client.model.Payment;
 import op.creditmanager.client.model.TransactionEntry;
-import op.creditmanager.client.search.SearchNormalizer;
+import op.creditmanager.client.search.DealSearchText;
+import op.creditmanager.client.search.PaylogSearchText;
 import op.creditmanager.client.storage.FileManager;
-import op.creditmanager.client.util.TimeUtil;
 
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
@@ -37,12 +37,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.Optional;
 
-/**
- * Owns the embedded H2 schema and all durable CreditManager state. Connections
- * are short-lived; every domain change is committed or rolled back atomically.
- */
 public final class DatabaseManager {
-    public static final int SCHEMA_VERSION = 5;
+    public static final int SCHEMA_VERSION = 6;
     public static final int PAGE_SIZE = 500;
     private static final DatabaseManager INSTANCE = new DatabaseManager();
     private static final Gson GSON = new Gson();
@@ -56,7 +52,6 @@ public final class DatabaseManager {
     private DatabaseManager() { }
     public static DatabaseManager getInstance() { return INSTANCE; }
 
-    /** Creates or upgrades the schema. A newer unknown schema is opened read-only. */
     public synchronized void initialize() {
         FileManager.initialize();
         Path requestedPath = FileManager.getDatabaseFile().toAbsolutePath();
@@ -78,6 +73,8 @@ public final class DatabaseManager {
                         CreditManagerClient.LOGGER.error("CreditManager database schema {} is newer than supported {}. Writes are locked.", installed, SCHEMA_VERSION);
                     } else {
                         for (int version = installed + 1; version <= SCHEMA_VERSION; version++) applyMigration(connection, version);
+                        backfillCreditSearchText(connection);
+                        backfillPaylogSearchText(connection);
                         if (metadata(connection, "data_revision") == null) putMetadata(connection, "data_revision", "0");
                         putMetadata(connection, "schema_version", String.valueOf(SCHEMA_VERSION));
                         connection.commit();
@@ -134,6 +131,11 @@ public final class DatabaseManager {
                     statement.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS paylog_id VARCHAR(36)");
                     statement.execute("CREATE INDEX IF NOT EXISTS idx_payments_paylog ON payments(paylog_id)");
                 }
+                case 6 -> {
+                    statement.execute("ALTER TABLE credits ADD COLUMN IF NOT EXISTS search_text CLOB");
+                    statement.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS note CLOB");
+                    statement.execute("CREATE INDEX IF NOT EXISTS idx_credits_archived ON credits(archived, status)");
+                }
                 default -> throw new SQLException("Unknown CreditManager schema migration " + version);
             }
         }
@@ -145,8 +147,8 @@ public final class DatabaseManager {
     }
 
     private void createInitialSchema(Statement statement) throws SQLException {
-        statement.execute("CREATE TABLE IF NOT EXISTS credits (id VARCHAR(36) PRIMARY KEY, deal_name VARCHAR(256) NOT NULL, creditor VARCHAR(64) NOT NULL, debtor VARCHAR(64) NOT NULL, amount DOUBLE PRECISION NOT NULL, paid_amount DOUBLE PRECISION NOT NULL, created_at BIGINT NOT NULL, due_date BIGINT, status VARCHAR(32) NOT NULL, note CLOB, completed_at BIGINT, archived BOOLEAN NOT NULL DEFAULT FALSE, revision BIGINT NOT NULL)");
-        statement.execute("CREATE TABLE IF NOT EXISTS payments (id VARCHAR(36) PRIMARY KEY, credit_id VARCHAR(36) NOT NULL, from_player VARCHAR(64), to_player VARCHAR(64), amount DOUBLE PRECISION NOT NULL, items_json CLOB, item_nbt CLOB, item_nbt_entries CLOB, created_at BIGINT NOT NULL, source VARCHAR(64), paylog_id VARCHAR(36), revision BIGINT NOT NULL, CONSTRAINT fk_payment_credit FOREIGN KEY (credit_id) REFERENCES credits(id) ON DELETE CASCADE)");
+        statement.execute("CREATE TABLE IF NOT EXISTS credits (id VARCHAR(36) PRIMARY KEY, deal_name VARCHAR(256) NOT NULL, creditor VARCHAR(64) NOT NULL, debtor VARCHAR(64) NOT NULL, amount DOUBLE PRECISION NOT NULL, paid_amount DOUBLE PRECISION NOT NULL, created_at BIGINT NOT NULL, due_date BIGINT, status VARCHAR(32) NOT NULL, note CLOB, search_text CLOB, completed_at BIGINT, archived BOOLEAN NOT NULL DEFAULT FALSE, revision BIGINT NOT NULL)");
+        statement.execute("CREATE TABLE IF NOT EXISTS payments (id VARCHAR(36) PRIMARY KEY, credit_id VARCHAR(36) NOT NULL, from_player VARCHAR(64), to_player VARCHAR(64), amount DOUBLE PRECISION NOT NULL, items_json CLOB, item_nbt CLOB, item_nbt_entries CLOB, created_at BIGINT NOT NULL, source VARCHAR(64), paylog_id VARCHAR(36), note CLOB, revision BIGINT NOT NULL, CONSTRAINT fk_payment_credit FOREIGN KEY (credit_id) REFERENCES credits(id) ON DELETE CASCADE)");
         statement.execute("CREATE TABLE IF NOT EXISTS credit_events (id VARCHAR(36) PRIMARY KEY, credit_id VARCHAR(36) NOT NULL, event_type VARCHAR(64) NOT NULL, amount DOUBLE PRECISION NOT NULL, paid_after DOUBLE PRECISION NOT NULL, remaining_after DOUBLE PRECISION NOT NULL, created_at BIGINT NOT NULL, deal_name VARCHAR(256), creditor VARCHAR(64), debtor VARCHAR(64), note CLOB, amount_before DOUBLE PRECISION NOT NULL, amount_after DOUBLE PRECISION NOT NULL, actor VARCHAR(64), source VARCHAR(64), item_payment BOOLEAN NOT NULL, revision BIGINT NOT NULL, CONSTRAINT fk_event_credit FOREIGN KEY (credit_id) REFERENCES credits(id) ON DELETE CASCADE)");
         statement.execute("CREATE TABLE IF NOT EXISTS paylogs (id VARCHAR(36) PRIMARY KEY, payer VARCHAR(64) NOT NULL, receiver VARCHAR(64) NOT NULL, amount DOUBLE PRECISION NOT NULL, raw_text CLOB, normalized_text CLOB NOT NULL, created_at BIGINT NOT NULL, entry_hash VARCHAR(64) NOT NULL UNIQUE, source VARCHAR(64), revision BIGINT NOT NULL)");
         statement.execute("CREATE TABLE IF NOT EXISTS data_health_records (id VARCHAR(36) PRIMARY KEY, record_type VARCHAR(64) NOT NULL, severity VARCHAR(32) NOT NULL, source_table VARCHAR(64), source_id VARCHAR(128), title VARCHAR(256), message CLOB, raw_payload CLOB, repair_payload CLOB, status VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, resolved_at BIGINT)");
@@ -163,6 +165,34 @@ public final class DatabaseManager {
         statement.execute("CREATE INDEX IF NOT EXISTS idx_paylogs_created ON paylogs(created_at)");
         statement.execute("CREATE INDEX IF NOT EXISTS idx_paylogs_parties ON paylogs(payer, receiver)");
         statement.execute("CREATE INDEX IF NOT EXISTS idx_paylogs_amount ON paylogs(amount)");
+    }
+
+    private void backfillCreditSearchText(Connection connection) throws SQLException {
+        try (PreparedStatement select = connection.prepareStatement("SELECT * FROM credits");
+             ResultSet result = select.executeQuery();
+             PreparedStatement update = connection.prepareStatement("UPDATE credits SET search_text=? WHERE id=? AND (search_text IS NULL OR search_text<>?)")) {
+            while (result.next()) {
+                CreditEntry entry = new CreditEntry();
+                entry.setId(UUID.fromString(result.getString("id"))); entry.setDealName(result.getString("deal_name")); entry.setCreditor(result.getString("creditor")); entry.setDebtor(result.getString("debtor")); entry.setAmount(result.getDouble("amount")); entry.setPaidAmount(result.getDouble("paid_amount")); entry.setCreatedAt(result.getLong("created_at")); long due = result.getLong("due_date"); entry.setDueDate(result.wasNull() ? null : due); entry.setStatus(result.getString("status")); entry.setNote(result.getString("note")); long completed = result.getLong("completed_at"); entry.setCompletedAt(result.wasNull() ? null : completed); entry.setArchived(result.getBoolean("archived"));
+                String searchText = DealSearchText.build(entry);
+                update.setString(1, searchText); update.setString(2, entry.getId().toString()); update.setString(3, searchText); update.addBatch();
+            }
+            update.executeBatch();
+        }
+    }
+
+    private void backfillPaylogSearchText(Connection connection) throws SQLException {
+        try (PreparedStatement select = connection.prepareStatement("SELECT * FROM paylogs");
+             ResultSet result = select.executeQuery();
+             PreparedStatement update = connection.prepareStatement("UPDATE paylogs SET normalized_text=? WHERE id=? AND normalized_text<>?")) {
+            while (result.next()) {
+                TransactionEntry entry = new TransactionEntry();
+                entry.setId(UUID.fromString(result.getString("id"))); entry.setFromPlayer(result.getString("payer")); entry.setToPlayer(result.getString("receiver")); entry.setAmount(result.getDouble("amount")); entry.setRawText(result.getString("raw_text")); entry.setTimestamp(result.getLong("created_at")); entry.setSource(result.getString("source")); entry.setMetadata(result.getString("metadata"));
+                String searchText = PaylogSearchText.build(entry);
+                update.setString(1, searchText); update.setString(2, entry.getId().toString()); update.setString(3, searchText); update.addBatch();
+            }
+            update.executeBatch();
+        }
     }
 
     public synchronized boolean isHealthy() { return healthy && !writeLocked; }
@@ -225,7 +255,6 @@ public final class DatabaseManager {
         }
     }
 
-    /** Reconciles a complete in-memory snapshot without a blanket table delete. */
     public synchronized boolean replaceCreditState(Collection<CreditEntry> credits, Collection<Payment> payments, Collection<CreditEventEntry> events) {
         if (credits == null || payments == null || events == null) return false;
         return inTransaction(connection -> {
@@ -244,7 +273,6 @@ public final class DatabaseManager {
         });
     }
 
-    /** Imports only into an empty database; a successful repeated import is a no-op. */
     public synchronized boolean importLegacy(DatabaseState state, Collection<TransactionEntry> paylogs, String details) {
         if (state == null || paylogs == null) return false;
         return inTransaction(connection -> {
@@ -271,16 +299,10 @@ public final class DatabaseManager {
         });
     }
 
-    /**
-     * Lossless automatic import for pre-database JSON data. Existing database
-     * rows win on identical IDs, but divergent JSON values are retained in
-     * legacy_records instead of silently being discarded. This remains safe to
-     * call after the initial migration marker has been written.
-     */
     public synchronized AutomaticMigrationResult importLegacyAutomatically(DatabaseState state, Collection<TransactionEntry> paylogs,
                                                                               Collection<LegacyRecord> preserved, String details) {
         if (state == null || paylogs == null || preserved == null) return AutomaticMigrationResult.failed();
-        int[] counts = new int[5]; // credits, payments, events, paylogs, preserved
+        int[] counts = new int[5];
         boolean committed = inTransaction(connection -> {
             String migrationId = UUID.randomUUID().toString();
             long rowRevision = nextRevision(connection);
@@ -355,10 +377,6 @@ public final class DatabaseManager {
         });
     }
 
-    /**
-     * Last-resort recovery for an unreadable embedded database. The original
-     * file is retained as a timestamped backup before a fresh schema is made.
-     */
     public synchronized boolean resetCorruptDatabaseWithBackup() {
         Path source = FileManager.getDatabaseStorageFile();
         try {
@@ -377,7 +395,6 @@ public final class DatabaseManager {
         }
     }
 
-    /** Returns a paylog together with the amount already turned into payments. */
     public synchronized Optional<TransactionEntry> findPaylog(UUID id) {
         if (id == null) return Optional.empty();
         initialize();
@@ -393,10 +410,6 @@ public final class DatabaseManager {
         }
     }
 
-    /**
-     * Writes a known-distinct group in one transaction. Used by the local dev
-     * fixture hook so 5,000 test paylogs never freeze the render thread.
-     */
     public synchronized int addPaylogsBatch(Collection<TransactionEntry> entries) {
         if (entries == null || entries.isEmpty()) return 0;
         List<TransactionEntry> values = new ArrayList<>(entries);
@@ -407,7 +420,7 @@ public final class DatabaseManager {
             try (PreparedStatement statement = connection.prepareStatement("INSERT INTO paylogs (id, payer, receiver, amount, raw_text, normalized_text, created_at, entry_hash, source, revision, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
                 for (TransactionEntry entry : values) {
                     String normalized = entry.getNormalizedText();
-                    if (blank(normalized)) normalized = SearchNormalizer.normalize(String.join(" ", safe(entry.getFromPlayer()), safe(entry.getToPlayer()), String.valueOf(entry.getAmount()), safe(entry.getRawText()), TimeUtil.formatDateTime(entry.getTimestamp())));
+                    if (blank(normalized)) normalized = PaylogSearchText.build(entry);
                     String hash = blank(entry.getHash()) ? paylogHash(entry, normalized) : entry.getHash();
                     statement.setString(1, entry.getId() == null ? UUID.randomUUID().toString() : entry.getId().toString());
                     statement.setString(2, entry.getFromPlayer()); statement.setString(3, entry.getToPlayer()); statement.setDouble(4, entry.getAmount()); statement.setString(5, entry.getRawText()); statement.setString(6, normalized); statement.setLong(7, entry.getTimestamp()); statement.setString(8, hash); statement.setString(9, blank(entry.getSource()) ? "DETECTED" : entry.getSource()); statement.setLong(10, rowRevision); statement.setString(11, entry.getMetadata());
@@ -422,21 +435,19 @@ public final class DatabaseManager {
         return committed ? inserted[0] : 0;
     }
 
-    /** Removes only explicitly marked local development fixtures. */
     public synchronized int clearDevTestData() {
         final int[] removed = {0};
         boolean committed = inTransaction(connection -> {
             try (PreparedStatement paylogs = connection.prepareStatement("DELETE FROM paylogs WHERE source='TEST_DATA' OR raw_text LIKE 'TEST_DATA%'");
                  PreparedStatement credits = connection.prepareStatement("DELETE FROM credits WHERE note='TEST_DATA' AND LOWER(deal_name) LIKE '%test_%'")) {
                 removed[0] += paylogs.executeUpdate();
-                removed[0] += credits.executeUpdate(); // payments/events are removed by foreign-key cascades
+                removed[0] += credits.executeUpdate();
             }
             bumpRevision(connection);
         });
         return committed ? removed[0] : 0;
     }
 
-    /** Compatibility method for callers that only need one page. */
     public synchronized List<TransactionEntry> queryPaylogs(String player, int direction, String query, int limit, int offset) {
         return queryPaylogPage(player, direction, query, limit, offset).entries();
     }
@@ -444,7 +455,6 @@ public final class DatabaseManager {
     public synchronized QueryPage<TransactionEntry> queryPaylogPage(String player, int direction, String query, int limit, int offset) {
         initialize();
         int pageSize = Math.max(1, Math.min(PAGE_SIZE, limit));
-        String normalized = SearchNormalizer.normalize(query);
         StringBuilder where = new StringBuilder(" WHERE 1=1");
         List<String> strings = new ArrayList<>();
         if (player != null && !player.isBlank()) {
@@ -453,14 +463,12 @@ public final class DatabaseManager {
             if (direction == 1) { where.append(" AND LOWER(receiver)=?"); strings.add(lower); }
             if (direction == 2) { where.append(" AND LOWER(payer)=?"); strings.add(lower); }
         }
-        if (!normalized.isBlank()) {
-            String like = '%' + escapeLike(normalized) + '%';
-            where.append(" AND (LOWER(payer) LIKE ? ESCAPE '!' OR LOWER(receiver) LIKE ? ESCAPE '!' OR LOWER(normalized_text) LIKE ? ESCAPE '!' OR LOWER(COALESCE(raw_text,'')) LIKE ? ESCAPE '!' OR entry_hash LIKE ? ESCAPE '!' OR CAST(amount AS VARCHAR) LIKE ? ESCAPE '!' OR CAST(created_at AS VARCHAR) LIKE ? ESCAPE '!')");
-            for (int index = 0; index < 7; index++) strings.add(like);
+        for (String token : DealSearchText.tokens(query)) {
+            appendPaylogSearchToken(where, strings, token);
         }
         try (Connection connection = connection()) {
             long count = count(connection, "SELECT COUNT(*) FROM paylogs" + where, strings);
-            String sql = "SELECT p.id, p.payer, p.receiver, p.amount, p.raw_text, p.normalized_text, p.created_at, p.entry_hash, p.source, p.metadata, COALESCE((SELECT SUM(amount) FROM payments WHERE paylog_id=p.id), 0) AS linked_amount FROM paylogs p" + where + " ORDER BY p.created_at DESC, p.id DESC LIMIT ? OFFSET ?";
+            String sql = "SELECT id, payer, receiver, amount, raw_text, normalized_text, created_at, entry_hash, source, metadata, COALESCE((SELECT SUM(amount) FROM payments WHERE paylog_id=paylogs.id), 0) AS linked_amount FROM paylogs" + where + " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?";
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
                 bindStrings(statement, strings);
                 statement.setInt(strings.size() + 1, pageSize);
@@ -478,16 +486,63 @@ public final class DatabaseManager {
     }
 
     public synchronized QueryPage<CreditEntry> queryDealHistoryPage(String player, String query, int limit, int offset) {
+        return queryDealHistoryPage(player, query, false, DealHistorySort.NEWEST, limit, offset);
+    }
+
+    public synchronized QueryPage<TransactionEntry> queryAvailablePaylogs(String payer, String receiver, String query, int limit, int offset) {
+        initialize();
+        int pageSize = Math.max(1, Math.min(PAGE_SIZE, limit));
+        String linked = "COALESCE((SELECT SUM(amount) FROM payments WHERE paylog_id=paylogs.id),0)";
+        StringBuilder where = new StringBuilder(" WHERE LOWER(payer)=? AND LOWER(receiver)=? AND " + linked + "<amount-0.0001");
+        List<String> values = new ArrayList<>(); values.add(safe(payer).toLowerCase(Locale.ROOT)); values.add(safe(receiver).toLowerCase(Locale.ROOT));
+        for (String token : DealSearchText.tokens(query)) appendPaylogSearchToken(where, values, token);
+        try (Connection connection = connection()) {
+            long count = count(connection, "SELECT COUNT(*) FROM paylogs" + where, values);
+            String sql = "SELECT id, payer, receiver, amount, raw_text, normalized_text, created_at, entry_hash, source, metadata, " + linked + " AS linked_amount FROM paylogs" + where + " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?";
+            try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                bindStrings(statement, values); statement.setInt(values.size() + 1, pageSize); statement.setInt(values.size() + 2, Math.max(0, offset));
+                try (ResultSet result = statement.executeQuery()) {
+                    List<TransactionEntry> entries = new ArrayList<>(); while (result.next()) entries.add(readPaylog(result));
+                    return new QueryPage<>(List.copyOf(entries), count, Math.max(0, offset), pageSize);
+                }
+            }
+        } catch (SQLException exception) {
+            CreditManagerClient.LOGGER.warn("Available-paylog query failed", exception);
+            return new QueryPage<>(List.of(), 0, Math.max(0, offset), pageSize);
+        }
+    }
+
+    private void appendPaylogSearchToken(StringBuilder where, List<String> values, String token) {
+        String linked = "COALESCE((SELECT SUM(amount) FROM payments WHERE paylog_id=paylogs.id),0)";
+        switch (token) {
+            case "verknupft" -> where.append(" AND ").append(linked).append(">=amount-0.0001");
+            case "teilweise" -> where.append(" AND ").append(linked).append(">0.0001 AND ").append(linked).append("<amount-0.0001");
+            case "offen", "rest" -> where.append(" AND ").append(linked).append("<amount-0.0001");
+            case "manual", "manuell" -> { where.append(" AND UPPER(COALESCE(source,''))='MANUAL'"); }
+            case "detected", "erkannt" -> { where.append(" AND UPPER(COALESCE(source,''))='DETECTED'"); }
+            default -> {
+                where.append(" AND (COALESCE(normalized_text,'') LIKE ? ESCAPE '!' OR LOWER(COALESCE(source,'')) LIKE ? ESCAPE '!')");
+                String like = '%' + escapeLike(token) + '%'; values.add(like); values.add(like);
+            }
+        }
+    }
+
+    public synchronized QueryPage<CreditEntry> queryDealHistoryPage(String player, String query, boolean includeArchived,
+                                                                      DealHistorySort sort, int limit, int offset) {
         initialize();
         int pageSize = Math.max(1, Math.min(PAGE_SIZE, limit));
         String lowerPlayer = player == null ? "" : player.toLowerCase(Locale.ROOT);
-        String historyQuery = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
-        String like = '%' + escapeLike(historyQuery) + '%';
-        String where = " WHERE (status IN ('PAID','CANCELLED') OR archived=TRUE) AND (LOWER(debtor)=? OR LOWER(creditor)=?) AND (LOWER(deal_name) LIKE ? ESCAPE '!' OR LOWER(debtor) LIKE ? ESCAPE '!' OR LOWER(creditor) LIKE ? ESCAPE '!' OR LOWER(status) LIKE ? ESCAPE '!' OR id LIKE ? ESCAPE '!' OR CAST(amount AS VARCHAR) LIKE ? ESCAPE '!' OR CAST(COALESCE(completed_at, created_at) AS VARCHAR) LIKE ? ESCAPE '!' OR LOWER(COALESCE(note,'')) LIKE ? ESCAPE '!')";
-        List<String> values = new ArrayList<>(); values.add(lowerPlayer); values.add(lowerPlayer); for (int index = 0; index < 8; index++) values.add(like);
+        StringBuilder where = new StringBuilder(" WHERE (status IN ('PAID','CLOSED','CANCELLED') OR archived=TRUE) AND (LOWER(debtor)=? OR LOWER(creditor)=?)");
+        List<String> values = new ArrayList<>(); values.add(lowerPlayer); values.add(lowerPlayer);
+        if (!includeArchived) where.append(" AND archived=FALSE");
+        for (String token : DealSearchText.tokens(query)) {
+            where.append(" AND COALESCE(search_text,'') LIKE ? ESCAPE '!'");
+            values.add('%' + escapeLike(token) + '%');
+        }
+        String order = historyOrder(sort == null ? DealHistorySort.NEWEST : sort);
         try (Connection connection = connection()) {
             long count = count(connection, "SELECT COUNT(*) FROM credits" + where, values);
-            List<CreditEntry> entries = readCredits(connection, "SELECT * FROM credits" + where + " ORDER BY COALESCE(completed_at, created_at) DESC, id DESC LIMIT ? OFFSET ?", values, pageSize, Math.max(0, offset));
+            List<CreditEntry> entries = readCredits(connection, "SELECT * FROM credits" + where + " ORDER BY " + order + " LIMIT ? OFFSET ?", values, pageSize, Math.max(0, offset));
             return new QueryPage<>(List.copyOf(entries), count, Math.max(0, offset), pageSize);
         } catch (SQLException exception) {
             CreditManagerClient.LOGGER.warn("Deal-history query failed", exception);
@@ -499,7 +554,18 @@ public final class DatabaseManager {
         return queryDealHistoryPage(player, query, limit, offset).entries();
     }
 
-    /** Scans persistent data and upserts stable, actionable health findings. */
+    private String historyOrder(DealHistorySort sort) {
+        String secondary = switch (sort) {
+            case OLDEST -> "COALESCE(completed_at, created_at) ASC";
+            case AMOUNT_DESC -> "amount DESC";
+            case AMOUNT_ASC -> "amount ASC";
+            case PLAYER_ASC -> "LOWER(debtor) ASC, LOWER(creditor) ASC";
+            case STATUS -> "status ASC";
+            case NEWEST -> "COALESCE(completed_at, created_at) DESC";
+        };
+        return "CASE WHEN archived=TRUE THEN 1 ELSE 0 END ASC, " + secondary + ", id DESC";
+    }
+
     public synchronized List<DataHealthRecord> runHealthCheck() {
         initialize();
         if (writeLocked) return List.of();
@@ -508,7 +574,7 @@ public final class DatabaseManager {
                 try (ResultSet result = statement.executeQuery("SELECT * FROM credits")) {
                     while (result.next()) inspectCredit(connection, result);
                 }
-                try (ResultSet result = statement.executeQuery("SELECT p.* FROM payments p LEFT JOIN credits c ON c.id=p.credit_id")) {
+                try (ResultSet result = statement.executeQuery("SELECT p.*, l.id AS paylog_exists, l.amount AS paylog_amount, l.payer AS paylog_payer, l.receiver AS paylog_receiver FROM payments p LEFT JOIN credits c ON c.id=p.credit_id LEFT JOIN paylogs l ON l.id=p.paylog_id")) {
                     while (result.next()) inspectPayment(connection, result);
                 }
                 try (ResultSet result = statement.executeQuery("SELECT e.* FROM credit_events e LEFT JOIN credits c ON c.id=e.credit_id")) {
@@ -542,7 +608,6 @@ public final class DatabaseManager {
         }
     }
 
-    /** The caller performs the data correction in the same transaction before this status changes. */
     public synchronized boolean resolveHealthRecord(UUID id, String repairPayload, boolean ignored) {
         if (id == null) return false;
         return inTransaction(connection -> {
@@ -565,7 +630,7 @@ public final class DatabaseManager {
         double amount = result.getDouble("amount"), paid = result.getDouble("paid_amount");
         if (!Double.isFinite(amount) || amount <= 0 || !Double.isFinite(paid) || paid < 0 || paid > amount + 0.0001D) storeHealth(connection, "CREDIT_AMOUNT", "ERROR", "credits", id, "Ungültiger Betrag", "Gesamtbetrag oder bezahlter Betrag ist inkonsistent.", rowPayload(result), null);
         String status = result.getString("status"); long completed = result.getLong("completed_at"); boolean hasCompleted = !result.wasNull();
-        boolean finalStatus = "PAID".equals(status) || "CANCELLED".equals(status);
+        boolean finalStatus = "PAID".equals(status) || "CLOSED".equals(status) || "CANCELLED".equals(status);
         if (finalStatus != hasCompleted || (!finalStatus && hasCompleted)) storeHealth(connection, "CREDIT_COMPLETION", "WARNING", "credits", id, "Abschlussdatum inkonsistent", "Status und Abschlussdatum passen nicht zusammen.", rowPayload(result), null);
         long due = result.getLong("due_date"); if (!result.wasNull() && due <= 0) storeHealth(connection, "CREDIT_DUE_DATE", "WARNING", "credits", id, "Ungültige Fälligkeit", "Das Fälligkeitsdatum ist ungültig.", rowPayload(result), null);
     }
@@ -578,6 +643,23 @@ public final class DatabaseManager {
         if (blank(result.getString("from_player")) || blank(result.getString("to_player"))) storeHealth(connection, "PAYMENT_DIRECTION", "WARNING", "payments", id, "Fehlende Zahlungsrichtung", "Sender oder Empfänger der Zahlung fehlt.", rowPayload(result), null);
         String items = result.getString("items_json");
         if ("ITEM".equalsIgnoreCase(result.getString("source")) && blank(items)) storeHealth(connection, "PAYMENT_ITEMS", "ERROR", "payments", id, "Fehlende Itemdaten", "Eine Item-Zahlung enthält keine erhaltenen Itemdaten.", rowPayload(result), null);
+        String paylogId = result.getString("paylog_id");
+        if (!blank(paylogId)) {
+            if (!validUuid(paylogId) || result.getString("paylog_exists") == null) {
+                storeHealth(connection, "PAYLOG_LINK_ORPHAN", "ERROR", "payments", id, "Verwaister Paylog-Link", "Die Zahlung verweist auf einen fehlenden oder ungültigen Paylog.", rowPayload(result), null);
+                return;
+            }
+            if (!safe(result.getString("source")).startsWith("PAYLOG_")) {
+                storeHealth(connection, "PAYLOG_LINK_SOURCE", "WARNING", "payments", id, "Unpassende Paylog-Quelle", "Eine Paylog-verknüpfte Zahlung muss eine PAYLOG_-Quelle besitzen.", rowPayload(result), null);
+            }
+            if (!safe(result.getString("from_player")).equalsIgnoreCase(safe(result.getString("paylog_payer")))
+                    || !safe(result.getString("to_player")).equalsIgnoreCase(safe(result.getString("paylog_receiver")))) {
+                storeHealth(connection, "PAYLOG_LINK_DIRECTION", "ERROR", "payments", id, "Falsche Paylog-Richtung", "Die Zahlungsrichtung passt nicht zum verknüpften Paylog.", rowPayload(result), null);
+            }
+            if (amount > result.getDouble("paylog_amount") + 0.0001D) {
+                storeHealth(connection, "PAYLOG_LINK_AMOUNT", "ERROR", "payments", id, "Ungültiger Paylog-Betrag", "Eine einzelne Zahlung ist größer als ihr Paylog.", rowPayload(result), null);
+            }
+        }
     }
 
     private void inspectEvent(Connection connection, ResultSet result) throws SQLException {
@@ -591,6 +673,15 @@ public final class DatabaseManager {
         String id = result.getString("id");
         if (!validUuid(id) || !Double.isFinite(result.getDouble("amount")) || result.getDouble("amount") <= 0 || blank(result.getString("payer")) || blank(result.getString("receiver")) || result.getLong("created_at") <= 0 || blank(result.getString("raw_text"))) {
             storeHealth(connection, "PAYLOG_DATA", "WARNING", "paylogs", id, "Unvollständiger Paylog", "Paylog enthält fehlende Parteien, Betrag, Datum oder Originaltext.", rowPayload(result), null);
+        }
+        try (PreparedStatement statement = connection.prepareStatement("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE paylog_id=?")) {
+            statement.setString(1, id);
+            try (ResultSet linked = statement.executeQuery()) {
+                linked.next();
+                if (linked.getDouble(1) > result.getDouble("amount") + 0.0001D) {
+                    storeHealth(connection, "PAYLOG_LINK_OVERBOOKED", "ERROR", "paylogs", id, "Paylog überbucht", "Die Summe verknüpfter Zahlungen ist größer als der Paylog-Betrag.", rowPayload(result), null);
+                }
+            }
         }
     }
 
@@ -614,6 +705,7 @@ public final class DatabaseManager {
         for (Payment payment : payments) {
             if (!isValidPayment(payment) || !creditIds.contains(payment.getCreditId()) || !paymentIds.add(payment.getId())) throw new SQLException("Invalid, duplicate or orphan payment");
             paymentTotals.merge(payment.getCreditId(), payment.getAmount(), Double::sum);
+            validatePaylogPaymentLink(connection, payment);
         }
         for (CreditEntry credit : credits) validateDerivedCreditState(credit, paymentTotals.getOrDefault(credit.getId(), 0D));
         validatePaylogLinks(connection, payments);
@@ -627,13 +719,12 @@ public final class DatabaseManager {
         if (Math.abs(credit.getPaidAmount() - paymentTotal) > 0.0001D) {
             throw new SQLException("Credit paid amount does not match its payments");
         }
-        if ("CANCELLED".equals(credit.getStatus())) return;
+        if ("CLOSED".equals(credit.getStatus()) || "CANCELLED".equals(credit.getStatus())) return;
         String expected = paymentTotal + 0.0001D >= credit.getAmount() ? "PAID"
                 : paymentTotal > 0.0001D ? "PARTIAL" : "OPEN";
         if (!expected.equals(credit.getStatus())) throw new SQLException("Credit status does not match its payments");
     }
 
-    /** A paylog may be linked in portions, but the linked total must never exceed it. */
     private void validatePaylogLinks(Connection connection, Collection<Payment> payments) throws SQLException {
         Map<UUID, Double> linkedAmounts = new LinkedHashMap<>();
         for (Payment payment : payments) {
@@ -652,6 +743,22 @@ public final class DatabaseManager {
         }
     }
 
+    private void validatePaylogPaymentLink(Connection connection, Payment payment) throws SQLException {
+        if (payment.getPaylogId() == null) return;
+        try (PreparedStatement statement = connection.prepareStatement("SELECT payer, receiver, amount FROM paylogs WHERE id=?")) {
+            statement.setString(1, payment.getPaylogId().toString());
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next()) throw new SQLException("Payment links unknown paylog " + payment.getPaylogId());
+                if (!safe(payment.getFromPlayer()).equalsIgnoreCase(safe(result.getString("payer")))
+                        || !safe(payment.getToPlayer()).equalsIgnoreCase(safe(result.getString("receiver")))) {
+                    throw new SQLException("Payment direction does not match linked paylog");
+                }
+                if (!safe(payment.getSource()).startsWith("PAYLOG_")) throw new SQLException("Paylog-linked payment has invalid source");
+                if (payment.getAmount() > result.getDouble("amount") + 0.0001D) throw new SQLException("Payment exceeds linked paylog");
+            }
+        }
+    }
+
     private boolean isValidCredit(CreditEntry value) { return value != null && value.getId() != null && !blank(value.getCreditor()) && !blank(value.getDebtor()) && !value.getCreditor().equalsIgnoreCase(value.getDebtor()) && Double.isFinite(value.getAmount()) && value.getAmount() > 0 && Double.isFinite(value.getPaidAmount()) && value.getPaidAmount() >= 0 && value.getPaidAmount() <= value.getAmount() + 0.0001D; }
     private boolean isValidPayment(Payment value) { return value != null && value.getId() != null && value.getCreditId() != null && value.getAmount() != null && Double.isFinite(value.getAmount()) && value.getAmount() > 0; }
     private boolean isValidEvent(CreditEventEntry value) { return value != null && value.getId() != null && value.getCreditId() != null && value.getType() != null && Double.isFinite(value.getAmount()); }
@@ -659,19 +766,19 @@ public final class DatabaseManager {
 
     private void upsertCredit(Connection connection, CreditEntry entry, long rowRevision) throws SQLException {
         Long completed = entry.getCompletedAt();
-        boolean finalStatus = "PAID".equals(entry.getStatus()) || "CANCELLED".equals(entry.getStatus());
+        boolean finalStatus = "PAID".equals(entry.getStatus()) || "CLOSED".equals(entry.getStatus()) || "CANCELLED".equals(entry.getStatus());
         if (finalStatus && completed == null) completed = existingCompletedAt(connection, entry.getId());
         if (finalStatus && completed == null) completed = System.currentTimeMillis();
         if (!finalStatus) completed = null;
         entry.setCompletedAt(completed);
-        try (PreparedStatement statement = connection.prepareStatement("MERGE INTO credits (id, deal_name, creditor, debtor, amount, paid_amount, created_at, due_date, status, note, completed_at, archived, revision) KEY(id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)") ) {
-            statement.setString(1, entry.getId().toString()); statement.setString(2, entry.getDealName()); statement.setString(3, entry.getCreditor()); statement.setString(4, entry.getDebtor()); statement.setDouble(5, entry.getAmount()); statement.setDouble(6, entry.getPaidAmount()); statement.setLong(7, entry.getCreatedAt()); setNullableLong(statement, 8, entry.getDueDate()); statement.setString(9, entry.getStatus()); statement.setString(10, entry.getNote()); setNullableLong(statement, 11, completed); statement.setBoolean(12, entry.isArchived()); statement.setLong(13, rowRevision); statement.executeUpdate();
+        try (PreparedStatement statement = connection.prepareStatement("MERGE INTO credits (id, deal_name, creditor, debtor, amount, paid_amount, created_at, due_date, status, note, search_text, completed_at, archived, revision) KEY(id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)") ) {
+            statement.setString(1, entry.getId().toString()); statement.setString(2, entry.getDealName()); statement.setString(3, entry.getCreditor()); statement.setString(4, entry.getDebtor()); statement.setDouble(5, entry.getAmount()); statement.setDouble(6, entry.getPaidAmount()); statement.setLong(7, entry.getCreatedAt()); setNullableLong(statement, 8, entry.getDueDate()); statement.setString(9, entry.getStatus()); statement.setString(10, entry.getNote()); statement.setString(11, DealSearchText.build(entry)); setNullableLong(statement, 12, completed); statement.setBoolean(13, entry.isArchived()); statement.setLong(14, rowRevision); statement.executeUpdate();
         }
     }
 
     private void upsertPayment(Connection connection, Payment payment, long rowRevision) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement("MERGE INTO payments (id, credit_id, from_player, to_player, amount, items_json, item_nbt, item_nbt_entries, created_at, source, paylog_id, revision) KEY(id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)") ) {
-            statement.setString(1, payment.getId().toString()); statement.setString(2, payment.getCreditId().toString()); statement.setString(3, payment.getFromPlayer()); statement.setString(4, payment.getToPlayer()); statement.setDouble(5, payment.getAmount()); statement.setString(6, GSON.toJson(payment.getItems())); statement.setString(7, payment.getItemNbt()); statement.setString(8, GSON.toJson(payment.getItemNbtEntries())); statement.setLong(9, payment.getTimestamp()); statement.setString(10, payment.getSource()); statement.setString(11, payment.getPaylogId() == null ? null : payment.getPaylogId().toString()); statement.setLong(12, rowRevision); statement.executeUpdate();
+        try (PreparedStatement statement = connection.prepareStatement("MERGE INTO payments (id, credit_id, from_player, to_player, amount, items_json, item_nbt, item_nbt_entries, created_at, source, paylog_id, note, revision) KEY(id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)") ) {
+            statement.setString(1, payment.getId().toString()); statement.setString(2, payment.getCreditId().toString()); statement.setString(3, payment.getFromPlayer()); statement.setString(4, payment.getToPlayer()); statement.setDouble(5, payment.getAmount()); statement.setString(6, GSON.toJson(payment.getItems())); statement.setString(7, payment.getItemNbt()); statement.setString(8, GSON.toJson(payment.getItemNbtEntries())); statement.setLong(9, payment.getTimestamp()); statement.setString(10, payment.getSource()); statement.setString(11, payment.getPaylogId() == null ? null : payment.getPaylogId().toString()); statement.setString(12, payment.getNote()); statement.setLong(13, rowRevision); statement.executeUpdate();
         }
     }
 
@@ -683,7 +790,7 @@ public final class DatabaseManager {
 
     private boolean insertPaylog(Connection connection, TransactionEntry entry, boolean deduplicate, long rowRevision) throws SQLException {
         String normalized = entry.getNormalizedText();
-        if (blank(normalized)) normalized = SearchNormalizer.normalize(String.join(" ", safe(entry.getFromPlayer()), safe(entry.getToPlayer()), String.valueOf(entry.getAmount()), safe(entry.getRawText()), TimeUtil.formatDateTime(entry.getTimestamp())));
+        if (blank(normalized)) normalized = PaylogSearchText.build(entry);
         String hash = blank(entry.getHash()) ? paylogHash(entry, normalized) : entry.getHash();
         try (PreparedStatement statement = connection.prepareStatement("INSERT INTO paylogs (id, payer, receiver, amount, raw_text, normalized_text, created_at, entry_hash, source, revision, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)") ) {
             statement.setString(1, entry.getId() == null ? UUID.randomUUID().toString() : entry.getId().toString()); statement.setString(2, entry.getFromPlayer()); statement.setString(3, entry.getToPlayer()); statement.setDouble(4, entry.getAmount()); statement.setString(5, entry.getRawText()); statement.setString(6, normalized); statement.setLong(7, entry.getTimestamp()); statement.setString(8, hash); statement.setString(9, blank(entry.getSource()) ? "DETECTED" : entry.getSource()); statement.setLong(10, rowRevision); statement.setString(11, entry.getMetadata()); statement.executeUpdate();
@@ -696,10 +803,7 @@ public final class DatabaseManager {
 
     private String paylogHash(TransactionEntry entry, String normalized) {
         try {
-            // A short time bucket catches duplicated chat events while raw content and an event-specific timestamp
-            // keep normal, rapid same-amount payments distinct.
-            long bucket = entry.getTimestamp() / 2_000L;
-            String canonical = safe(entry.getSource()) + '\u0000' + safe(entry.getFromPlayer()).toLowerCase(Locale.ROOT) + '\u0000' + safe(entry.getToPlayer()).toLowerCase(Locale.ROOT) + '\u0000' + Double.toString(entry.getAmount()) + '\u0000' + safe(entry.getRawText()) + '\u0000' + normalized + '\u0000' + bucket;
+            String canonical = safe(entry.getSource()) + '\u0000' + safe(entry.getFromPlayer()).toLowerCase(Locale.ROOT) + '\u0000' + safe(entry.getToPlayer()).toLowerCase(Locale.ROOT) + '\u0000' + Double.toString(entry.getAmount()) + '\u0000' + safe(entry.getRawText()) + '\u0000' + normalized + '\u0000' + entry.getTimestamp();
             return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(canonical.getBytes(StandardCharsets.UTF_8)));
         } catch (Exception exception) { return UUID.randomUUID().toString().replace("-", ""); }
     }
@@ -724,7 +828,7 @@ public final class DatabaseManager {
             List<Payment> entries = new ArrayList<>();
             while (result.next()) {
                 Payment payment = new Payment(UUID.fromString(result.getString("credit_id")), result.getString("from_player"), result.getString("to_player"), result.getDouble("amount"), fromJson(result.getString("items_json")), result.getString("source"));
-                payment.setId(UUID.fromString(result.getString("id"))); payment.setItemNbt(result.getString("item_nbt")); payment.setItemNbtEntries(fromJson(result.getString("item_nbt_entries"))); payment.setTimestamp(result.getLong("created_at")); String paylogId = result.getString("paylog_id"); if (validUuid(paylogId)) payment.setPaylogId(UUID.fromString(paylogId)); entries.add(payment);
+                payment.setId(UUID.fromString(result.getString("id"))); payment.setItemNbt(result.getString("item_nbt")); payment.setItemNbtEntries(fromJson(result.getString("item_nbt_entries"))); payment.setTimestamp(result.getLong("created_at")); String paylogId = result.getString("paylog_id"); if (validUuid(paylogId)) payment.setPaylogId(UUID.fromString(paylogId)); payment.setNote(result.getString("note")); entries.add(payment);
             }
             return entries;
         }
@@ -805,7 +909,7 @@ public final class DatabaseManager {
     }
 
     private boolean samePayment(Connection connection, Payment payment) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement("SELECT credit_id, from_player, to_player, amount, items_json, item_nbt, item_nbt_entries, created_at, source, paylog_id FROM payments WHERE id=?")) {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT credit_id, from_player, to_player, amount, items_json, item_nbt, item_nbt_entries, created_at, source, paylog_id, note FROM payments WHERE id=?")) {
             statement.setString(1, payment.getId().toString());
             try (ResultSet result = statement.executeQuery()) {
                 return result.next()
@@ -818,7 +922,8 @@ public final class DatabaseManager {
                         && Objects.equals(result.getString("item_nbt_entries"), GSON.toJson(payment.getItemNbtEntries()))
                         && result.getLong("created_at") == payment.getTimestamp()
                         && Objects.equals(result.getString("source"), payment.getSource())
-                        && Objects.equals(result.getString("paylog_id"), payment.getPaylogId() == null ? null : payment.getPaylogId().toString());
+                        && Objects.equals(result.getString("paylog_id"), payment.getPaylogId() == null ? null : payment.getPaylogId().toString())
+                        && Objects.equals(result.getString("note"), payment.getNote());
             }
         }
     }
@@ -916,6 +1021,7 @@ public final class DatabaseManager {
         public int pageNumber() { return offset / pageSize + 1; }
         public int pageCount() { return Math.max(1, (int) Math.ceil(totalCount / (double) pageSize)); }
     }
+    public enum DealHistorySort { NEWEST, OLDEST, AMOUNT_DESC, AMOUNT_ASC, PLAYER_ASC, STATUS }
     public record DataHealthRecord(UUID id, String type, String severity, String sourceTable, String sourceId, String title, String message, String rawPayload, String repairPayload, String status, long createdAt, Long resolvedAt) { }
     private DataHealthRecord readHealth(ResultSet result) throws SQLException { long resolved = result.getLong("resolved_at"); return new DataHealthRecord(UUID.fromString(result.getString("id")), result.getString("record_type"), result.getString("severity"), result.getString("source_table"), result.getString("source_id"), result.getString("title"), result.getString("message"), result.getString("raw_payload"), result.getString("repair_payload"), result.getString("status"), result.getLong("created_at"), result.wasNull() ? null : resolved); }
     @FunctionalInterface private interface DatabaseWork { void run(Connection connection) throws Exception; }

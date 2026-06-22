@@ -72,7 +72,7 @@ public class CreditEntry {
             if (p.getAmount() != null) {
                 paidAmount = Math.max(0, paidAmount - p.getAmount());
             }
-            if (!"CANCELLED".equals(status)) updateStatus();
+            if (!isManuallyFinal()) updateStatus();
         }
     }
 
@@ -123,11 +123,15 @@ public class CreditEntry {
                 .filter(value -> value != null && Double.isFinite(value) && value > 0)
                 .mapToDouble(Double::doubleValue)
                 .sum();
-        if (!"CANCELLED".equals(status)) updateStatus();
+        if (!isManuallyFinal()) updateStatus();
     }
 
     public void refreshPaymentState() {
-        if (!"CANCELLED".equals(status)) updateStatus();
+        if (!isManuallyFinal()) updateStatus();
+    }
+
+    private boolean isManuallyFinal() {
+        return "CLOSED".equals(status) || "CANCELLED".equals(status);
     }
 
     public String getNote() { return note; }

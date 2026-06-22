@@ -61,7 +61,6 @@ public class FileManager {
         return dataDirectory.resolve("client_config.json");
     }
 
-    /** H2 creates the actual <code>.mv.db</code> file next to this base path. */
     public static Path getDatabaseFile() {
         return dataDirectory.resolve("creditmanager");
     }

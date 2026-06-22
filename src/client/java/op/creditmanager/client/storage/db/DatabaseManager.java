@@ -10,8 +10,12 @@ import op.creditmanager.client.model.Payment;
 import op.creditmanager.client.model.TransactionEntry;
 import op.creditmanager.client.search.DealSearchText;
 import op.creditmanager.client.search.PaylogSearchText;
+import op.creditmanager.client.storage.DataHealth;
 import op.creditmanager.client.storage.FileManager;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -27,6 +31,7 @@ import java.sql.Statement;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -36,6 +41,8 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.Optional;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 public final class DatabaseManager {
     public static final int SCHEMA_VERSION = 6;
@@ -43,10 +50,12 @@ public final class DatabaseManager {
     private static final DatabaseManager INSTANCE = new DatabaseManager();
     private static final Gson GSON = new Gson();
     private static final Type STRING_LIST = new TypeToken<List<String>>() { }.getType();
+    private static final Type BACKUP_MANIFEST_LIST = new TypeToken<List<BackupManifestEntry>>() { }.getType();
 
     private boolean initialized;
     private boolean healthy = true;
     private boolean writeLocked;
+    private boolean recovering;
     private Path initializedAt;
 
     private DatabaseManager() { }
@@ -86,10 +95,27 @@ public final class DatabaseManager {
             }
             initialized = true;
             initializedAt = requestedPath;
+            if (activeDatabaseIsUnexpectedlyEmpty()) {
+                writeLocked = true;
+                healthy = false;
+                DataHealth.reportRecoveryRequired("Aktive Datenbank ist leer, obwohl ein Backup mit CreditManager-Daten vorhanden ist.");
+                CreditManagerClient.LOGGER.error("CreditManager database is empty while a backup manifest reports domain data. Writes are locked.");
+            }
         } catch (Exception exception) {
+            if (!recovering && Files.exists(FileManager.getDatabaseStorageFile()) && restoreLatestValidBackupInternal()) {
+                initialized = false;
+                initializedAt = null;
+                healthy = true;
+                writeLocked = false;
+                initialize();
+                return;
+            }
             healthy = false;
+            writeLocked = true;
+            DataHealth.reportRecoveryRequired("Lokale Datenbank konnte nicht gelesen werden. Keine Daten wurden gelöscht.");
             CreditManagerClient.LOGGER.error("Could not initialise the local CreditManager database", exception);
-            throw new IllegalStateException("Lokale CreditManager-Datenbank konnte nicht geöffnet werden.", exception);
+            initialized = true;
+            initializedAt = requestedPath;
         }
     }
 
@@ -197,6 +223,15 @@ public final class DatabaseManager {
 
     public synchronized boolean isHealthy() { return healthy && !writeLocked; }
     public synchronized boolean isWriteLocked() { return writeLocked; }
+    public synchronized boolean isSafeForWrites() {
+        if (!isHealthy()) return false;
+        try (Connection connection = connection()) {
+            return !hasOpenHealthErrors(connection);
+        } catch (SQLException exception) {
+            healthy = false;
+            return false;
+        }
+    }
     public synchronized long revision() {
         initialize();
         try (Connection connection = connection()) {
@@ -227,12 +262,21 @@ public final class DatabaseManager {
     }
 
     public synchronized boolean createBackup() {
-        try {
-            Path source = FileManager.getDatabaseStorageFile();
-            if (!Files.exists(source)) return false;
-            Path target = FileManager.getBackupFile("creditmanager.mv.db");
+        initialize();
+        Path source = FileManager.getDatabaseStorageFile();
+        if (!Files.exists(source)) return false;
+        Path target = FileManager.getBackupDirectory().resolve("creditmanager_backup_" + System.currentTimeMillis() + ".zip");
+        try (Connection connection = connection(); Statement statement = connection.createStatement()) {
             Files.createDirectories(target.getParent());
-            Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
+            statement.execute("BACKUP TO '" + escapeSqlLiteral(target.toAbsolutePath().normalize().toString()) + "'");
+            BackupValidation validation = validateBackup(target);
+            if (!validation.valid()) {
+                Files.deleteIfExists(target);
+                return false;
+            }
+            appendBackupManifest(new BackupManifestEntry(target.getFileName().toString(), System.currentTimeMillis(), SCHEMA_VERSION,
+                    revision(connection), validation.creditCount(), validation.paymentCount(), validation.paylogCount(), validation.eventCount(),
+                    !hasOpenHealthErrors(connection), "h2-backup"));
             return true;
         } catch (Exception exception) {
             CreditManagerClient.LOGGER.warn("Could not create CreditManager database backup", exception);
@@ -258,17 +302,59 @@ public final class DatabaseManager {
     public synchronized boolean replaceCreditState(Collection<CreditEntry> credits, Collection<Payment> payments, Collection<CreditEventEntry> events) {
         if (credits == null || payments == null || events == null) return false;
         return inTransaction(connection -> {
+            if (hasDomainData(connection) && credits.isEmpty()) {
+                throw new SQLException("Refusing to replace non-empty CreditManager data with an empty state");
+            }
+            if (hasOpenHealthErrors(connection)) {
+                throw new SQLException("Refusing full-state replacement while unresolved data-health errors exist");
+            }
             validateState(connection, credits, payments, events);
             long rowRevision = nextRevision(connection);
-            Set<String> creditIds = new HashSet<>();
-            for (CreditEntry credit : credits) { upsertCredit(connection, credit, rowRevision); creditIds.add(credit.getId().toString()); }
-            Set<String> paymentIds = new HashSet<>();
-            for (Payment payment : payments) { upsertPayment(connection, payment, rowRevision); paymentIds.add(payment.getId().toString()); }
-            Set<String> eventIds = new HashSet<>();
-            for (CreditEventEntry event : events) { upsertEvent(connection, event, rowRevision); eventIds.add(event.getId().toString()); }
-            deleteMissing(connection, "credit_events", eventIds);
-            deleteMissing(connection, "payments", paymentIds);
-            deleteMissing(connection, "credits", creditIds);
+            for (CreditEntry credit : credits) upsertCredit(connection, credit, rowRevision);
+            for (Payment payment : payments) upsertPayment(connection, payment, rowRevision);
+            for (CreditEventEntry event : events) upsertEvent(connection, event, rowRevision);
+            bumpRevision(connection);
+        });
+    }
+
+    /**
+     * Commits exactly one credit mutation. Unlike the legacy snapshot writer,
+     * it can never remove unrelated deals, payments or events.
+     */
+    public synchronized boolean commitCreditMutation(CreditMutation mutation) {
+        if (mutation == null || mutation.credit() == null || mutation.credit().getId() == null) return false;
+        List<Payment> upserts = mutation.paymentUpserts() == null ? List.of() : List.copyOf(mutation.paymentUpserts());
+        List<UUID> deletions = mutation.paymentDeletions() == null ? List.of() : List.copyOf(mutation.paymentDeletions());
+        List<CreditEventEntry> events = mutation.events() == null ? List.of() : List.copyOf(mutation.events());
+        return inTransaction(connection -> {
+            long rowRevision = nextRevision(connection);
+            for (Payment payment : upserts) {
+                if (!isValidPayment(payment) || !mutation.credit().getId().equals(payment.getCreditId())) {
+                    throw new SQLException("Invalid payment mutation");
+                }
+                validatePaylogPaymentLink(connection, payment);
+            }
+            for (CreditEventEntry event : events) {
+                if (!isValidEvent(event) || !mutation.credit().getId().equals(event.getCreditId())) {
+                    throw new SQLException("Invalid credit event mutation");
+                }
+            }
+
+            upsertCredit(connection, mutation.credit(), rowRevision);
+            for (UUID paymentId : deletions) {
+                if (paymentId == null) throw new SQLException("Invalid payment deletion");
+                try (PreparedStatement statement = connection.prepareStatement("DELETE FROM payments WHERE id=? AND credit_id=?")) {
+                    statement.setString(1, paymentId.toString());
+                    statement.setString(2, mutation.credit().getId().toString());
+                    if (statement.executeUpdate() != 1) throw new SQLException("Payment no longer exists");
+                }
+            }
+            for (Payment payment : upserts) upsertPayment(connection, payment, rowRevision);
+
+            List<Payment> persistedPayments = loadPaymentsForCredit(connection, mutation.credit().getId());
+            validateDerivedCreditState(mutation.credit(), persistedPayments.stream().mapToDouble(payment -> payment.getAmount()).sum());
+            validatePersistedPaylogLinks(connection, persistedPayments);
+            for (CreditEventEntry event : events) upsertEvent(connection, event, rowRevision);
             bumpRevision(connection);
         });
     }
@@ -378,21 +464,272 @@ public final class DatabaseManager {
     }
 
     public synchronized boolean resetCorruptDatabaseWithBackup() {
-        Path source = FileManager.getDatabaseStorageFile();
-        try {
-            if (Files.exists(source) && !createBackup()) return false;
-            initialized = false;
-            initializedAt = null;
-            healthy = true;
-            writeLocked = false;
-            if (Files.exists(source)) Files.delete(source);
-            initialize();
-            return isHealthy();
-        } catch (Exception exception) {
+        boolean restored = restoreLatestValidBackupInternal();
+        if (!restored) {
             healthy = false;
-            CreditManagerClient.LOGGER.error("Could not reset corrupt CreditManager database after backup", exception);
+            writeLocked = true;
+            DataHealth.reportRecoveryRequired("Keine valide Datenbank-Sicherung zur Wiederherstellung gefunden. Die aktive Datenbank wurde nicht gelöscht.");
             return false;
         }
+        initialized = false;
+        initializedAt = null;
+        healthy = true;
+        writeLocked = false;
+        try {
+            initialize();
+            return isHealthy();
+        } catch (RuntimeException exception) {
+            healthy = false;
+            writeLocked = true;
+            return false;
+        }
+    }
+
+    public synchronized boolean restoreLatestValidBackup() {
+        boolean restored = restoreLatestValidBackupInternal();
+        if (!restored) return false;
+        initialized = false;
+        initializedAt = null;
+        healthy = true;
+        writeLocked = false;
+        try {
+            initialize();
+            return isHealthy();
+        } catch (RuntimeException exception) {
+            healthy = false;
+            writeLocked = true;
+            return false;
+        }
+    }
+
+    public synchronized List<BackupManifestEntry> listBackups() {
+        List<BackupManifestEntry> backups = new ArrayList<>(readBackupManifest());
+        for (Path legacy : legacyDatabaseBackups()) {
+            BackupValidation validation = validateDatabaseFile(legacy);
+            if (validation.valid()) {
+                backups.add(new BackupManifestEntry(legacy.getFileName().toString(), modifiedAt(legacy), 0, 0,
+                        validation.creditCount(), validation.paymentCount(), validation.paylogCount(), validation.eventCount(), true, "legacy-h2"));
+            }
+        }
+        backups.sort(Comparator.comparingLong(BackupManifestEntry::createdAt).reversed());
+        return List.copyOf(backups);
+    }
+
+    private boolean activeDatabaseIsUnexpectedlyEmpty() {
+        try (Connection connection = connection()) {
+            if (hasDomainData(connection)) return false;
+            boolean manifestBackup = readBackupManifest().stream()
+                    .anyMatch(entry -> entry.domainCount() > 0 && Files.isRegularFile(FileManager.getBackupDirectory().resolve(entry.fileName())));
+            return manifestBackup || legacyDatabaseBackups().stream()
+                    .map(this::validateDatabaseFile)
+                    .anyMatch(validation -> validation.valid() && validation.domainCount() > 0);
+        } catch (Exception exception) {
+            return false;
+        }
+    }
+
+    private boolean restoreLatestValidBackupInternal() {
+        if (recovering) return false;
+        recovering = true;
+        try {
+            for (BackupManifestEntry entry : readBackupManifest().stream()
+                    .sorted(Comparator.comparingLong(BackupManifestEntry::createdAt).reversed()).toList()) {
+                Path archive = FileManager.getBackupDirectory().resolve(entry.fileName());
+                BackupValidation validation = validateBackup(archive);
+                if (!validation.valid() || validation.domainCount() < entry.domainCount()) continue;
+                if (!restoreBackupArchive(archive)) continue;
+                DataHealth.reportRecoveryRequired("Valide Datenbanksicherung wurde wiederhergestellt; die vorherige Datenbank liegt in der Quarantäne.");
+                return true;
+            }
+            for (Path legacy : legacyDatabaseBackups()) {
+                BackupValidation validation = validateDatabaseFile(legacy);
+                if (!validation.valid() || !restoreLegacyDatabaseFile(legacy)) continue;
+                DataHealth.reportRecoveryRequired("Valide Legacy-Datenbanksicherung wurde wiederhergestellt; die vorherige Datenbank liegt in der Quarantäne.");
+                return true;
+            }
+            return false;
+        } finally {
+            recovering = false;
+        }
+    }
+
+    private boolean restoreBackupArchive(Path archive) {
+        Path staging = FileManager.getRecoveryValidationDirectory().resolve("restore-" + UUID.randomUUID());
+        try {
+            Path extracted = extractBackup(archive, staging);
+            Path databaseFile = findDatabaseFile(extracted);
+            if (databaseFile == null || !validateDatabaseFile(databaseFile).valid()) return false;
+            Path active = FileManager.getDatabaseStorageFile();
+            if (Files.exists(active) && !quarantineActiveDatabase(active)) return false;
+            Files.createDirectories(active.getParent());
+            moveWithoutReplacing(databaseFile, active);
+            return true;
+        } catch (Exception exception) {
+            CreditManagerClient.LOGGER.warn("Could not restore CreditManager backup {}", archive, exception);
+            return false;
+        } finally {
+            deleteTemporaryTree(staging);
+        }
+    }
+
+    private boolean restoreLegacyDatabaseFile(Path legacy) {
+        Path staging = FileManager.getRecoveryValidationDirectory().resolve("legacy-restore-" + UUID.randomUUID());
+        try {
+            Files.createDirectories(staging);
+            Path copy = staging.resolve("creditmanager.mv.db");
+            Files.copy(legacy, copy);
+            if (!validateDatabaseFile(copy).valid()) return false;
+            Path active = FileManager.getDatabaseStorageFile();
+            if (Files.exists(active) && !quarantineActiveDatabase(active)) return false;
+            moveWithoutReplacing(copy, active);
+            return true;
+        } catch (Exception exception) {
+            CreditManagerClient.LOGGER.warn("Could not restore legacy CreditManager database backup {}", legacy, exception);
+            return false;
+        } finally {
+            deleteTemporaryTree(staging);
+        }
+    }
+
+    private boolean quarantineActiveDatabase(Path active) {
+        try {
+            Files.createDirectories(FileManager.getQuarantineDirectory());
+            String name = "creditmanager_" + System.currentTimeMillis() + ".mv.db";
+            moveWithoutReplacing(active, FileManager.getQuarantineDirectory().resolve(name));
+            return true;
+        } catch (Exception exception) {
+            CreditManagerClient.LOGGER.error("Could not quarantine active CreditManager database", exception);
+            return false;
+        }
+    }
+
+    private BackupValidation validateBackup(Path archive) {
+        if (archive == null || !Files.isRegularFile(archive)) return BackupValidation.invalid();
+        Path staging = FileManager.getRecoveryValidationDirectory().resolve("validate-" + UUID.randomUUID());
+        try {
+            Path extracted = extractBackup(archive, staging);
+            Path databaseFile = findDatabaseFile(extracted);
+            return databaseFile == null ? BackupValidation.invalid() : validateDatabaseFile(databaseFile);
+        } catch (Exception exception) {
+            return BackupValidation.invalid();
+        } finally {
+            deleteTemporaryTree(staging);
+        }
+    }
+
+    private Path extractBackup(Path archive, Path staging) throws IOException {
+        Files.createDirectories(staging);
+        try (ZipFile zip = new ZipFile(archive.toFile())) {
+            var entries = zip.entries();
+            while (entries.hasMoreElements()) {
+                ZipEntry entry = entries.nextElement();
+                Path target = staging.resolve(entry.getName()).normalize();
+                if (!target.startsWith(staging)) throw new IOException("Unsafe backup entry");
+                if (entry.isDirectory()) {
+                    Files.createDirectories(target);
+                } else {
+                    Files.createDirectories(target.getParent());
+                    try (InputStream input = zip.getInputStream(entry); OutputStream output = Files.newOutputStream(target)) {
+                        input.transferTo(output);
+                    }
+                }
+            }
+        }
+        return staging;
+    }
+
+    private Path findDatabaseFile(Path root) throws IOException {
+        try (var files = Files.walk(root)) {
+            return files.filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().endsWith(".mv.db"))
+                    .findFirst().orElse(null);
+        }
+    }
+
+    private BackupValidation validateDatabaseFile(Path databaseFile) {
+        String name = databaseFile.getFileName().toString();
+        if (!name.endsWith(".mv.db")) return BackupValidation.invalid();
+        Path base = databaseFile.resolveSibling(name.substring(0, name.length() - ".mv.db".length()));
+        try (Connection connection = openConnection(base); Statement statement = connection.createStatement()) {
+            int credits = countRows(statement, "credits");
+            int payments = countRows(statement, "payments");
+            int paylogs = countRows(statement, "paylogs");
+            int events = countRows(statement, "credit_events");
+            return new BackupValidation(true, credits, payments, paylogs, events);
+        } catch (Exception exception) {
+            return BackupValidation.invalid();
+        }
+    }
+
+    private int countRows(Statement statement, String table) throws SQLException {
+        try (ResultSet result = statement.executeQuery("SELECT COUNT(*) FROM " + table)) {
+            result.next();
+            return result.getInt(1);
+        }
+    }
+
+    private List<BackupManifestEntry> readBackupManifest() {
+        Path manifest = FileManager.getBackupManifestFile();
+        if (!Files.isRegularFile(manifest)) return List.of();
+        try {
+            List<BackupManifestEntry> entries = GSON.fromJson(Files.readString(manifest), BACKUP_MANIFEST_LIST);
+            return entries == null ? List.of() : entries.stream().filter(entry -> entry != null && entry.fileName() != null).toList();
+        } catch (Exception exception) {
+            CreditManagerClient.LOGGER.warn("Could not read CreditManager backup manifest", exception);
+            return List.of();
+        }
+    }
+
+    private List<Path> legacyDatabaseBackups() {
+        Path directory = FileManager.getBackupDirectory();
+        if (!Files.isDirectory(directory)) return List.of();
+        try (var files = Files.list(directory)) {
+            return files.filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".mv.db"))
+                    .sorted(Comparator.comparingLong(this::modifiedAt).reversed())
+                    .toList();
+        } catch (IOException exception) {
+            return List.of();
+        }
+    }
+
+    private void appendBackupManifest(BackupManifestEntry entry) throws IOException {
+        List<BackupManifestEntry> entries = new ArrayList<>(readBackupManifest());
+        entries.add(entry);
+        entries.sort(Comparator.comparingLong(BackupManifestEntry::createdAt).reversed());
+        if (entries.size() > 32) entries = new ArrayList<>(entries.subList(0, 32));
+        Path manifest = FileManager.getBackupManifestFile();
+        Files.createDirectories(manifest.getParent());
+        Path temporary = manifest.resolveSibling(manifest.getFileName() + ".tmp");
+        Files.writeString(temporary, GSON.toJson(entries), StandardCharsets.UTF_8);
+        try {
+            Files.move(temporary, manifest, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException atomicMoveFailed) {
+            Files.move(temporary, manifest, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    private void moveWithoutReplacing(Path source, Path target) throws IOException {
+        Files.createDirectories(target.getParent());
+        try {
+            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException atomicMoveFailed) {
+            Files.move(source, target);
+        }
+    }
+
+    private void deleteTemporaryTree(Path root) {
+        if (root == null || !Files.exists(root)) return;
+        try (var files = Files.walk(root)) {
+            files.sorted(Comparator.reverseOrder()).forEach(path -> {
+                try { Files.deleteIfExists(path); } catch (IOException ignored) { }
+            });
+        } catch (IOException ignored) { }
+    }
+
+    private long modifiedAt(Path path) {
+        try { return Files.getLastModifiedTime(path).toMillis(); }
+        catch (IOException ignored) { return 0L; }
     }
 
     public synchronized Optional<TransactionEntry> findPaylog(UUID id) {
@@ -743,6 +1080,23 @@ public final class DatabaseManager {
         }
     }
 
+    private void validatePersistedPaylogLinks(Connection connection, Collection<Payment> payments) throws SQLException {
+        Set<UUID> paylogIds = new HashSet<>();
+        for (Payment payment : payments) if (payment.getPaylogId() != null) paylogIds.add(payment.getPaylogId());
+        for (UUID paylogId : paylogIds) {
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "SELECT p.amount, COALESCE((SELECT SUM(amount) FROM payments WHERE paylog_id=p.id), 0) FROM paylogs p WHERE p.id=?")) {
+                statement.setString(1, paylogId.toString());
+                try (ResultSet result = statement.executeQuery()) {
+                    if (!result.next()) throw new SQLException("Payment links unknown paylog " + paylogId);
+                    if (result.getDouble(2) > result.getDouble(1) + 0.0001D) {
+                        throw new SQLException("Linked payments exceed paylog amount");
+                    }
+                }
+            }
+        }
+    }
+
     private void validatePaylogPaymentLink(Connection connection, Payment payment) throws SQLException {
         if (payment.getPaylogId() == null) return;
         try (PreparedStatement statement = connection.prepareStatement("SELECT payer, receiver, amount FROM paylogs WHERE id=?")) {
@@ -834,6 +1188,27 @@ public final class DatabaseManager {
         }
     }
 
+    private List<Payment> loadPaymentsForCredit(Connection connection, UUID creditId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT * FROM payments WHERE credit_id=?")) {
+            statement.setString(1, creditId.toString());
+            try (ResultSet result = statement.executeQuery()) {
+                List<Payment> entries = new ArrayList<>();
+                while (result.next()) {
+                    Payment payment = new Payment(UUID.fromString(result.getString("credit_id")), result.getString("from_player"), result.getString("to_player"), result.getDouble("amount"), fromJson(result.getString("items_json")), result.getString("source"));
+                    payment.setId(UUID.fromString(result.getString("id")));
+                    payment.setItemNbt(result.getString("item_nbt"));
+                    payment.setItemNbtEntries(fromJson(result.getString("item_nbt_entries")));
+                    payment.setTimestamp(result.getLong("created_at"));
+                    String paylogId = result.getString("paylog_id");
+                    if (validUuid(paylogId)) payment.setPaylogId(UUID.fromString(paylogId));
+                    payment.setNote(result.getString("note"));
+                    entries.add(payment);
+                }
+                return entries;
+            }
+        }
+    }
+
     private List<CreditEventEntry> loadEvents(Connection connection) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("SELECT * FROM credit_events"); ResultSet result = statement.executeQuery()) {
             List<CreditEventEntry> entries = new ArrayList<>();
@@ -850,13 +1225,6 @@ public final class DatabaseManager {
         entry.setId(UUID.fromString(result.getString("id"))); entry.setFromPlayer(result.getString("payer")); entry.setToPlayer(result.getString("receiver")); entry.setAmount(result.getDouble("amount")); entry.setRawText(result.getString("raw_text")); entry.setNormalizedText(result.getString("normalized_text")); entry.setTimestamp(result.getLong("created_at")); entry.setHash(result.getString("entry_hash")); entry.setSource(result.getString("source")); entry.setMetadata(result.getString("metadata"));
         try { entry.setLinkedAmount(result.getDouble("linked_amount")); } catch (SQLException ignored) { entry.setLinkedAmount(0.0D); }
         return entry;
-    }
-
-    private void deleteMissing(Connection connection, String table, Set<String> ids) throws SQLException {
-        String sql = ids.isEmpty() ? "DELETE FROM " + table : "DELETE FROM " + table + " WHERE id NOT IN (" + String.join(",", java.util.Collections.nCopies(ids.size(), "?")) + ")";
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            int index = 1; for (String id : ids) statement.setString(index++, id); statement.executeUpdate();
-        }
     }
 
     private Long existingCompletedAt(Connection connection, UUID id) throws SQLException {
@@ -972,6 +1340,13 @@ public final class DatabaseManager {
         try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery("SELECT (SELECT COUNT(*) FROM credits) + (SELECT COUNT(*) FROM payments) + (SELECT COUNT(*) FROM credit_events) + (SELECT COUNT(*) FROM paylogs)")) { result.next(); return result.getLong(1) > 0; }
     }
 
+    private boolean hasOpenHealthErrors(Connection connection) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT 1 FROM data_health_records WHERE status='OPEN' AND severity='ERROR' LIMIT 1");
+             ResultSet result = statement.executeQuery()) {
+            return result.next();
+        }
+    }
+
     private boolean inTransaction(DatabaseWork work) {
         initialize();
         if (writeLocked) return false;
@@ -983,10 +1358,16 @@ public final class DatabaseManager {
         } catch (SQLException exception) { healthy = false; CreditManagerClient.LOGGER.warn("Could not open local database transaction", exception); return false; }
     }
 
-    private Connection connection() throws SQLException { return DriverManager.getConnection("jdbc:h2:file:" + FileManager.getDatabaseFile().toAbsolutePath() + ";MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;AUTO_SERVER=FALSE"); }
+    private Connection connection() throws SQLException { return openConnection(FileManager.getDatabaseFile()); }
+    private Connection openConnection(Path databaseBase) throws SQLException { return DriverManager.getConnection(databaseUrl(databaseBase)); }
+    private String databaseUrl(Path databaseBase) {
+        String path = databaseBase.toAbsolutePath().normalize().toString().replace('\\', '/').replace(";", "\\;");
+        return "jdbc:h2:file:" + path + ";MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;AUTO_SERVER=FALSE";
+    }
     private long count(Connection connection, String sql, List<String> values) throws SQLException { try (PreparedStatement statement = connection.prepareStatement(sql)) { bindStrings(statement, values); try (ResultSet result = statement.executeQuery()) { result.next(); return result.getLong(1); } } }
     private void bindStrings(PreparedStatement statement, List<String> values) throws SQLException { for (int index = 0; index < values.size(); index++) statement.setString(index + 1, values.get(index)); }
     private long nextRevision(Connection connection) throws SQLException { String value = metadata(connection, "data_revision"); return (value == null ? 0L : Long.parseLong(value)) + 1; }
+    private long revision(Connection connection) throws SQLException { String value = metadata(connection, "data_revision"); return value == null ? 0L : Long.parseLong(value); }
     private void bumpRevision(Connection connection) throws SQLException { putMetadata(connection, "data_revision", String.valueOf(nextRevision(connection))); }
     private String metadata(Connection connection, String key) throws SQLException { try (PreparedStatement statement = connection.prepareStatement("SELECT meta_value FROM metadata WHERE meta_key=?")) { statement.setString(1, key); try (ResultSet result = statement.executeQuery()) { return result.next() ? result.getString(1) : null; } } }
     private void putMetadata(Connection connection, String key, String value) throws SQLException { try (PreparedStatement statement = connection.prepareStatement("MERGE INTO metadata (meta_key, meta_value) KEY(meta_key) VALUES (?, ?)")) { statement.setString(1, key); statement.setString(2, value); statement.executeUpdate(); } }
@@ -996,6 +1377,7 @@ public final class DatabaseManager {
     private boolean validUuid(String value) { try { UUID.fromString(value); return true; } catch (RuntimeException ignored) { return false; } }
     private boolean blank(String value) { return value == null || value.isBlank(); }
     private String safe(String value) { return value == null ? "" : value; }
+    private String escapeSqlLiteral(String value) { return value.replace("'", "''"); }
     private String rowPayload(ResultSet result) {
         try {
             Map<String, String> payload = new LinkedHashMap<>();
@@ -1011,6 +1393,17 @@ public final class DatabaseManager {
     }
 
     public record DatabaseState(List<CreditEntry> credits, List<Payment> payments, List<CreditEventEntry> events) { }
+    public record CreditMutation(CreditEntry credit, List<Payment> paymentUpserts, List<UUID> paymentDeletions,
+                                 List<CreditEventEntry> events) { }
+    public record BackupManifestEntry(String fileName, long createdAt, int schemaVersion, long revision,
+                                      int creditCount, int paymentCount, int paylogCount, int eventCount,
+                                      boolean healthy, String format) {
+        public int domainCount() { return creditCount + paymentCount + paylogCount + eventCount; }
+    }
+    private record BackupValidation(boolean valid, int creditCount, int paymentCount, int paylogCount, int eventCount) {
+        private static BackupValidation invalid() { return new BackupValidation(false, 0, 0, 0, 0); }
+        private int domainCount() { return creditCount + paymentCount + paylogCount + eventCount; }
+    }
     public record LegacyRecord(String kind, String originalId, String rawPayload, String reason) { }
     public record AutomaticMigrationResult(boolean success, int credits, int payments, int events, int paylogs, int preservedRecords) {
         private static AutomaticMigrationResult failed() { return new AutomaticMigrationResult(false, 0, 0, 0, 0, 0); }

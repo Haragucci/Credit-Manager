@@ -40,6 +40,8 @@ public abstract class ModernBaseScreen extends Screen {
     protected int closeButtonY;
     protected int backButtonX;
     protected int backButtonY;
+    protected int backButtonWidth;
+    protected boolean compactLayout;
 
     protected ModernBaseScreen(CreditManager manager, Screen parent, String pageTitle, String activeNavigation) {
         super(Text.literal(pageTitle));
@@ -51,16 +53,19 @@ public abstract class ModernBaseScreen extends Screen {
 
     @Override
     protected void init() {
-        int outerMargin = Math.max(8, Math.min(24, Math.min(width, height) / 16));
-        panelWidth = Math.min(760, width - outerMargin * 2);
-        panelHeight = Math.min(460, height - outerMargin * 2);
+        int shortestSide = Math.max(1, Math.min(width, height));
+        int outerMargin = Math.min(Math.max(1, shortestSide / 16), 24);
+        panelWidth = Math.max(1, Math.min(760, width - outerMargin * 2));
+        panelHeight = Math.max(1, Math.min(460, height - outerMargin * 2));
         panelX = (width - panelWidth) / 2;
         panelY = (height - panelHeight) / 2;
-        sidebarWidth = Math.min(150, Math.max(78, panelWidth / 5));
-        contentX = panelX + sidebarWidth + 18;
-        contentY = panelY + 48;
-        contentWidth = panelWidth - sidebarWidth - 36;
-        contentHeight = panelHeight - 64;
+        compactLayout = panelWidth < 220 || panelHeight < 170;
+        sidebarWidth = compactLayout ? 0 : Math.min(150, Math.max(78, panelWidth / 5));
+        int contentInset = compactLayout ? Math.min(6, Math.max(1, panelWidth / 8)) : 18;
+        contentX = panelX + sidebarWidth + contentInset;
+        contentY = panelY + Math.min(48, Math.max(32, panelHeight / 3));
+        contentWidth = Math.max(1, panelX + panelWidth - contentInset - contentX);
+        contentHeight = Math.max(1, panelY + panelHeight - contentInset - contentY);
     }
 
     protected void renderShell(DrawContext context, int mouseX, int mouseY) {
@@ -70,12 +75,14 @@ public abstract class ModernBaseScreen extends Screen {
         context.fill(0, 0, width, height, theme.overlay);
         ModernUi.panel(context, panelX, panelY, panelWidth, panelHeight, theme.panel);
         context.fill(panelX, panelY, panelX + sidebarWidth, panelY + panelHeight, theme.panelAlt);
-        context.fill(panelX + sidebarWidth, panelY + 1, panelX + sidebarWidth + 1, panelY + panelHeight - 1, theme.border);
+        if (!compactLayout) {
+            context.fill(panelX + sidebarWidth, panelY + 1, panelX + sidebarWidth + 1, panelY + panelHeight - 1, theme.border);
+        }
 
-        int brandX = panelX + 12;
+        int brandX = panelX + (compactLayout ? 6 : 12);
         int brandY = panelY + 8;
 
-        if (MinecraftClient.getInstance().getResourceManager().getResource(LOGO_TEXTURE).isPresent()) {
+        if (!compactLayout && MinecraftClient.getInstance().getResourceManager().getResource(LOGO_TEXTURE).isPresent()) {
             ModernUi.card(context, brandX - 2, brandY - 2, LOGO_DRAW_SIZE + 4, LOGO_DRAW_SIZE + 4, false);
             context.drawTexture(
                     RenderPipelines.GUI_TEXTURED,
@@ -106,24 +113,26 @@ public abstract class ModernBaseScreen extends Screen {
                 "CM",
                 brandX,
                 brandY + (LOGO_DRAW_SIZE - textRenderer.fontHeight) / 2,
-                Math.max(20, sidebarWidth - (brandX - panelX) - 8),
+                Math.max(1, (compactLayout ? contentWidth : sidebarWidth) - (brandX - panelX) - 8),
                 theme.accent
         );
         int titleX = contentX;
         if (shouldShowBackButton()) {
             backButtonX = contentX;
             backButtonY = panelY + 9;
-            ModernUi.button(context, textRenderer, backButtonX, backButtonY, 52, 20, "Zurück", theme.buttonNeutral,
-                    ModernUi.contains(mouseX, mouseY, backButtonX, backButtonY, 52, 20));
-            titleX += 60;
+            backButtonWidth = Math.max(1, Math.min(52, contentWidth));
+            ModernUi.button(context, textRenderer, backButtonX, backButtonY, backButtonWidth, 20, "Zurück", theme.buttonNeutral,
+                    ModernUi.contains(mouseX, mouseY, backButtonX, backButtonY, backButtonWidth, 20));
+            titleX += backButtonWidth + 8;
         } else {
             backButtonX = -1;
             backButtonY = -1;
+            backButtonWidth = 0;
         }
         ModernUi.drawTruncated(context, textRenderer, pageTitle, titleX, panelY + 18,
                 Math.max(20, contentWidth - (titleX - contentX) - 42), theme.text);
-        context.fill(contentX, panelY + 36, panelX + panelWidth - 18, panelY + 37, theme.border);
-        closeButtonX = panelX + panelWidth - 28;
+        context.fill(contentX, panelY + 36, Math.max(contentX + 1, panelX + panelWidth - Math.min(18, Math.max(1, panelWidth / 4))), panelY + 37, theme.border);
+        closeButtonX = Math.max(panelX, panelX + panelWidth - 24);
         closeButtonY = panelY + 10;
         ModernUi.closeButton(context, textRenderer, closeButtonX, closeButtonY,
                 ModernUi.contains(mouseX, mouseY, closeButtonX, closeButtonY, 18, 18));
@@ -132,6 +141,7 @@ public abstract class ModernBaseScreen extends Screen {
     }
 
     private void drawNavigation(DrawContext context, int mouseX, int mouseY) {
+        if (compactLayout) return;
         String[][] entries = {
                 {"Übersicht", "overview"},
                 {"Forderungen", "claims"},
@@ -177,6 +187,7 @@ public abstract class ModernBaseScreen extends Screen {
     }
 
     protected boolean handleSidebarClick(Click click) {
+        if (compactLayout) return false;
         if (click.button() != 0) {
             return false;
         }
@@ -333,7 +344,7 @@ public abstract class ModernBaseScreen extends Screen {
             closeCompletely();
             return true;
         }
-        if (click.button() == 0 && shouldShowBackButton() && ModernUi.contains(click.x(), click.y(), backButtonX, backButtonY, 52, 20)) {
+        if (click.button() == 0 && shouldShowBackButton() && ModernUi.contains(click.x(), click.y(), backButtonX, backButtonY, backButtonWidth, 20)) {
             navigateBack();
             return true;
         }

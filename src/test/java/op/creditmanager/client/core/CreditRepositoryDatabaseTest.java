@@ -265,8 +265,9 @@ class CreditRepositoryDatabaseTest {
         assertTrue(DatabaseManager.getInstance().addPaylog(distinctRapid));
         assertTrue(DatabaseManager.getInstance().createBackup());
         try (var files = Files.list(FileManager.getDataDirectory().resolve("backups"))) {
-            assertTrue(files.anyMatch(path -> path.getFileName().toString().matches("creditmanager_backup_.*\\.mv\\.db")));
+            assertTrue(files.anyMatch(path -> path.getFileName().toString().matches("creditmanager_backup_.*\\.zip")));
         }
+        assertFalse(DatabaseManager.getInstance().listBackups().isEmpty());
     }
 
     @Test

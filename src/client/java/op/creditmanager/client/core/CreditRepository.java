@@ -64,6 +64,10 @@ public class CreditRepository {
             reconcilePayments();
             rebuildPlayerIndex();
             revision = DatabaseManager.getInstance().revision();
+            if (!DatabaseManager.getInstance().isSafeForWrites()) {
+                addRecovery(RecoveryType.TRANSACTION_LOG, "database-health", null, null, null,
+                        "Datenprüfung erforderlich – vorhandene Daten wurden nicht gelöscht.");
+            }
             CreditManagerClient.LOGGER.info("Loaded " + credits.size() + " credits and " + payments.size() + " payments from the local database.");
         } catch (RuntimeException exception) {
             recoveryRequired = true;
@@ -72,7 +76,7 @@ public class CreditRepository {
         }
     }
 
-    public synchronized boolean isWritable() { return !recoveryRequired && DatabaseManager.getInstance().isHealthy(); }
+    public synchronized boolean isWritable() { return !recoveryRequired && DatabaseManager.getInstance().isSafeForWrites(); }
     public synchronized long getRevision() { return revision; }
     public synchronized boolean hasPrimaryState() { return true; }
 
@@ -84,6 +88,11 @@ public class CreditRepository {
     }
 
     public synchronized void putCredit(CreditEntry entry) { credits.put(entry.getId(), entry); rebuildPlayerIndex(); revision++; }
+    synchronized void replaceLoadedCredit(CreditEntry entry) {
+        if (entry == null || entry.getId() == null) return;
+        credits.put(entry.getId(), entry);
+        rebuildPlayerIndex();
+    }
     public synchronized void putPayment(Payment payment) {
         payments.put(payment.getId(), payment);
         CreditEntry entry = credits.get(payment.getCreditId());

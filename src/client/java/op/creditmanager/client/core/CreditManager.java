@@ -9,6 +9,7 @@ import op.creditmanager.client.config.ClientConfigManager;
 import op.creditmanager.client.storage.DataHealth;
 import op.creditmanager.client.storage.FileManager;
 import op.creditmanager.client.storage.JsonStorage;
+import op.creditmanager.client.storage.db.DatabaseManager;
 import op.creditmanager.client.storage.db.LegacyJsonMigrationService;
 
 import java.util.ArrayList;
@@ -52,10 +53,8 @@ public class CreditManager {
         if (exists) throw new CreditException("Ein aktiver Deal mit diesem Namen existiert bereits.");
 
         CreditEntry entry = new CreditEntry(UUID.randomUUID(), dealName, lower(creditor), lower(debtor), amount, dueDate, note);
-        repository.putCredit(entry);
-        persistCore();
-        persistEvent(CreditEventType.CREDIT_CREATED, entry, entry.getAmount(), entry.getAmount(),
-                entry.getNote(), creditor, "CREATE", false);
+        commitMutation(entry, List.of(), List.of(), List.of(event(CreditEventType.CREDIT_CREATED, entry,
+                entry.getAmount(), entry.getAmount(), entry.getNote(), creditor, "CREATE", false)), null);
         return entry;
     }
 
@@ -65,13 +64,12 @@ public class CreditManager {
         validateActive(entry);
         validateAmount(amount);
 
-        double remainingBefore = entry.getRemainingAmount();
+        CreditEntry draft = copyCredit(entry);
+        double remainingBefore = draft.getRemainingAmount();
         Payment payment = new Payment(dealId, entry.getDebtor(), entry.getCreditor(),
                 Math.min(amount, remainingBefore), null, "MANUELL");
-        entry.addPayment(payment);
-        repository.putPayment(payment);
-        persistCore();
-        persistPaymentEvents(entry, payment, remainingBefore);
+        draft.addPayment(payment);
+        commitMutation(draft, List.of(payment), List.of(), paymentEvents(draft, payment, remainingBefore), entry);
         return payment;
     }
 
@@ -113,15 +111,14 @@ public class CreditManager {
         validateAmount(value);
         if (items == null || items.isEmpty()) throw new CreditException("Mindestens ein Item muss ausgewählt werden.");
 
-        double remainingBefore = entry.getRemainingAmount();
+        CreditEntry draft = copyCredit(entry);
+        double remainingBefore = draft.getRemainingAmount();
         Payment payment = new Payment(dealId, entry.getDebtor(), entry.getCreditor(),
                 Math.min(value, remainingBefore), new ArrayList<>(items), "MANUELL");
         payment.setItemNbtEntries(nbtEntries);
         payment.setItemNbt(nbtEntries == null || nbtEntries.isEmpty() ? null : nbtEntries.get(0));
-        entry.addPayment(payment);
-        repository.putPayment(payment);
-        persistCore();
-        persistPaymentEvents(entry, payment, remainingBefore);
+        draft.addPayment(payment);
+        commitMutation(draft, List.of(payment), List.of(), paymentEvents(draft, payment, remainingBefore), entry);
         return payment;
     }
 
@@ -133,11 +130,11 @@ public class CreditManager {
         CreditEntry entry = getSafeCredit(dealId);
         requireWritable();
         if (entry.isArchived()) return entry;
-        double remainingBefore = entry.getRemainingAmount();
-        entry.setArchived(true);
-        repository.putCredit(entry);
-        persistEvent(CreditEventType.CREDIT_ARCHIVED, entry, entry.getAmount(), remainingBefore,
-                "Deal archiviert", null, "ARCHIVE", false);
+        CreditEntry draft = copyCredit(entry);
+        double remainingBefore = draft.getRemainingAmount();
+        draft.setArchived(true);
+        commitMutation(draft, List.of(), List.of(), List.of(event(CreditEventType.CREDIT_ARCHIVED, draft, draft.getAmount(), remainingBefore,
+                "Deal archiviert", null, "ARCHIVE", false)), entry);
         return entry;
     }
 
@@ -145,12 +142,12 @@ public class CreditManager {
         CreditEntry entry = getSafeCredit(dealId);
         requireWritable();
         validateActive(entry);
-        double remainingBefore = entry.getRemainingAmount();
-        entry.setStatus(STATUS_CLOSED);
-        entry.setCompletedAt(System.currentTimeMillis());
-        repository.putCredit(entry);
-        persistEvent(CreditEventType.CREDIT_CLOSED, entry, entry.getAmount(), remainingBefore,
-                "Deal manuell abgeschlossen", null, "CLOSE", false);
+        CreditEntry draft = copyCredit(entry);
+        double remainingBefore = draft.getRemainingAmount();
+        draft.setStatus(STATUS_CLOSED);
+        draft.setCompletedAt(System.currentTimeMillis());
+        commitMutation(draft, List.of(), List.of(), List.of(event(CreditEventType.CREDIT_CLOSED, draft, draft.getAmount(), remainingBefore,
+                "Deal manuell abgeschlossen", null, "CLOSE", false)), entry);
         return entry;
     }
 
@@ -158,14 +155,14 @@ public class CreditManager {
         CreditEntry entry = getSafeCredit(dealId);
         requireWritable();
         if (!entry.isArchived() && !STATUS_CANCELLED.equals(entry.getStatus()) && !STATUS_CLOSED.equals(entry.getStatus())) return entry;
-        double remainingBefore = entry.getRemainingAmount();
-        entry.setArchived(false);
-        entry.setCompletedAt(null);
-        entry.setStatus(STATUS_OPEN);
-        entry.refreshPaymentState();
-        repository.putCredit(entry);
-        persistEvent(CreditEventType.CREDIT_REACTIVATED, entry, entry.getAmount(), remainingBefore,
-                "Deal reaktiviert", null, "REACTIVATE", false);
+        CreditEntry draft = copyCredit(entry);
+        double remainingBefore = draft.getRemainingAmount();
+        draft.setArchived(false);
+        draft.setCompletedAt(null);
+        draft.setStatus(STATUS_OPEN);
+        draft.refreshPaymentState();
+        commitMutation(draft, List.of(), List.of(), List.of(event(CreditEventType.CREDIT_REACTIVATED, draft, draft.getAmount(), remainingBefore,
+                "Deal reaktiviert", null, "REACTIVATE", false)), entry);
         return entry;
     }
 
@@ -174,15 +171,15 @@ public class CreditManager {
                 .orElseThrow(() -> new CreditException("Zahlung nicht gefunden."));
         CreditEntry entry = getSafeCredit(payment.getCreditId());
         requireWritable();
-        double remainingBefore = entry.getRemainingAmount();
-        repository.deletePayment(paymentId);
-        if (STATUS_OPEN.equals(entry.getStatus()) || STATUS_PARTIAL.equals(entry.getStatus())) {
-            entry.setArchived(false);
-            entry.setCompletedAt(null);
+        CreditEntry draft = copyCredit(entry);
+        double remainingBefore = draft.getRemainingAmount();
+        draft.removePayment(paymentId);
+        if (STATUS_OPEN.equals(draft.getStatus()) || STATUS_PARTIAL.equals(draft.getStatus())) {
+            draft.setArchived(false);
+            draft.setCompletedAt(null);
         }
-        persistCore();
-        persistEvent(CreditEventType.PAYMENT_DELETED, entry, safeAmount(payment), remainingBefore,
-                "Zahlung gelöscht", payment.getFromPlayer(), payment.getSource(), !payment.getItems().isEmpty());
+        commitMutation(draft, List.of(), List.of(paymentId), List.of(event(CreditEventType.PAYMENT_DELETED, draft,
+                safeAmount(payment), remainingBefore, "Zahlung gelöscht", payment.getFromPlayer(), payment.getSource(), !payment.getItems().isEmpty())), entry);
     }
 
     public CreditEntry updateCredit(UUID dealId, String creditor, String debtor, double amount, Long dueDate, String label, String note) throws CreditException {
@@ -200,11 +197,12 @@ public class CreditManager {
         boolean exists = repository.getAllCredits().stream().anyMatch(other -> !other.getId().equals(dealId)
                 && name.equalsIgnoreCase(other.getDealName()) && !STATUS_CANCELLED.equals(other.getStatus()));
         if (exists) throw new CreditException("Ein aktiver Deal mit diesem Namen existiert bereits.");
-        double previousAmount = entry.getAmount();
-        entry.setCreditor(lower(creditor)); entry.setDebtor(lower(debtor)); entry.setDealName(name); entry.setAmount(amount); entry.setDueDate(dueDate); entry.setNote(note == null || note.isBlank() ? null : note.trim());
-        entry.refreshPaymentState();
-        repository.putCredit(entry);
-        persistEvent(CreditEventType.CREDIT_UPDATED, entry, amount, previousAmount, "Deal bearbeitet", null, "EDIT", false);
+        CreditEntry draft = copyCredit(entry);
+        double previousAmount = draft.getAmount();
+        draft.setCreditor(lower(creditor)); draft.setDebtor(lower(debtor)); draft.setDealName(name); draft.setAmount(amount); draft.setDueDate(dueDate); draft.setNote(note == null || note.isBlank() ? null : note.trim());
+        draft.refreshPaymentState();
+        commitMutation(draft, List.of(), List.of(), List.of(event(CreditEventType.CREDIT_UPDATED, draft, amount, previousAmount,
+                "Deal bearbeitet", null, "EDIT", false)), entry);
         return entry;
     }
 
@@ -240,8 +238,11 @@ public class CreditManager {
     }
 
     public List<Payment> getPaymentsForCredit(UUID dealId) { return repository.getPaymentsByCreditId(dealId); }
+    public boolean requiresRecovery() {
+        return !isWritable() || !repository.getRecoveryRecords().isEmpty();
+    }
     public boolean isWritable() {
-        return repository.isWritable() && CreditEventRepository.getInstance().isWritable()
+        return DatabaseManager.getInstance().isSafeForWrites() && repository.isWritable() && CreditEventRepository.getInstance().isWritable()
                 && TransactionRepository.getInstance().isWritable() && ClientConfigManager.isWritable();
     }
     public long getRevision() { return repository.getRevision(); }
@@ -267,6 +268,12 @@ public class CreditManager {
         if (CONFIG_RECOVERY_TOKEN.equals(token)) return JsonStorage.createBackup(FileManager.getClientConfigFile());
         if (TRANSACTION_RECOVERY_TOKEN.equals(token)) return op.creditmanager.client.storage.db.DatabaseManager.getInstance().createBackup();
         return repository.createRecoveryBackup(token);
+    }
+    public boolean createSafetyBackup() { return DatabaseManager.getInstance().createBackup(); }
+    public boolean restoreLatestSafetyBackup() {
+        if (!DatabaseManager.getInstance().restoreLatestValidBackup()) return false;
+        reloadData();
+        return !requiresRecovery();
     }
     public boolean repairDefaultRecovery(UUID token) {
         if (CONFIG_RECOVERY_TOKEN.equals(token)) return ClientConfigManager.resetCorruptConfigWithDefaults();
@@ -302,32 +309,88 @@ public class CreditManager {
         if (!isWritable()) throw new CreditException("Datenprüfung erforderlich: Änderungen sind vorübergehend gesperrt.");
     }
 
-    private void persistCore() throws CreditException {
+    private void commitMutation(CreditEntry draft, List<Payment> paymentUpserts, List<UUID> paymentDeletions,
+                                List<CreditEventEntry> events, CreditEntry published) throws CreditException {
+        DatabaseManager.CreditMutation mutation = new DatabaseManager.CreditMutation(draft, paymentUpserts, paymentDeletions, events);
+        if (!DatabaseManager.getInstance().commitCreditMutation(mutation)) {
+            throw new CreditException("Vorgang wurde nicht gespeichert; der vorherige Datenstand bleibt unverändert.");
+        }
+        repository.load();
+        CreditEventRepository.getInstance().bind(repository);
+        CreditEventRepository.getInstance().load();
+        TransactionRepository.getInstance().load();
+        CreditEntry persisted = repository.findCreditById(draft.getId())
+                .orElseThrow(() -> new CreditException("Gespeicherter Deal konnte nicht erneut geladen werden."));
+        CreditEntry target = published == null ? draft : published;
+        syncCredit(target, persisted);
+        repository.replaceLoadedCredit(target);
     }
 
-    private void persistPaymentEvents(CreditEntry entry, Payment payment, double remainingBefore) throws CreditException {
+    private List<CreditEventEntry> paymentEvents(CreditEntry entry, Payment payment, double remainingBefore) {
+        List<CreditEventEntry> events = new ArrayList<>();
         double amount = safeAmount(payment);
         boolean itemPayment = !payment.getItems().isEmpty();
-        persistEvent(CreditEventType.PAYMENT_ADDED, entry, amount, remainingBefore, "Zahlung hinzugefügt",
-                payment.getFromPlayer(), payment.getSource(), itemPayment);
+        events.add(event(CreditEventType.PAYMENT_ADDED, entry, amount, remainingBefore, "Zahlung hinzugefügt",
+                payment.getFromPlayer(), payment.getSource(), itemPayment));
         if (STATUS_PAID.equals(entry.getStatus())) {
-            persistEvent(CreditEventType.CREDIT_PAID, entry, amount, remainingBefore, "Deal vollständig bezahlt",
-                    payment.getFromPlayer(), payment.getSource(), itemPayment);
+            events.add(event(CreditEventType.CREDIT_PAID, entry, amount, remainingBefore, "Deal vollständig bezahlt",
+                    payment.getFromPlayer(), payment.getSource(), itemPayment));
         } else if (STATUS_PARTIAL.equals(entry.getStatus())) {
-            persistEvent(CreditEventType.CREDIT_PARTIAL, entry, amount, remainingBefore, "Teilzahlung",
-                    payment.getFromPlayer(), payment.getSource(), itemPayment);
+            events.add(event(CreditEventType.CREDIT_PARTIAL, entry, amount, remainingBefore, "Teilzahlung",
+                    payment.getFromPlayer(), payment.getSource(), itemPayment));
         }
+        return List.copyOf(events);
     }
 
-    private void persistEvent(CreditEventType type, CreditEntry entry, double amount, double amountBefore,
-                              String note, String actor, String source, boolean itemPayment) throws CreditException {
-        boolean saved = CreditEventRepository.getInstance().add(new CreditEventEntry(type, entry, amount, amountBefore,
-                note, actor, source, itemPayment));
-        if (!saved) {
-            repository.load();
-            CreditEventRepository.getInstance().recoverFromCore();
-            throw new CreditException("Vorgang wurde nicht gespeichert; der vorherige Datenstand wurde wiederhergestellt.");
-        }
+    private CreditEventEntry event(CreditEventType type, CreditEntry entry, double amount, double amountBefore,
+                                   String note, String actor, String source, boolean itemPayment) {
+        return new CreditEventEntry(type, entry, amount, amountBefore, note, actor, source, itemPayment);
+    }
+
+    private CreditEntry copyCredit(CreditEntry source) {
+        CreditEntry copy = new CreditEntry();
+        copy.setId(source.getId());
+        copy.setDealName(source.getDealName());
+        copy.setCreditor(source.getCreditor());
+        copy.setDebtor(source.getDebtor());
+        copy.setAmount(source.getAmount());
+        copy.setPaidAmount(source.getPaidAmount());
+        copy.setCreatedAt(source.getCreatedAt());
+        copy.setDueDate(source.getDueDate());
+        copy.setStatus(source.getStatus());
+        copy.setNote(source.getNote());
+        copy.setCompletedAt(source.getCompletedAt());
+        copy.setArchived(source.isArchived());
+        copy.setPayments(new ArrayList<>(source.getPayments().stream().map(this::copyPayment).toList()));
+        return copy;
+    }
+
+    private Payment copyPayment(Payment source) {
+        Payment copy = new Payment(source.getCreditId(), source.getFromPlayer(), source.getToPlayer(), source.getAmount(),
+                new ArrayList<>(source.getItems()), source.getSource());
+        copy.setId(source.getId());
+        copy.setItemNbt(source.getItemNbt());
+        copy.setItemNbtEntries(source.getItemNbtEntries());
+        copy.setTimestamp(source.getTimestamp());
+        copy.setPaylogId(source.getPaylogId());
+        copy.setNote(source.getNote());
+        return copy;
+    }
+
+    private void syncCredit(CreditEntry target, CreditEntry source) {
+        target.setId(source.getId());
+        target.setDealName(source.getDealName());
+        target.setCreditor(source.getCreditor());
+        target.setDebtor(source.getDebtor());
+        target.setAmount(source.getAmount());
+        target.setPaidAmount(source.getPaidAmount());
+        target.setCreatedAt(source.getCreatedAt());
+        target.setDueDate(source.getDueDate());
+        target.setStatus(source.getStatus());
+        target.setNote(source.getNote());
+        target.setCompletedAt(source.getCompletedAt());
+        target.setArchived(source.isArchived());
+        target.setPayments(new ArrayList<>(source.getPayments().stream().map(this::copyPayment).toList()));
     }
 
     private void validateActive(CreditEntry entry) throws CreditException {
@@ -347,22 +410,21 @@ public class CreditManager {
         }
         double available = paylog.getRemainingAmount();
         if (available <= EPSILON) return PaylogLinkResult.alreadyConsumed(paylog);
-        double remainingBefore = entry.getRemainingAmount();
+        CreditEntry draft = copyCredit(entry);
+        double remainingBefore = draft.getRemainingAmount();
         if (automatic && available > remainingBefore + EPSILON) return PaylogLinkResult.noSingleDealFits(paylog);
 
         double wanted = Double.isFinite(requestedAmount) ? requestedAmount : available;
         validateAmount(wanted);
         double booked = Math.min(Math.min(wanted, available), remainingBefore);
-        Payment payment = new Payment(entry.getId(), entry.getDebtor(), entry.getCreditor(), booked, null,
+        Payment payment = new Payment(draft.getId(), draft.getDebtor(), draft.getCreditor(), booked, null,
                 source == null ? automatic ? "PAYLOG_AUTO" : "PAYLOG_MANUAL" : source);
         payment.setPaylogId(paylog.getId());
         payment.setTimestamp(requestedTimestamp > 0 ? requestedTimestamp : paylog.getTimestamp());
         payment.setNote(normalizeNote(note));
-        entry.addPayment(payment);
-        entry.setArchived(false);
-        repository.putPayment(payment);
-        persistCore();
-        persistPaymentEvents(entry, payment, remainingBefore);
+        draft.addPayment(payment);
+        draft.setArchived(false);
+        commitMutation(draft, List.of(payment), List.of(), paymentEvents(draft, payment, remainingBefore), entry);
         return PaylogLinkResult.linked(paylog, entry, payment, available - booked, automatic);
     }
 

@@ -82,6 +82,26 @@ public class FileManager {
         return dataDirectory.resolve("backups").resolve(backupName);
     }
 
+    public static Path getBackupDirectory() {
+        return dataDirectory.resolve("backups");
+    }
+
+    public static Path getBackupManifestFile() {
+        return getBackupDirectory().resolve("manifest.json");
+    }
+
+    public static Path getRecoveryDirectory() {
+        return dataDirectory.resolve("recovery");
+    }
+
+    public static Path getQuarantineDirectory() {
+        return getRecoveryDirectory().resolve("quarantine");
+    }
+
+    public static Path getRecoveryValidationDirectory() {
+        return getRecoveryDirectory().resolve("validation");
+    }
+
     public static void tidyAfterSuccessfulSave() {
         try {
             Path backups = dataDirectory.resolve("backups");

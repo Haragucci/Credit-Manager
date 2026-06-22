@@ -29,6 +29,8 @@ public final class ModernDealHistoryScreen extends ModernBaseScreen {
     private List<CreditEntry> rendered = List.of();
     private int pageOffset, listY, listHeight, renderedStart, previousX, nextX, pageControlsY, pageButtonWidth;
     private int archiveToggleX, archiveToggleY, archiveToggleWidth, sortX, sortY, sortWidth;
+    private List<ModernLayout.Bounds> toolbarButtons = List.of();
+    private List<ModernLayout.Bounds> pagingButtons = List.of();
     private boolean showArchived, forceSearch, disposed;
     private int sortIndex;
     private String rawSearchKey = "", requestedKey = "", appliedKey = "", queryError;
@@ -86,18 +88,24 @@ public final class ModernDealHistoryScreen extends ModernBaseScreen {
 
     @Override public void render(DrawContext context, int mouseX, int mouseY, float delta) {
         renderShell(context, mouseX, mouseY);
-        archiveToggleWidth = Math.max(105, Math.min(148, contentWidth / 2));
-        sortWidth = Math.max(82, contentWidth - archiveToggleWidth - 8);
-        archiveToggleX = contentX; archiveToggleY = contentY + 37;
-        sortX = archiveToggleX + archiveToggleWidth + 8; sortY = archiveToggleY;
-        ModernUi.button(context, textRenderer, archiveToggleX, archiveToggleY, archiveToggleWidth, 23,
+        ModernLayout.positionTextField(searchField, contentX + 4, contentY + 4, Math.max(1, contentWidth - 8), contentY, contentHeight, true);
+        boolean compactToolbar = contentWidth < 220;
+        toolbarButtons = ModernLayout.buttonRow(contentX, contentY + 37, contentWidth, 2, 92, 23, 8);
+        ModernLayout.Bounds archiveBounds = toolbarButtons.getFirst();
+        ModernLayout.Bounds sortBounds = toolbarButtons.get(1);
+        archiveToggleX = archiveBounds.x(); archiveToggleY = archiveBounds.y(); archiveToggleWidth = archiveBounds.width();
+        sortX = sortBounds.x(); sortY = sortBounds.y(); sortWidth = sortBounds.width();
+        ModernUi.button(context, textRenderer, archiveBounds.x(), archiveBounds.y(), archiveBounds.width(), archiveBounds.height(),
                 showArchived ? "Archivierte: an" : "Archivierte anzeigen", showArchived ? ModernUi.theme().buttonPrimary : ModernUi.theme().buttonNeutral,
-                ModernUi.contains(mouseX, mouseY, archiveToggleX, archiveToggleY, archiveToggleWidth, 23));
-        ModernUi.button(context, textRenderer, sortX, sortY, sortWidth, 23, "Sortierung: " + SORT_LABELS[sortIndex], ModernUi.theme().buttonNeutral,
-                ModernUi.contains(mouseX, mouseY, sortX, sortY, sortWidth, 23));
+                ModernUi.contains(mouseX, mouseY, archiveBounds.x(), archiveBounds.y(), archiveBounds.width(), archiveBounds.height()));
+        ModernUi.button(context, textRenderer, sortBounds.x(), sortBounds.y(), sortBounds.width(), sortBounds.height(), "Sort: " + SORT_LABELS[sortIndex], ModernUi.theme().buttonNeutral,
+                ModernUi.contains(mouseX, mouseY, sortBounds.x(), sortBounds.y(), sortBounds.width(), sortBounds.height()));
+        int toolbarHeight = compactToolbar ? ModernLayout.rowHeight(toolbarButtons, 0) : 23;
         String label = pending == null ? "History · Seite " + page.pageNumber() + "/" + page.pageCount() + " · " + page.totalCount() + " Ergebnis" + (page.totalCount() == 1 ? "" : "se") : "Deal-History wird geladen…";
-        ModernUi.drawGuiText(context, textRenderer, label, contentX, contentY + 68, pending == null ? ModernUi.theme().muted : ModernUi.theme().warning);
-        listY = contentY + 83; listHeight = Math.max(45, contentHeight - 124);
+        ModernUi.drawTruncated(context, textRenderer, label, contentX, contentY + 42 + toolbarHeight, contentWidth, pending == null ? ModernUi.theme().muted : ModernUi.theme().warning);
+        listY = contentY + 56 + toolbarHeight;
+        int pagingHeight = ModernLayout.stack(contentWidth, 2, 88, 8) ? 54 : 23;
+        listHeight = Math.max(45, contentY + contentHeight - listY - pagingHeight - 10);
         drawRows(context, mouseX, mouseY); drawPaging(context, mouseX, mouseY);
         super.render(context, mouseX, mouseY, delta);
     }
@@ -117,27 +125,33 @@ public final class ModernDealHistoryScreen extends ModernBaseScreen {
     }
 
     private void drawPaging(DrawContext context, int mouseX, int mouseY) {
-        pageControlsY = listY + listHeight + 7; pageButtonWidth = Math.max(42, (contentWidth - 8) / 2); previousX = contentX; nextX = previousX + pageButtonWidth + 8;
+        pageControlsY = listY + listHeight + 7;
+        pagingButtons = ModernLayout.buttonRow(contentX, pageControlsY, contentWidth, 2, 88, 23, 8);
+        ModernLayout.Bounds previousBounds = pagingButtons.getFirst();
+        ModernLayout.Bounds nextBounds = pagingButtons.get(1);
+        previousX = previousBounds.x(); nextX = nextBounds.x(); pageButtonWidth = previousBounds.width();
         boolean previous = pageOffset > 0 && pending == null, next = page.hasNext() && pending == null;
-        ModernUi.button(context, textRenderer, previousX, pageControlsY, pageButtonWidth, 23, "← Vorherige Seite", ModernUi.theme().buttonNeutral, previous && ModernUi.contains(mouseX, mouseY, previousX, pageControlsY, pageButtonWidth, 23));
-        ModernUi.button(context, textRenderer, nextX, pageControlsY, pageButtonWidth, 23, "Nächste Seite →", next ? ModernUi.theme().buttonPrimary : ModernUi.theme().buttonNeutral, next && ModernUi.contains(mouseX, mouseY, nextX, pageControlsY, pageButtonWidth, 23));
+        ModernUi.button(context, textRenderer, previousBounds.x(), previousBounds.y(), previousBounds.width(), previousBounds.height(), "← Vorherige Seite", ModernUi.theme().buttonNeutral,
+                previous && ModernUi.contains(mouseX, mouseY, previousBounds.x(), previousBounds.y(), previousBounds.width(), previousBounds.height()));
+        ModernUi.button(context, textRenderer, nextBounds.x(), nextBounds.y(), nextBounds.width(), nextBounds.height(), "Nächste Seite →", next ? ModernUi.theme().buttonPrimary : ModernUi.theme().buttonNeutral,
+                next && ModernUi.contains(mouseX, mouseY, nextBounds.x(), nextBounds.y(), nextBounds.width(), nextBounds.height()));
     }
 
     private void drawEntry(DrawContext context, int mouseX, int mouseY, CreditEntry entry, int x, int y, int width) {
         ModernUi.card(context, x, y, width, 41, ModernUi.contains(mouseX, mouseY, x, y, width, 41));
         int color = entry.isArchived() ? ModernUi.theme().muted : CreditManager.STATUS_PAID.equals(entry.getStatus()) ? ModernUi.theme().success : ModernUi.theme().warning;
-        ModernUi.drawTruncated(context, textRenderer, entry.getDebtor() + " → " + entry.getCreditor(), x + 9, y + 8, Math.max(40, width - 150), ModernUi.theme().text);
-        ModernUi.drawTruncated(context, textRenderer, entry.getDealName(), x + 9, y + 23, Math.max(40, width - 150), ModernUi.theme().muted);
+        ModernUi.drawTruncated(context, textRenderer, entry.getDebtor() + " → " + entry.getCreditor(), x + 9, y + 8, Math.max(1, width - 150), ModernUi.theme().text);
+        ModernUi.drawTruncated(context, textRenderer, entry.getDealName(), x + 9, y + 23, Math.max(1, width - 150), ModernUi.theme().muted);
         ModernUi.drawGuiTextRightAligned(context, textRenderer, FormatUtil.formatAmount(entry.getAmount()), x + width - 10, y + 8, color);
         ModernUi.drawGuiTextRightAligned(context, textRenderer, entry.isArchived() ? "Archiviert" : statusLabel(entry.getStatus()), x + width - 10, y + 23, color);
     }
 
     @Override public boolean mouseClicked(Click click, boolean doubled) {
         if (handleSidebarClick(click)) return true;
-        if (click.button() == 0 && ModernUi.contains(click.x(), click.y(), archiveToggleX, archiveToggleY, archiveToggleWidth, 23)) { showArchived = !showArchived; pageOffset = 0; forceImmediate(); return true; }
-        if (click.button() == 0 && ModernUi.contains(click.x(), click.y(), sortX, sortY, sortWidth, 23)) { sortIndex = (sortIndex + 1) % SORTS.length; pageOffset = 0; forceImmediate(); return true; }
-        if (click.button() == 0 && ModernUi.contains(click.x(), click.y(), previousX, pageControlsY, pageButtonWidth, 23) && pending == null && pageOffset > 0) { pageOffset = Math.max(0, pageOffset - PAGE_SIZE); forceImmediate(); return true; }
-        if (click.button() == 0 && ModernUi.contains(click.x(), click.y(), nextX, pageControlsY, pageButtonWidth, 23) && pending == null && page.hasNext()) { pageOffset += PAGE_SIZE; forceImmediate(); return true; }
+        if (click.button() == 0 && !toolbarButtons.isEmpty() && ModernUi.contains(click.x(), click.y(), toolbarButtons.getFirst().x(), toolbarButtons.getFirst().y(), toolbarButtons.getFirst().width(), toolbarButtons.getFirst().height())) { showArchived = !showArchived; pageOffset = 0; forceImmediate(); return true; }
+        if (click.button() == 0 && toolbarButtons.size() > 1 && ModernUi.contains(click.x(), click.y(), toolbarButtons.get(1).x(), toolbarButtons.get(1).y(), toolbarButtons.get(1).width(), toolbarButtons.get(1).height())) { sortIndex = (sortIndex + 1) % SORTS.length; pageOffset = 0; forceImmediate(); return true; }
+        if (click.button() == 0 && !pagingButtons.isEmpty() && ModernUi.contains(click.x(), click.y(), pagingButtons.getFirst().x(), pagingButtons.getFirst().y(), pagingButtons.getFirst().width(), pagingButtons.getFirst().height()) && pending == null && pageOffset > 0) { pageOffset = Math.max(0, pageOffset - PAGE_SIZE); forceImmediate(); return true; }
+        if (click.button() == 0 && pagingButtons.size() > 1 && ModernUi.contains(click.x(), click.y(), pagingButtons.get(1).x(), pagingButtons.get(1).y(), pagingButtons.get(1).width(), pagingButtons.get(1).height()) && pending == null && page.hasNext()) { pageOffset += PAGE_SIZE; forceImmediate(); return true; }
         if (scroll.mouseClicked(click.x(), click.y(), click.button())) return true;
         if (click.button() == 0 && ModernUi.contains(click.x(), click.y(), contentX, listY, contentWidth, listHeight)) {
             int index = (int) ((click.y() - listY + scroll.offset()) / 46);

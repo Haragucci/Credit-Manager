@@ -29,9 +29,10 @@ import java.time.format.DateTimeParseException;
 
 public class ModernPaymentScreen extends ModernBaseScreen {
 
-    private static final int INVENTORY_COLUMNS = 9;
-    private static final int INVENTORY_ROWS = 4;
-    private static final int INVENTORY_SLOT_SIZE = 22;
+    private static final int INVENTORY_PREFERRED_COLUMNS = 9;
+    private static final int INVENTORY_SLOT_PREFERRED_SIZE = 22;
+    private static final int INVENTORY_SLOT_MIN_SIZE = 16;
+    private static final int INVENTORY_VISIBLE_SLOTS = 36;
 
     private final CreditEntry entry;
     private final boolean debts;
@@ -54,12 +55,17 @@ public class ModernPaymentScreen extends ModernBaseScreen {
     private int saveY;
     private int inventoryX;
     private int inventoryY;
+    private int inventoryColumns;
+    private int inventorySlotSize;
     private int visibleInventoryRows;
     private int inventoryScrollRows;
     private String itemHint;
     private int formViewportY;
     private int formViewportHeight;
     private int paylogButtonY;
+    private List<ModernLayout.Bounds> itemActionBounds = List.of();
+    private List<ModernLayout.Bounds> modeTabBounds = List.of();
+    private List<ModernLayout.Bounds> moneyActionBounds = List.of();
 
     public ModernPaymentScreen(CreditManager manager, CreditEntry entry, boolean debts, Screen parent) {
         super(manager, parent, debts ? "Zahlung leisten" : "Zahlung empfangen", debts ? "debts" : "claims");
@@ -77,8 +83,9 @@ public class ModernPaymentScreen extends ModernBaseScreen {
             contentHeight = panelHeight - 42;
         }
         clearChildren();
-        fieldX = contentX + 8;
-        fieldWidth = Math.max(100, contentWidth - 16);
+        int inset = Math.min(8, Math.max(0, (contentWidth - 1) / 2));
+        fieldX = contentX + inset;
+        fieldWidth = Math.max(1, contentWidth - inset * 2);
         modeY = contentY;
         amountField = ModernUi.configureGuiTextField(
                 new CenteredTextFieldWidget(textRenderer, fieldX + 5, modeY + 63, fieldWidth - 10, 19, Text.empty()));
@@ -102,13 +109,12 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         renderShell(context, mouseX, mouseY);
         formViewportY = contentY;
         formViewportHeight = Math.max(28, contentHeight);
-        int formContentHeight = itemMode ? 204 : selectedPaylog == null ? 150 : 228;
+        int formContentHeight = itemMode ? itemFormHeight() : moneyFormHeight();
         formScroll.setBounds(fieldX, formViewportY, fieldWidth, formViewportHeight, formContentHeight);
         formScroll.tick(mouseX, mouseY);
         modeY = formViewportY - formScroll.offset();
         int fieldY = modeY + 63;
-        amountField.setPosition(fieldX + 5, fieldY);
-        amountField.setVisible(fieldY + 19 > formViewportY && fieldY < formViewportY + formViewportHeight);
+        ModernLayout.positionTextField(amountField, fieldX + 5, fieldY, fieldWidth - 10, formViewportY, formViewportHeight, true);
         positionPaylogFields();
         context.enableScissor(fieldX, formViewportY, fieldX + fieldWidth, formViewportY + formViewportHeight);
         drawModeAndAmount(context, mouseX, mouseY);
@@ -126,11 +132,13 @@ public class ModernPaymentScreen extends ModernBaseScreen {
     private void drawModeAndAmount(DrawContext context, int mouseX, int mouseY) {
         ModernUi.card(context, fieldX, modeY, fieldWidth, 49, false);
         ModernUi.drawGuiText(context, textRenderer, "Zahlungsart", fieldX + 10, modeY + 9, ModernUi.theme().muted);
-        int tabWidth = Math.max(40, (fieldWidth - 30) / 2);
-        ModernUi.button(context, textRenderer, fieldX + 10, modeY + 22, tabWidth, 20, "Geld", itemMode ? ModernUi.theme().buttonNeutral : ModernUi.theme().buttonPrimary,
-                ModernUi.contains(mouseX, mouseY, fieldX + 10, modeY + 22, tabWidth, 20));
-        ModernUi.button(context, textRenderer, fieldX + 20 + tabWidth, modeY + 22, tabWidth, 20, "Items", itemMode ? ModernUi.theme().buttonGold : ModernUi.theme().buttonNeutral,
-                ModernUi.contains(mouseX, mouseY, fieldX + 20 + tabWidth, modeY + 22, tabWidth, 20));
+        modeTabBounds = ModernLayout.buttonRow(fieldX + 10, modeY + 22, Math.max(1, fieldWidth - 20), 2, 1, 20, 8);
+        ModernLayout.Bounds money = modeTabBounds.getFirst();
+        ModernLayout.Bounds items = modeTabBounds.get(1);
+        ModernUi.button(context, textRenderer, money.x(), money.y(), money.width(), money.height(), "Geld", itemMode ? ModernUi.theme().buttonNeutral : ModernUi.theme().buttonPrimary,
+                ModernUi.contains(mouseX, mouseY, money.x(), money.y(), money.width(), money.height()));
+        ModernUi.button(context, textRenderer, items.x(), items.y(), items.width(), items.height(), "Items", itemMode ? ModernUi.theme().buttonGold : ModernUi.theme().buttonNeutral,
+                ModernUi.contains(mouseX, mouseY, items.x(), items.y(), items.width(), items.height()));
         String amountLabel = itemMode && itemHint != null ? itemHint : itemMode ? "Gemeinsamer Item-Wert" : "Betrag";
         ModernUi.drawTruncated(context, textRenderer, amountLabel, fieldX, modeY + 55, fieldWidth,
                 itemMode && itemHint != null ? ModernUi.theme().warning : ModernUi.theme().muted);
@@ -139,9 +147,9 @@ public class ModernPaymentScreen extends ModernBaseScreen {
 
     private void drawMoneyActions(DrawContext context, int mouseX, int mouseY) {
         paylogButtonY = modeY + 88;
-        int buttonWidth = Math.max(42, Math.min(132, (fieldWidth - 8) / 2));
-        ModernUi.button(context, textRenderer, fieldX, paylogButtonY, buttonWidth, 20, "Aus Paylog", ModernUi.theme().buttonNeutral,
-                ModernUi.contains(mouseX, mouseY, fieldX, paylogButtonY, buttonWidth, 20));
+        int paylogButtonWidth = Math.max(1, Math.min(132, fieldWidth));
+        ModernUi.button(context, textRenderer, fieldX, paylogButtonY, paylogButtonWidth, 20, "Aus Paylog", ModernUi.theme().buttonNeutral,
+                ModernUi.contains(mouseX, mouseY, fieldX, paylogButtonY, paylogButtonWidth, 20));
         if (selectedPaylog != null) {
             ModernUi.drawTruncated(context, textRenderer, "Paylog: " + selectedPaylog.getFromPlayer() + " → " + selectedPaylog.getToPlayer(), fieldX, modeY + 113, fieldWidth, ModernUi.theme().muted);
             ModernUi.card(context, fieldX, modeY + 119, fieldWidth, 19, false);
@@ -151,24 +159,32 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         } else {
             saveY = modeY + 116;
         }
-        ModernUi.button(context, textRenderer, fieldX, saveY, buttonWidth, 23, "Zahlung speichern", ModernUi.theme().buttonPrimary,
-                ModernUi.contains(mouseX, mouseY, fieldX, saveY, buttonWidth, 23));
-        ModernUi.button(context, textRenderer, fieldX + buttonWidth + 8, saveY, buttonWidth, 23, "Abbrechen", ModernUi.theme().buttonNeutral,
-                ModernUi.contains(mouseX, mouseY, fieldX + buttonWidth + 8, saveY, buttonWidth, 23));
+        moneyActionBounds = ModernLayout.buttonRow(fieldX, saveY, fieldWidth, 2, 74, 23, 8);
+        ModernLayout.Bounds save = moneyActionBounds.getFirst();
+        ModernLayout.Bounds cancel = moneyActionBounds.get(1);
+        ModernUi.button(context, textRenderer, save.x(), save.y(), save.width(), save.height(), "Zahlung speichern", ModernUi.theme().buttonPrimary,
+                ModernUi.contains(mouseX, mouseY, save.x(), save.y(), save.width(), save.height()));
+        ModernUi.button(context, textRenderer, cancel.x(), cancel.y(), cancel.width(), cancel.height(), "Abbrechen", ModernUi.theme().buttonNeutral,
+                ModernUi.contains(mouseX, mouseY, cancel.x(), cancel.y(), cancel.width(), cancel.height()));
     }
 
     private void drawItemSelection(DrawContext context, int mouseX, int mouseY) {
         saveY = modeY + 88;
-        int buttonWidth = Math.max(42, Math.min(132, (fieldWidth - 8) / 2));
-        ModernUi.button(context, textRenderer, fieldX, saveY, buttonWidth, 20,
+        itemActionBounds = ModernLayout.buttonRow(fieldX, saveY, fieldWidth, 2, 74, 20, 8);
+        ModernLayout.Bounds save = itemActionBounds.getFirst();
+        ModernLayout.Bounds clear = itemActionBounds.get(1);
+        ModernUi.button(context, textRenderer, save.x(), save.y(), save.width(), save.height(),
                 "Speichern (" + selectedInventorySlots.size() + ")", ModernUi.theme().buttonPrimary,
-                ModernUi.contains(mouseX, mouseY, fieldX, saveY, buttonWidth, 20));
-        ModernUi.button(context, textRenderer, fieldX + buttonWidth + 8, saveY, buttonWidth, 20, "Auswahl leeren", ModernUi.theme().buttonNeutral,
-                ModernUi.contains(mouseX, mouseY, fieldX + buttonWidth + 8, saveY, buttonWidth, 20));
+                ModernUi.contains(mouseX, mouseY, save.x(), save.y(), save.width(), save.height()));
+        ModernUi.button(context, textRenderer, clear.x(), clear.y(), clear.width(), clear.height(), "Auswahl leeren", ModernUi.theme().buttonNeutral,
+                ModernUi.contains(mouseX, mouseY, clear.x(), clear.y(), clear.width(), clear.height()));
 
-        inventoryY = saveY + 24;
-        inventoryX = fieldX + Math.max(0, (fieldWidth - INVENTORY_COLUMNS * INVENTORY_SLOT_SIZE) / 2);
-        visibleInventoryRows = INVENTORY_ROWS;
+        inventoryY = saveY + ModernLayout.rowHeight(itemActionBounds, 4);
+        inventoryColumns = ModernLayout.inventoryColumns(Math.max(INVENTORY_SLOT_MIN_SIZE, fieldWidth - 8), INVENTORY_SLOT_MIN_SIZE, INVENTORY_PREFERRED_COLUMNS);
+        inventorySlotSize = Math.max(INVENTORY_SLOT_MIN_SIZE, Math.min(INVENTORY_SLOT_PREFERRED_SIZE, Math.max(1, (fieldWidth - 4) / inventoryColumns)));
+        inventoryX = fieldX + Math.max(0, (fieldWidth - inventoryColumns * inventorySlotSize) / 2);
+        visibleInventoryRows = (int) Math.ceil(INVENTORY_VISIBLE_SLOTS / (double) inventoryColumns);
+        inventoryScrollRows = 0;
 
         PlayerInventory inventory = playerInventory();
         if (inventory == null) {
@@ -178,26 +194,28 @@ public class ModernPaymentScreen extends ModernBaseScreen {
 
         for (int row = 0; row < visibleInventoryRows; row++) {
             int inventoryRow = row + inventoryScrollRows;
-            for (int column = 0; column < INVENTORY_COLUMNS; column++) {
-                int slot = inventoryRow * INVENTORY_COLUMNS + column;
-                int x = inventoryX + column * INVENTORY_SLOT_SIZE;
-                int y = inventoryY + row * INVENTORY_SLOT_SIZE;
+            for (int column = 0; column < inventoryColumns; column++) {
+                int slot = inventoryRow * inventoryColumns + column;
+                if (slot >= INVENTORY_VISIBLE_SLOTS) continue;
+                int x = inventoryX + column * inventorySlotSize;
+                int y = inventoryY + row * inventorySlotSize;
                 drawInventorySlot(context, mouseX, mouseY, inventory.getStack(slot), slot, x, y);
             }
         }
     }
 
     private void drawInventorySlot(DrawContext context, int mouseX, int mouseY, ItemStack stack, int slot, int x, int y) {
-        boolean hovered = ModernUi.contains(mouseX, mouseY, x, y, INVENTORY_SLOT_SIZE, INVENTORY_SLOT_SIZE);
-        ModernUi.card(context, x, y, INVENTORY_SLOT_SIZE, INVENTORY_SLOT_SIZE, hovered);
+        boolean hovered = ModernUi.contains(mouseX, mouseY, x, y, inventorySlotSize, inventorySlotSize);
+        ModernUi.card(context, x, y, inventorySlotSize, inventorySlotSize, hovered);
         if (!stack.isEmpty()) {
-            context.drawItem(stack, x + 3, y + 3);
+            int itemInset = Math.max(0, (inventorySlotSize - 16) / 2);
+            context.drawItem(stack, x + itemInset, y + itemInset);
             ModernUi.drawGuiTextRightAligned(context, textRenderer, String.valueOf(stack.getCount()),
-                    x + INVENTORY_SLOT_SIZE - 2, y + INVENTORY_SLOT_SIZE - 9, ModernUi.theme().text);
+                    x + inventorySlotSize - 2, y + inventorySlotSize - 9, ModernUi.theme().text);
         }
         if (selectedInventorySlots.containsKey(slot)) {
-            context.fill(x + 2, y + 2, x + INVENTORY_SLOT_SIZE - 2, y + INVENTORY_SLOT_SIZE - 2, ModernUi.theme().selection);
-            context.fill(x + 2, y + 2, x + INVENTORY_SLOT_SIZE - 2, y + 3, ModernUi.theme().accent);
+            context.fill(x + 2, y + 2, x + inventorySlotSize - 2, y + inventorySlotSize - 2, ModernUi.theme().selection);
+            context.fill(x + 2, y + 2, x + inventorySlotSize - 2, y + 3, ModernUi.theme().accent);
         }
         if (hovered && !stack.isEmpty()) {
             context.drawItemTooltip(textRenderer, stack, mouseX, mouseY);
@@ -211,32 +229,36 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         if (!formScroll.contains(click.x(), click.y())) return super.mouseClicked(click, doubled);
         if (click.button() != 0) return super.mouseClicked(click, doubled);
 
-        int tabWidth = Math.max(40, (fieldWidth - 30) / 2);
-        if (ModernUi.contains(click.x(), click.y(), fieldX + 10, modeY + 22, tabWidth, 20)) {
+        if (!modeTabBounds.isEmpty() && ModernUi.contains(click.x(), click.y(), modeTabBounds.getFirst().x(), modeTabBounds.getFirst().y(), modeTabBounds.getFirst().width(), modeTabBounds.getFirst().height())) {
             itemMode = false;
             itemHint = null;
             ModernUi.setGuiPlaceholder(amountField, "Betrag eingeben");
             return true;
         }
-        if (ModernUi.contains(click.x(), click.y(), fieldX + 20 + tabWidth, modeY + 22, tabWidth, 20)) {
+        if (modeTabBounds.size() > 1 && ModernUi.contains(click.x(), click.y(), modeTabBounds.get(1).x(), modeTabBounds.get(1).y(), modeTabBounds.get(1).width(), modeTabBounds.get(1).height())) {
             itemMode = true;
             itemHint = null;
             ModernUi.setGuiPlaceholder(amountField, "Gemeinsamer Wert aller Items");
             return true;
         }
 
-        if (!itemMode && ModernUi.contains(click.x(), click.y(), fieldX, paylogButtonY, Math.max(42, Math.min(132, (fieldWidth - 8) / 2)), 20)) {
+        if (!itemMode && ModernUi.contains(click.x(), click.y(), fieldX, paylogButtonY, Math.max(1, Math.min(132, fieldWidth)), 20)) {
             open(new ModernPaylogPaymentSelectionScreen(manager, entry, this));
             return true;
         }
 
-        int buttonWidth = Math.max(42, Math.min(132, (fieldWidth - 8) / 2));
         int itemButtonHeight = itemMode ? 20 : 23;
-        if (ModernUi.contains(click.x(), click.y(), fieldX, saveY, buttonWidth, itemButtonHeight)) {
+        boolean saveClicked = itemMode && !itemActionBounds.isEmpty()
+                ? ModernUi.contains(click.x(), click.y(), itemActionBounds.getFirst().x(), itemActionBounds.getFirst().y(), itemActionBounds.getFirst().width(), itemActionBounds.getFirst().height())
+                : !moneyActionBounds.isEmpty() && ModernUi.contains(click.x(), click.y(), moneyActionBounds.getFirst().x(), moneyActionBounds.getFirst().y(), moneyActionBounds.getFirst().width(), moneyActionBounds.getFirst().height());
+        if (saveClicked) {
             savePayment();
             return true;
         }
-        if (ModernUi.contains(click.x(), click.y(), fieldX + buttonWidth + 8, saveY, buttonWidth, itemButtonHeight)) {
+        boolean secondaryClicked = itemMode && itemActionBounds.size() > 1
+                ? ModernUi.contains(click.x(), click.y(), itemActionBounds.get(1).x(), itemActionBounds.get(1).y(), itemActionBounds.get(1).width(), itemActionBounds.get(1).height())
+                : moneyActionBounds.size() > 1 && ModernUi.contains(click.x(), click.y(), moneyActionBounds.get(1).x(), moneyActionBounds.get(1).y(), moneyActionBounds.get(1).width(), moneyActionBounds.get(1).height());
+        if (secondaryClicked) {
             if (itemMode) {
                 selectedInventorySlots.clear();
                 itemHint = null;
@@ -246,12 +268,12 @@ public class ModernPaymentScreen extends ModernBaseScreen {
             return true;
         }
         if (itemMode && ModernUi.contains(click.x(), click.y(), inventoryX, inventoryY,
-                INVENTORY_COLUMNS * INVENTORY_SLOT_SIZE, visibleInventoryRows * INVENTORY_SLOT_SIZE)) {
-            int column = (int) ((click.x() - inventoryX) / INVENTORY_SLOT_SIZE);
-            int row = (int) ((click.y() - inventoryY) / INVENTORY_SLOT_SIZE) + inventoryScrollRows;
-            int slot = row * INVENTORY_COLUMNS + column;
+                inventoryColumns * inventorySlotSize, visibleInventoryRows * inventorySlotSize)) {
+            int column = (int) ((click.x() - inventoryX) / inventorySlotSize);
+            int row = (int) ((click.y() - inventoryY) / inventorySlotSize) + inventoryScrollRows;
+            int slot = row * inventoryColumns + column;
             PlayerInventory inventory = playerInventory();
-            if (inventory != null) {
+            if (inventory != null && slot >= 0 && slot < INVENTORY_VISIBLE_SLOTS) {
                 toggleInventorySlot(slot, inventory.getStack(slot));
             }
             return true;
@@ -361,8 +383,22 @@ public class ModernPaymentScreen extends ModernBaseScreen {
     private void positionPaylogFields() {
         if (dateField == null) return;
         boolean visible = !itemMode && selectedPaylog != null;
-        dateField.setPosition(fieldX + 5, modeY + 119); timeField.setPosition(fieldX + 5, modeY + 143); noteField.setPosition(fieldX + 5, modeY + 167);
-        dateField.setVisible(visible); timeField.setVisible(visible); noteField.setVisible(visible);
+        ModernLayout.positionTextField(dateField, fieldX + 5, modeY + 119, fieldWidth - 10, formViewportY, formViewportHeight, visible);
+        ModernLayout.positionTextField(timeField, fieldX + 5, modeY + 143, fieldWidth - 10, formViewportY, formViewportHeight, visible);
+        ModernLayout.positionTextField(noteField, fieldX + 5, modeY + 167, fieldWidth - 10, formViewportY, formViewportHeight, visible);
+    }
+
+    private int itemFormHeight() {
+        int columns = ModernLayout.inventoryColumns(Math.max(INVENTORY_SLOT_MIN_SIZE, fieldWidth - 8), INVENTORY_SLOT_MIN_SIZE, INVENTORY_PREFERRED_COLUMNS);
+        int slotSize = Math.max(INVENTORY_SLOT_MIN_SIZE, Math.min(INVENTORY_SLOT_PREFERRED_SIZE, Math.max(1, (fieldWidth - 4) / columns)));
+        int rows = (int) Math.ceil(INVENTORY_VISIBLE_SLOTS / (double) columns);
+        int actionHeight = ModernLayout.stack(fieldWidth, 2, 74, 8) ? 48 : 20;
+        return 112 + actionHeight + rows * slotSize;
+    }
+
+    private int moneyFormHeight() {
+        int actions = ModernLayout.rowHeight(ModernLayout.buttonRow(0, 0, fieldWidth, 2, 74, 23, 8), 0);
+        return (selectedPaylog == null ? 116 : 198) + actions + 8;
     }
 
     private long parseSelectedTimestamp() {
@@ -387,6 +423,9 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         itemMode = false;
         itemHint = null;
         inventoryScrollRows = 0;
+        itemActionBounds = List.of();
+        modeTabBounds = List.of();
+        moneyActionBounds = List.of();
         formScroll.reset();
         selectedInventorySlots.clear();
         super.clearTransientState();

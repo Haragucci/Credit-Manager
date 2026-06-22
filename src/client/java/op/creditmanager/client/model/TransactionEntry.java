@@ -9,16 +9,12 @@ public class TransactionEntry {
     private String toPlayer;
     private double amount;
     private long timestamp;
-    /** Original chat line, retained for audits and reliable duplicate detection. */
     private String rawText;
-    /** Search-normalized representation of the original chat line. */
     private String normalizedText;
-    /** Origin of the entry, for example DETECTED or LEGACY_JSON. */
     private String source;
-    /** Stable database fingerprint. Filled after a successful insert. */
     private String hash;
-    /** Optional server or parser metadata. Kept as JSON/text to remain forward compatible. */
     private String metadata;
+    private double linkedAmount;
 
     public TransactionEntry() {}
 
@@ -59,4 +55,9 @@ public class TransactionEntry {
 
     public String getMetadata() { return metadata; }
     public void setMetadata(String metadata) { this.metadata = metadata; }
+
+    public double getLinkedAmount() { return linkedAmount; }
+    public void setLinkedAmount(double linkedAmount) { this.linkedAmount = Math.max(0.0D, linkedAmount); }
+    public double getRemainingAmount() { return Math.max(0.0D, amount - linkedAmount); }
+    public boolean isFullyLinked() { return getRemainingAmount() <= 0.0001D; }
 }

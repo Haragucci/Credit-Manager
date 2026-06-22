@@ -35,13 +35,14 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.Optional;
 
 /**
  * Owns the embedded H2 schema and all durable CreditManager state. Connections
  * are short-lived; every domain change is committed or rolled back atomically.
  */
 public final class DatabaseManager {
-    public static final int SCHEMA_VERSION = 4;
+    public static final int SCHEMA_VERSION = 5;
     public static final int PAGE_SIZE = 500;
     private static final DatabaseManager INSTANCE = new DatabaseManager();
     private static final Gson GSON = new Gson();
@@ -129,6 +130,10 @@ public final class DatabaseManager {
                     statement.execute("CREATE TABLE IF NOT EXISTS legacy_records (id VARCHAR(36) PRIMARY KEY, record_kind VARCHAR(64) NOT NULL, original_id VARCHAR(256), raw_payload CLOB NOT NULL, reason CLOB, created_at BIGINT NOT NULL, migration_id VARCHAR(36) NOT NULL)");
                     statement.execute("CREATE INDEX IF NOT EXISTS idx_legacy_records_migration ON legacy_records(migration_id)");
                 }
+                case 5 -> {
+                    statement.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS paylog_id VARCHAR(36)");
+                    statement.execute("CREATE INDEX IF NOT EXISTS idx_payments_paylog ON payments(paylog_id)");
+                }
                 default -> throw new SQLException("Unknown CreditManager schema migration " + version);
             }
         }
@@ -141,7 +146,7 @@ public final class DatabaseManager {
 
     private void createInitialSchema(Statement statement) throws SQLException {
         statement.execute("CREATE TABLE IF NOT EXISTS credits (id VARCHAR(36) PRIMARY KEY, deal_name VARCHAR(256) NOT NULL, creditor VARCHAR(64) NOT NULL, debtor VARCHAR(64) NOT NULL, amount DOUBLE PRECISION NOT NULL, paid_amount DOUBLE PRECISION NOT NULL, created_at BIGINT NOT NULL, due_date BIGINT, status VARCHAR(32) NOT NULL, note CLOB, completed_at BIGINT, archived BOOLEAN NOT NULL DEFAULT FALSE, revision BIGINT NOT NULL)");
-        statement.execute("CREATE TABLE IF NOT EXISTS payments (id VARCHAR(36) PRIMARY KEY, credit_id VARCHAR(36) NOT NULL, from_player VARCHAR(64), to_player VARCHAR(64), amount DOUBLE PRECISION NOT NULL, items_json CLOB, item_nbt CLOB, item_nbt_entries CLOB, created_at BIGINT NOT NULL, source VARCHAR(64), revision BIGINT NOT NULL, CONSTRAINT fk_payment_credit FOREIGN KEY (credit_id) REFERENCES credits(id) ON DELETE CASCADE)");
+        statement.execute("CREATE TABLE IF NOT EXISTS payments (id VARCHAR(36) PRIMARY KEY, credit_id VARCHAR(36) NOT NULL, from_player VARCHAR(64), to_player VARCHAR(64), amount DOUBLE PRECISION NOT NULL, items_json CLOB, item_nbt CLOB, item_nbt_entries CLOB, created_at BIGINT NOT NULL, source VARCHAR(64), paylog_id VARCHAR(36), revision BIGINT NOT NULL, CONSTRAINT fk_payment_credit FOREIGN KEY (credit_id) REFERENCES credits(id) ON DELETE CASCADE)");
         statement.execute("CREATE TABLE IF NOT EXISTS credit_events (id VARCHAR(36) PRIMARY KEY, credit_id VARCHAR(36) NOT NULL, event_type VARCHAR(64) NOT NULL, amount DOUBLE PRECISION NOT NULL, paid_after DOUBLE PRECISION NOT NULL, remaining_after DOUBLE PRECISION NOT NULL, created_at BIGINT NOT NULL, deal_name VARCHAR(256), creditor VARCHAR(64), debtor VARCHAR(64), note CLOB, amount_before DOUBLE PRECISION NOT NULL, amount_after DOUBLE PRECISION NOT NULL, actor VARCHAR(64), source VARCHAR(64), item_payment BOOLEAN NOT NULL, revision BIGINT NOT NULL, CONSTRAINT fk_event_credit FOREIGN KEY (credit_id) REFERENCES credits(id) ON DELETE CASCADE)");
         statement.execute("CREATE TABLE IF NOT EXISTS paylogs (id VARCHAR(36) PRIMARY KEY, payer VARCHAR(64) NOT NULL, receiver VARCHAR(64) NOT NULL, amount DOUBLE PRECISION NOT NULL, raw_text CLOB, normalized_text CLOB NOT NULL, created_at BIGINT NOT NULL, entry_hash VARCHAR(64) NOT NULL UNIQUE, source VARCHAR(64), revision BIGINT NOT NULL)");
         statement.execute("CREATE TABLE IF NOT EXISTS data_health_records (id VARCHAR(36) PRIMARY KEY, record_type VARCHAR(64) NOT NULL, severity VARCHAR(32) NOT NULL, source_table VARCHAR(64), source_id VARCHAR(128), title VARCHAR(256), message CLOB, raw_payload CLOB, repair_payload CLOB, status VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, resolved_at BIGINT)");
@@ -151,6 +156,7 @@ public final class DatabaseManager {
         statement.execute("CREATE INDEX IF NOT EXISTS idx_credits_parties ON credits(debtor, creditor)");
         statement.execute("CREATE INDEX IF NOT EXISTS idx_credits_completed ON credits(completed_at)");
         statement.execute("CREATE INDEX IF NOT EXISTS idx_payments_credit ON payments(credit_id)");
+        statement.execute("CREATE INDEX IF NOT EXISTS idx_payments_paylog ON payments(paylog_id)");
         statement.execute("CREATE INDEX IF NOT EXISTS idx_payments_created ON payments(created_at)");
         statement.execute("CREATE INDEX IF NOT EXISTS idx_events_credit ON credit_events(credit_id)");
         statement.execute("CREATE INDEX IF NOT EXISTS idx_events_created ON credit_events(created_at)");
@@ -223,7 +229,7 @@ public final class DatabaseManager {
     public synchronized boolean replaceCreditState(Collection<CreditEntry> credits, Collection<Payment> payments, Collection<CreditEventEntry> events) {
         if (credits == null || payments == null || events == null) return false;
         return inTransaction(connection -> {
-            validateState(credits, payments, events);
+            validateState(connection, credits, payments, events);
             long rowRevision = nextRevision(connection);
             Set<String> creditIds = new HashSet<>();
             for (CreditEntry credit : credits) { upsertCredit(connection, credit, rowRevision); creditIds.add(credit.getId().toString()); }
@@ -244,7 +250,7 @@ public final class DatabaseManager {
         return inTransaction(connection -> {
             if ("COMPLETED".equals(metadata(connection, "json_migration_status"))) return;
             if (hasDomainData(connection)) throw new SQLException("Existing CreditManager data must not be overwritten by JSON migration");
-            validateState(state.credits(), state.payments(), state.events());
+            validateState(connection, state.credits(), state.payments(), state.events());
             long rowRevision = nextRevision(connection);
             for (CreditEntry credit : state.credits()) upsertCredit(connection, credit, rowRevision);
             for (Payment payment : state.payments()) upsertPayment(connection, payment, rowRevision);
@@ -350,6 +356,44 @@ public final class DatabaseManager {
     }
 
     /**
+     * Last-resort recovery for an unreadable embedded database. The original
+     * file is retained as a timestamped backup before a fresh schema is made.
+     */
+    public synchronized boolean resetCorruptDatabaseWithBackup() {
+        Path source = FileManager.getDatabaseStorageFile();
+        try {
+            if (Files.exists(source) && !createBackup()) return false;
+            initialized = false;
+            initializedAt = null;
+            healthy = true;
+            writeLocked = false;
+            if (Files.exists(source)) Files.delete(source);
+            initialize();
+            return isHealthy();
+        } catch (Exception exception) {
+            healthy = false;
+            CreditManagerClient.LOGGER.error("Could not reset corrupt CreditManager database after backup", exception);
+            return false;
+        }
+    }
+
+    /** Returns a paylog together with the amount already turned into payments. */
+    public synchronized Optional<TransactionEntry> findPaylog(UUID id) {
+        if (id == null) return Optional.empty();
+        initialize();
+        try (Connection connection = connection();
+             PreparedStatement statement = connection.prepareStatement("SELECT p.id, p.payer, p.receiver, p.amount, p.raw_text, p.normalized_text, p.created_at, p.entry_hash, p.source, p.metadata, COALESCE((SELECT SUM(amount) FROM payments WHERE paylog_id=p.id), 0) AS linked_amount FROM paylogs p WHERE p.id=?")) {
+            statement.setString(1, id.toString());
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() ? Optional.of(readPaylog(result)) : Optional.empty();
+            }
+        } catch (SQLException exception) {
+            CreditManagerClient.LOGGER.warn("Paylog lookup failed", exception);
+            return Optional.empty();
+        }
+    }
+
+    /**
      * Writes a known-distinct group in one transaction. Used by the local dev
      * fixture hook so 5,000 test paylogs never freeze the render thread.
      */
@@ -416,7 +460,7 @@ public final class DatabaseManager {
         }
         try (Connection connection = connection()) {
             long count = count(connection, "SELECT COUNT(*) FROM paylogs" + where, strings);
-            String sql = "SELECT id, payer, receiver, amount, raw_text, normalized_text, created_at, entry_hash, source, metadata FROM paylogs" + where + " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?";
+            String sql = "SELECT p.id, p.payer, p.receiver, p.amount, p.raw_text, p.normalized_text, p.created_at, p.entry_hash, p.source, p.metadata, COALESCE((SELECT SUM(amount) FROM payments WHERE paylog_id=p.id), 0) AS linked_amount FROM paylogs p" + where + " ORDER BY p.created_at DESC, p.id DESC LIMIT ? OFFSET ?";
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
                 bindStrings(statement, strings);
                 statement.setInt(strings.size() + 1, pageSize);
@@ -560,18 +604,51 @@ public final class DatabaseManager {
         }
     }
 
-    private void validateState(Collection<CreditEntry> credits, Collection<Payment> payments, Collection<CreditEventEntry> events) throws SQLException {
+    private void validateState(Connection connection, Collection<CreditEntry> credits, Collection<Payment> payments, Collection<CreditEventEntry> events) throws SQLException {
         Set<UUID> creditIds = new HashSet<>();
+        Map<UUID, Double> paymentTotals = new LinkedHashMap<>();
         for (CreditEntry credit : credits) {
             if (!isValidCredit(credit) || !creditIds.add(credit.getId())) throw new SQLException("Invalid or duplicate credit");
         }
         Set<UUID> paymentIds = new HashSet<>();
         for (Payment payment : payments) {
             if (!isValidPayment(payment) || !creditIds.contains(payment.getCreditId()) || !paymentIds.add(payment.getId())) throw new SQLException("Invalid, duplicate or orphan payment");
+            paymentTotals.merge(payment.getCreditId(), payment.getAmount(), Double::sum);
         }
+        for (CreditEntry credit : credits) validateDerivedCreditState(credit, paymentTotals.getOrDefault(credit.getId(), 0D));
+        validatePaylogLinks(connection, payments);
         Set<UUID> eventIds = new HashSet<>();
         for (CreditEventEntry event : events) {
             if (!isValidEvent(event) || !creditIds.contains(event.getCreditId()) || !eventIds.add(event.getId())) throw new SQLException("Invalid, duplicate or orphan event");
+        }
+    }
+
+    private void validateDerivedCreditState(CreditEntry credit, double paymentTotal) throws SQLException {
+        if (Math.abs(credit.getPaidAmount() - paymentTotal) > 0.0001D) {
+            throw new SQLException("Credit paid amount does not match its payments");
+        }
+        if ("CANCELLED".equals(credit.getStatus())) return;
+        String expected = paymentTotal + 0.0001D >= credit.getAmount() ? "PAID"
+                : paymentTotal > 0.0001D ? "PARTIAL" : "OPEN";
+        if (!expected.equals(credit.getStatus())) throw new SQLException("Credit status does not match its payments");
+    }
+
+    /** A paylog may be linked in portions, but the linked total must never exceed it. */
+    private void validatePaylogLinks(Connection connection, Collection<Payment> payments) throws SQLException {
+        Map<UUID, Double> linkedAmounts = new LinkedHashMap<>();
+        for (Payment payment : payments) {
+            if (payment.getPaylogId() != null) {
+                linkedAmounts.merge(payment.getPaylogId(), payment.getAmount(), Double::sum);
+            }
+        }
+        for (Map.Entry<UUID, Double> link : linkedAmounts.entrySet()) {
+            try (PreparedStatement statement = connection.prepareStatement("SELECT amount FROM paylogs WHERE id=?")) {
+                statement.setString(1, link.getKey().toString());
+                try (ResultSet result = statement.executeQuery()) {
+                    if (!result.next()) throw new SQLException("Payment links unknown paylog " + link.getKey());
+                    if (link.getValue() > result.getDouble(1) + 0.0001D) throw new SQLException("Linked payments exceed paylog amount");
+                }
+            }
         }
     }
 
@@ -593,8 +670,8 @@ public final class DatabaseManager {
     }
 
     private void upsertPayment(Connection connection, Payment payment, long rowRevision) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement("MERGE INTO payments (id, credit_id, from_player, to_player, amount, items_json, item_nbt, item_nbt_entries, created_at, source, revision) KEY(id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)") ) {
-            statement.setString(1, payment.getId().toString()); statement.setString(2, payment.getCreditId().toString()); statement.setString(3, payment.getFromPlayer()); statement.setString(4, payment.getToPlayer()); statement.setDouble(5, payment.getAmount()); statement.setString(6, GSON.toJson(payment.getItems())); statement.setString(7, payment.getItemNbt()); statement.setString(8, GSON.toJson(payment.getItemNbtEntries())); statement.setLong(9, payment.getTimestamp()); statement.setString(10, payment.getSource()); statement.setLong(11, rowRevision); statement.executeUpdate();
+        try (PreparedStatement statement = connection.prepareStatement("MERGE INTO payments (id, credit_id, from_player, to_player, amount, items_json, item_nbt, item_nbt_entries, created_at, source, paylog_id, revision) KEY(id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)") ) {
+            statement.setString(1, payment.getId().toString()); statement.setString(2, payment.getCreditId().toString()); statement.setString(3, payment.getFromPlayer()); statement.setString(4, payment.getToPlayer()); statement.setDouble(5, payment.getAmount()); statement.setString(6, GSON.toJson(payment.getItems())); statement.setString(7, payment.getItemNbt()); statement.setString(8, GSON.toJson(payment.getItemNbtEntries())); statement.setLong(9, payment.getTimestamp()); statement.setString(10, payment.getSource()); statement.setString(11, payment.getPaylogId() == null ? null : payment.getPaylogId().toString()); statement.setLong(12, rowRevision); statement.executeUpdate();
         }
     }
 
@@ -647,7 +724,7 @@ public final class DatabaseManager {
             List<Payment> entries = new ArrayList<>();
             while (result.next()) {
                 Payment payment = new Payment(UUID.fromString(result.getString("credit_id")), result.getString("from_player"), result.getString("to_player"), result.getDouble("amount"), fromJson(result.getString("items_json")), result.getString("source"));
-                payment.setId(UUID.fromString(result.getString("id"))); payment.setItemNbt(result.getString("item_nbt")); payment.setItemNbtEntries(fromJson(result.getString("item_nbt_entries"))); payment.setTimestamp(result.getLong("created_at")); entries.add(payment);
+                payment.setId(UUID.fromString(result.getString("id"))); payment.setItemNbt(result.getString("item_nbt")); payment.setItemNbtEntries(fromJson(result.getString("item_nbt_entries"))); payment.setTimestamp(result.getLong("created_at")); String paylogId = result.getString("paylog_id"); if (validUuid(paylogId)) payment.setPaylogId(UUID.fromString(paylogId)); entries.add(payment);
             }
             return entries;
         }
@@ -666,7 +743,9 @@ public final class DatabaseManager {
 
     private TransactionEntry readPaylog(ResultSet result) throws SQLException {
         TransactionEntry entry = new TransactionEntry();
-        entry.setId(UUID.fromString(result.getString("id"))); entry.setFromPlayer(result.getString("payer")); entry.setToPlayer(result.getString("receiver")); entry.setAmount(result.getDouble("amount")); entry.setRawText(result.getString("raw_text")); entry.setNormalizedText(result.getString("normalized_text")); entry.setTimestamp(result.getLong("created_at")); entry.setHash(result.getString("entry_hash")); entry.setSource(result.getString("source")); entry.setMetadata(result.getString("metadata")); return entry;
+        entry.setId(UUID.fromString(result.getString("id"))); entry.setFromPlayer(result.getString("payer")); entry.setToPlayer(result.getString("receiver")); entry.setAmount(result.getDouble("amount")); entry.setRawText(result.getString("raw_text")); entry.setNormalizedText(result.getString("normalized_text")); entry.setTimestamp(result.getLong("created_at")); entry.setHash(result.getString("entry_hash")); entry.setSource(result.getString("source")); entry.setMetadata(result.getString("metadata"));
+        try { entry.setLinkedAmount(result.getDouble("linked_amount")); } catch (SQLException ignored) { entry.setLinkedAmount(0.0D); }
+        return entry;
     }
 
     private void deleteMissing(Connection connection, String table, Set<String> ids) throws SQLException {
@@ -726,7 +805,7 @@ public final class DatabaseManager {
     }
 
     private boolean samePayment(Connection connection, Payment payment) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement("SELECT credit_id, from_player, to_player, amount, items_json, item_nbt, item_nbt_entries, created_at, source FROM payments WHERE id=?")) {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT credit_id, from_player, to_player, amount, items_json, item_nbt, item_nbt_entries, created_at, source, paylog_id FROM payments WHERE id=?")) {
             statement.setString(1, payment.getId().toString());
             try (ResultSet result = statement.executeQuery()) {
                 return result.next()
@@ -738,7 +817,8 @@ public final class DatabaseManager {
                         && Objects.equals(result.getString("item_nbt"), payment.getItemNbt())
                         && Objects.equals(result.getString("item_nbt_entries"), GSON.toJson(payment.getItemNbtEntries()))
                         && result.getLong("created_at") == payment.getTimestamp()
-                        && Objects.equals(result.getString("source"), payment.getSource());
+                        && Objects.equals(result.getString("source"), payment.getSource())
+                        && Objects.equals(result.getString("paylog_id"), payment.getPaylogId() == null ? null : payment.getPaylogId().toString());
             }
         }
     }

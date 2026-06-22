@@ -4,6 +4,7 @@ import op.creditmanager.client.model.CreditEntry;
 import op.creditmanager.client.model.CreditEventEntry;
 import op.creditmanager.client.model.CreditEventType;
 import op.creditmanager.client.model.Payment;
+import op.creditmanager.client.model.TransactionEntry;
 import op.creditmanager.client.config.ClientConfigManager;
 import op.creditmanager.client.storage.DataHealth;
 import op.creditmanager.client.storage.FileManager;
@@ -11,6 +12,7 @@ import op.creditmanager.client.storage.JsonStorage;
 import op.creditmanager.client.storage.db.LegacyJsonMigrationService;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -21,6 +23,7 @@ public class CreditManager {
     public static final String STATUS_PARTIAL = "PARTIAL";
     public static final String STATUS_PAID = "PAID";
     public static final String STATUS_CANCELLED = "CANCELLED";
+    private static final double EPSILON = 0.0001D;
 
     private final CreditRepository repository;
     private static final UUID CONFIG_RECOVERY_TOKEN = UUID.nameUUIDFromBytes("creditmanager-config-recovery".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -66,6 +69,32 @@ public class CreditManager {
         return payment;
     }
 
+    /**
+     * Manually consumes the still available portion of a paylog. A larger
+     * paylog never overpays the deal; its unused remainder stays linkable.
+     */
+    public synchronized PaylogLinkResult linkPaylogToDeal(UUID paylogId, UUID dealId) throws CreditException {
+        return linkPaylogToDeal(paylogId, dealId, false);
+    }
+
+    /** Uses the oldest matching deal only when this one deal can cover the whole paylog. */
+    public synchronized PaylogLinkResult autoLinkDetectedPaylog(UUID paylogId) throws CreditException {
+        requireWritable();
+        TransactionEntry paylog = getPaylog(paylogId);
+        if (paylog.getRemainingAmount() <= EPSILON) return PaylogLinkResult.alreadyConsumed(paylog);
+        List<CreditEntry> candidates = matchingActiveDeals(paylog);
+        for (CreditEntry candidate : candidates) {
+            if (candidate.getRemainingAmount() + EPSILON >= paylog.getRemainingAmount()) {
+                return linkPaylogToDeal(paylogId, candidate.getId(), true);
+            }
+        }
+        return candidates.isEmpty() ? PaylogLinkResult.noMatchingDeal(paylog) : PaylogLinkResult.noSingleDealFits(paylog);
+    }
+
+    public List<CreditEntry> getLinkableCreditsForPaylog(TransactionEntry paylog) {
+        return paylog == null ? List.of() : matchingActiveDeals(paylog);
+    }
+
     public Payment addItemPayment(UUID dealId, String fromPlayer, List<String> items, double value, String nbt) throws CreditException {
         return addItemPayment(dealId, fromPlayer, items, value, nbt == null || nbt.isBlank() ? List.of() : List.of(nbt));
     }
@@ -91,17 +120,41 @@ public class CreditManager {
     }
 
     public CreditEntry deleteCredit(UUID dealId) throws CreditException {
+        return archiveCredit(dealId);
+    }
+
+    /** Archives a deal while retaining all payments and its audit trail. */
+    public CreditEntry archiveCredit(UUID dealId) throws CreditException {
         CreditEntry entry = getSafeCredit(dealId);
         requireWritable();
+        if (entry.isArchived()) return entry;
         double remainingBefore = entry.getRemainingAmount();
-        // Preserve an auditable final record instead of orphaning the linked
-        // payments and events through a physical delete.
-        entry.setStatus(STATUS_CANCELLED);
+        if (!STATUS_PAID.equals(entry.getStatus())) entry.setStatus(STATUS_CANCELLED);
         entry.setArchived(true);
         entry.setCompletedAt(System.currentTimeMillis());
         repository.putCredit(entry);
-        persistEvent(CreditEventType.CREDIT_DELETED, entry, entry.getAmount(), remainingBefore,
-                "Deal gelöscht", null, "DELETE", false);
+        persistEvent(CreditEventType.CREDIT_ARCHIVED, entry, entry.getAmount(), remainingBefore,
+                "Deal archiviert", null, "ARCHIVE", false);
+        return entry;
+    }
+
+    public CreditEntry closeCredit(UUID dealId) throws CreditException {
+        return archiveCredit(dealId);
+    }
+
+    /** Restores an archived deal to its state derived from the recorded payments. */
+    public CreditEntry reactivateCredit(UUID dealId) throws CreditException {
+        CreditEntry entry = getSafeCredit(dealId);
+        requireWritable();
+        if (!entry.isArchived() && !STATUS_CANCELLED.equals(entry.getStatus())) return entry;
+        double remainingBefore = entry.getRemainingAmount();
+        entry.setArchived(false);
+        entry.setCompletedAt(null);
+        entry.setStatus(STATUS_OPEN);
+        entry.refreshPaymentState();
+        repository.putCredit(entry);
+        persistEvent(CreditEventType.CREDIT_UPDATED, entry, entry.getAmount(), remainingBefore,
+                "Deal reaktiviert", null, "REACTIVATE", false);
         return entry;
     }
 
@@ -112,6 +165,10 @@ public class CreditManager {
         requireWritable();
         double remainingBefore = entry.getRemainingAmount();
         repository.deletePayment(paymentId);
+        if (STATUS_OPEN.equals(entry.getStatus()) || STATUS_PARTIAL.equals(entry.getStatus())) {
+            entry.setArchived(false);
+            entry.setCompletedAt(null);
+        }
         persistCore();
         persistEvent(CreditEventType.PAYMENT_DELETED, entry, safeAmount(payment), remainingBefore,
                 "Zahlung gelöscht", payment.getFromPlayer(), payment.getSource(), !payment.getItems().isEmpty());
@@ -184,7 +241,7 @@ public class CreditManager {
         }
         if (!TransactionRepository.getInstance().isWritable()) {
             records.add(new CreditRepository.RecoveryRecord(TRANSACTION_RECOVERY_TOKEN, CreditRepository.RecoveryType.TRANSACTION_LOG,
-                    "transactions.json", null, null, null, FileManager.getTransactionsFile(), "Beschädigte Paylog-Daten"));
+                    "creditmanager.mv.db", null, null, null, FileManager.getDatabaseStorageFile(), "Beschädigte Paylog-Daten"));
         }
         return List.copyOf(records);
     }
@@ -196,7 +253,7 @@ public class CreditManager {
     public boolean ignoreRecovery(UUID token) { return repository.ignoreRecovery(token); }
     public boolean createRecoveryBackup(UUID token) {
         if (CONFIG_RECOVERY_TOKEN.equals(token)) return JsonStorage.createBackup(FileManager.getClientConfigFile());
-        if (TRANSACTION_RECOVERY_TOKEN.equals(token)) return JsonStorage.createBackup(FileManager.getTransactionsFile());
+        if (TRANSACTION_RECOVERY_TOKEN.equals(token)) return op.creditmanager.client.storage.db.DatabaseManager.getInstance().createBackup();
         return repository.createRecoveryBackup(token);
     }
     public boolean repairDefaultRecovery(UUID token) {
@@ -221,7 +278,8 @@ public class CreditManager {
     }
 
     private List<CreditEntry> open(List<CreditEntry> entries) {
-        return entries.stream().filter(entry -> STATUS_OPEN.equals(entry.getStatus()) || STATUS_PARTIAL.equals(entry.getStatus())).toList();
+        return entries.stream().filter(entry -> !entry.isArchived()
+                && (STATUS_OPEN.equals(entry.getStatus()) || STATUS_PARTIAL.equals(entry.getStatus()))).toList();
     }
 
     private CreditEntry getSafeCredit(UUID id) throws CreditException {
@@ -261,9 +319,54 @@ public class CreditManager {
     }
 
     private void validateActive(CreditEntry entry) throws CreditException {
-        if (STATUS_PAID.equals(entry.getStatus()) || STATUS_CANCELLED.equals(entry.getStatus())) {
+        if (entry.isArchived() || STATUS_PAID.equals(entry.getStatus()) || STATUS_CANCELLED.equals(entry.getStatus())) {
             throw new CreditException("Deal ist abgeschlossen oder storniert.");
         }
+    }
+
+    private PaylogLinkResult linkPaylogToDeal(UUID paylogId, UUID dealId, boolean automatic) throws CreditException {
+        requireWritable();
+        TransactionEntry paylog = getPaylog(paylogId);
+        CreditEntry entry = getSafeCredit(dealId);
+        validateActive(entry);
+        if (!samePlayer(paylog.getFromPlayer(), entry.getDebtor()) || !samePlayer(paylog.getToPlayer(), entry.getCreditor())) {
+            throw new CreditException("Dieser Paylog passt nicht zu den Parteien des Deals.");
+        }
+        double available = paylog.getRemainingAmount();
+        if (available <= EPSILON) return PaylogLinkResult.alreadyConsumed(paylog);
+        double remainingBefore = entry.getRemainingAmount();
+        if (automatic && available > remainingBefore + EPSILON) return PaylogLinkResult.noSingleDealFits(paylog);
+
+        double booked = Math.min(available, remainingBefore);
+        Payment payment = new Payment(entry.getId(), entry.getDebtor(), entry.getCreditor(), booked, null,
+                automatic ? "PAYLOG_AUTO" : "PAYLOG_MANUAL");
+        payment.setPaylogId(paylog.getId());
+        entry.addPayment(payment);
+        entry.setArchived(false);
+        repository.putPayment(payment);
+        persistCore();
+        persistPaymentEvents(entry, payment, remainingBefore);
+        return PaylogLinkResult.linked(paylog, entry, payment, available - booked, automatic);
+    }
+
+    private TransactionEntry getPaylog(UUID paylogId) throws CreditException {
+        if (paylogId == null) throw new CreditException("Paylog nicht gefunden.");
+        return TransactionRepository.getInstance().find(paylogId)
+                .orElseThrow(() -> new CreditException("Paylog nicht gefunden."));
+    }
+
+    private List<CreditEntry> matchingActiveDeals(TransactionEntry paylog) {
+        return repository.getAllCredits().stream()
+                .filter(entry -> !entry.isArchived())
+                .filter(entry -> STATUS_OPEN.equals(entry.getStatus()) || STATUS_PARTIAL.equals(entry.getStatus()))
+                .filter(entry -> samePlayer(paylog.getFromPlayer(), entry.getDebtor()))
+                .filter(entry -> samePlayer(paylog.getToPlayer(), entry.getCreditor()))
+                .sorted(Comparator.comparingLong(CreditEntry::getCreatedAt).thenComparing(entry -> entry.getId().toString()))
+                .toList();
+    }
+
+    private boolean samePlayer(String left, String right) {
+        return left != null && right != null && left.equalsIgnoreCase(right);
     }
 
     private void validateAmount(double amount) throws CreditException {
@@ -282,5 +385,17 @@ public class CreditManager {
 
     public static class CreditException extends Exception {
         public CreditException(String message) { super(message); }
+    }
+
+    public record PaylogLinkResult(Status status, TransactionEntry paylog, CreditEntry credit, Payment payment,
+                                   double remainingPaylogAmount, boolean automatic) {
+        public enum Status { LINKED, NO_MATCHING_DEAL, NO_SINGLE_DEAL_FITS, ALREADY_CONSUMED }
+        static PaylogLinkResult linked(TransactionEntry paylog, CreditEntry credit, Payment payment, double remaining, boolean automatic) {
+            return new PaylogLinkResult(Status.LINKED, paylog, credit, payment, Math.max(0D, remaining), automatic);
+        }
+        static PaylogLinkResult noMatchingDeal(TransactionEntry paylog) { return new PaylogLinkResult(Status.NO_MATCHING_DEAL, paylog, null, null, paylog.getRemainingAmount(), true); }
+        static PaylogLinkResult noSingleDealFits(TransactionEntry paylog) { return new PaylogLinkResult(Status.NO_SINGLE_DEAL_FITS, paylog, null, null, paylog.getRemainingAmount(), true); }
+        static PaylogLinkResult alreadyConsumed(TransactionEntry paylog) { return new PaylogLinkResult(Status.ALREADY_CONSUMED, paylog, null, null, 0D, false); }
+        public boolean linked() { return status == Status.LINKED; }
     }
 }

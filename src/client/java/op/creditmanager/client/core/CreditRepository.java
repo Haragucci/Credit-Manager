@@ -129,13 +129,65 @@ public class CreditRepository {
     }
     public synchronized boolean ignoreRecovery(UUID token) { RecoveryRecord record = recoveryRecords.stream().filter(value -> value.token().equals(token)).findFirst().orElse(null); if (record == null) return false; recoveryRecords.remove(record); return persistRecoveredWhenComplete(record); }
     public synchronized boolean createRecoveryBackup(UUID token) { return recoveryRecords.stream().anyMatch(value -> value.token().equals(token)) && DatabaseManager.getInstance().createBackup(); }
-    public synchronized int repairWithSafeDefaults() { return 0; }
+    /**
+     * Repairs every record for which a deterministic, non-destructive default
+     * exists. If the embedded database itself cannot be read, it is backed up
+     * and rebuilt instead of leaving the recovery action as a no-op.
+     */
+    public synchronized int repairWithSafeDefaults() {
+        if (recoveryRequired && recoveryRecords.isEmpty()) {
+            if (!DatabaseManager.getInstance().resetCorruptDatabaseWithBackup()) return 0;
+            load();
+            return recoveryRequired ? 0 : 1;
+        }
+        int repaired = 0;
+        for (RecoveryRecord record : new ArrayList<>(recoveryRecords)) {
+            boolean saved = switch (record.type()) {
+                case CREDIT -> repairCreditWithDefaults(record);
+                case PAYMENT -> repairPaymentWithKnownCredit(record);
+                case EVENT -> repairEventWithKnownCredit(record);
+                case CONFIG, TRANSACTION_LOG -> false;
+            };
+            if (saved) repaired++;
+        }
+        return repaired;
+    }
     public synchronized void registerEventRecovery(CreditEventEntry event, String sourceKey, Path sourceFile) { addRecovery(RecoveryType.EVENT, sourceKey, null, null, event, "Ungültiges Historien-Ereignis"); }
 
     private void addRecovery(RecoveryType type, String sourceKey, CreditEntry credit, Payment payment, CreditEventEntry event, String message) { recoveryRequired = true; recoveryRecords.add(new RecoveryRecord(UUID.randomUUID(), type, sourceKey, credit, payment, event, FileManager.getDatabaseFile(), message)); DataHealth.reportRecoveryRequired(message); }
     private RecoveryRecord findRecovery(UUID token, RecoveryType type) { return recoveryRecords.stream().filter(value -> value.token().equals(token) && value.type() == type).findFirst().orElse(null); }
     private boolean persistRecoveredWhenComplete(RecoveryRecord removed) { if (!recoveryRecords.isEmpty()) return true; recoveryRequired = false; if (saveAll()) return true; recoveryRequired = true; recoveryRecords.add(removed); return false; }
     private UUID parseId(String value) { try { return UUID.fromString(value); } catch (RuntimeException ignored) { return UUID.randomUUID(); } }
+
+    private boolean repairPaymentWithKnownCredit(RecoveryRecord record) {
+        Payment payment = record.payment();
+        if (payment == null || payment.getCreditId() == null || !credits.containsKey(payment.getCreditId())) return false;
+        return repairPayment(record.token(), payment.getCreditId(), safeAmount(payment.getAmount()), payment.getTimestamp());
+    }
+
+    private boolean repairCreditWithDefaults(RecoveryRecord record) {
+        CreditEntry credit = record.credit();
+        String creditor = safeParty(credit == null ? null : credit.getCreditor(), "recovered_creditor");
+        String debtor = safeParty(credit == null ? null : credit.getDebtor(), "recovered_debtor");
+        if (creditor.equalsIgnoreCase(debtor)) debtor = "recovered_debtor_" + record.token().toString().substring(0, 8);
+        return repairCredit(record.token(), creditor, debtor, safeAmount(credit == null ? 0 : credit.getAmount()),
+                credit == null ? System.currentTimeMillis() : credit.getCreatedAt());
+    }
+
+    private boolean repairEventWithKnownCredit(RecoveryRecord record) {
+        CreditEventEntry event = record.event();
+        if (event == null || event.getCreditId() == null || !credits.containsKey(event.getCreditId())) return false;
+        CreditEventType type = event.getType() == null ? CreditEventType.CREDIT_UPDATED : event.getType();
+        return repairEvent(record.token(), event.getCreditId(), type, Math.max(0D, safeAmount(event.getAmount())), event.getTimestamp());
+    }
+
+    private String safeParty(String value, String fallback) {
+        String normalized = value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+        return normalized.isBlank() ? fallback : normalized;
+    }
+
+    private double safeAmount(Double value) { return value != null && Double.isFinite(value) && value > 0 ? value : 1D; }
+    private double safeAmount(double value) { return Double.isFinite(value) && value > 0 ? value : 1D; }
 
     private void reconcilePayments() { for (CreditEntry entry : credits.values()) entry.replacePayments(payments.values().stream().filter(payment -> entry.getId().equals(payment.getCreditId())).sorted(Comparator.comparingLong(Payment::getTimestamp)).toList()); }
     private void rebuildPlayerIndex() { players.clear(); for (CreditEntry entry : credits.values()) { getOrCreatePlayer(entry.getDebtor()).addDebtorCredit(entry.getId()); getOrCreatePlayer(entry.getCreditor()).addCreditorCredit(entry.getId()); } }

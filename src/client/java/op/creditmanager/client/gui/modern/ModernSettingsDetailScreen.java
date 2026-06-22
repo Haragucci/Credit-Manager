@@ -81,6 +81,7 @@ public class ModernSettingsDetailScreen extends ModernBaseScreen {
         return switch (category) {
             case DETECTION -> List.of(
                     new SettingOption("Paylogs automatisch erkennen", "", ClientConfigManager.isAutomaticPaylogDetection()),
+                    new SettingOption("Erkannte Paylogs automatisch zuordnen", "", ClientConfigManager.isAutoLinkDetectedPaylogsToDeals()),
                     new SettingOption("Overlay-/Actionbar-Nachrichten prüfen", "", ClientConfigManager.isDetectPaylogsInOverlay()));
             case GUI -> List.of(
                     new SettingOption("Schriftart", guiFontModeLabel(ClientConfigManager.getGuiFontMode())),
@@ -89,7 +90,7 @@ public class ModernSettingsDetailScreen extends ModernBaseScreen {
                     new SettingOption("Akzent-Farbe", ColorUtil.toHex(ClientConfigManager.getCustomAccentColor())),
                     new SettingOption("Custom-Farben zurücksetzen", "Standard"));
             case PAYLOGS -> List.of(
-                    new SettingOption("Paylog-Benachrichtigungen im Chat", "", ClientConfigManager.isShowPaylogNotifications()),
+                    new SettingOption("Paylog-Fly-ins anzeigen", "", ClientConfigManager.isShowPaylogNotifications()),
                     new SettingOption("Suche", "Name · Betrag · Datum · Tippfehler"));
             case STATISTICS -> List.of(
                     new SettingOption("Standard-Zeitraum", periodLabel(ClientConfigManager.getStatisticsDefaultPeriodDays())),
@@ -157,9 +158,12 @@ public class ModernSettingsDetailScreen extends ModernBaseScreen {
     private void activate(int row) {
         switch (category) {
             case DETECTION -> {
-                boolean saved = row == 0
-                        ? ClientConfigManager.setAutomaticPaylogDetection(!ClientConfigManager.isAutomaticPaylogDetection())
-                        : row == 1 && ClientConfigManager.setDetectPaylogsInOverlay(!ClientConfigManager.isDetectPaylogsInOverlay());
+                boolean saved = switch (row) {
+                    case 0 -> ClientConfigManager.setAutomaticPaylogDetection(!ClientConfigManager.isAutomaticPaylogDetection());
+                    case 1 -> ClientConfigManager.setAutoLinkDetectedPaylogsToDeals(!ClientConfigManager.isAutoLinkDetectedPaylogsToDeals());
+                    case 2 -> ClientConfigManager.setDetectPaylogsInOverlay(!ClientConfigManager.isDetectPaylogsInOverlay());
+                    default -> false;
+                };
                 toastSettingResult(saved, "Erkennung gespeichert.");
             }
             case GUI -> activateGuiOption(row);

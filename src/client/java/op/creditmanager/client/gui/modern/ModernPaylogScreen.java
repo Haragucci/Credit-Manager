@@ -30,6 +30,7 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
     private int listY;
     private int listHeight;
     private int previousX, nextX, pageControlsY, pageButtonWidth;
+    private int manualButtonX, manualButtonY, manualButtonWidth;
     private List<TransactionEntry> renderedEntries = List.of();
     private int renderedStart;
     private DatabaseManager.QueryPage<TransactionEntry> page = new DatabaseManager.QueryPage<>(List.of(), 0, 0, PAGE_SIZE);
@@ -46,7 +47,9 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
         super.init();
         disposed = false;
         clearChildren();
-        searchField = ModernUi.configureGuiTextField(new CenteredTextFieldWidget(textRenderer, contentX + 8, contentY + 4, Math.max(60, contentWidth - 16), 34, Text.empty()));
+        manualButtonWidth = 82;
+        searchField = ModernUi.configureGuiTextField(new CenteredTextFieldWidget(textRenderer, contentX + 8, contentY + 4,
+                Math.max(60, contentWidth - manualButtonWidth - 22), 34, Text.empty()));
         searchField.setMaxLength(96);
         ModernUi.setGuiPlaceholder(searchField, "Spieler, Betrag, Datum oder Freitext...");
         addDrawableChild(searchField);
@@ -98,6 +101,10 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
         int toolbarY = contentY + 4;
         int filterWidth = Math.max(72, Math.min(104, contentWidth));
         ModernUi.card(context, contentX, toolbarY, contentWidth, 34, ModernUi.contains(mouseX, mouseY, contentX, toolbarY, contentWidth, 34));
+        manualButtonX = contentX + contentWidth - manualButtonWidth - 4;
+        manualButtonY = toolbarY + 5;
+        ModernUi.button(context, textRenderer, manualButtonX, manualButtonY, manualButtonWidth, 24, "+ Paylog",
+                ModernUi.theme().buttonPrimary, ModernUi.contains(mouseX, mouseY, manualButtonX, manualButtonY, manualButtonWidth, 24));
         ModernUi.button(context, textRenderer, contentX, toolbarY + 39, filterWidth, 24, DIRECTION_FILTERS[directionIndex], ModernUi.theme().buttonNeutral, ModernUi.contains(mouseX, mouseY, contentX, toolbarY + 39, filterWidth, 24));
 
         String state = pending == null ? "Seite " + page.pageNumber() + "/" + page.pageCount() + " · " + page.totalCount() + " Ergebnis" + (page.totalCount() == 1 ? "" : "se") : "Lade Seite " + (pageOffset / PAGE_SIZE + 1) + "…";
@@ -149,7 +156,10 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
         context.fill(x + 8, y + 7, x + 11, y + 28, color);
         String otherPlayer = outgoing ? entry.getToPlayer() : entry.getFromPlayer();
         ModernUi.drawTruncated(context, textRenderer, (outgoing ? "An " : "Von ") + safe(otherPlayer), x + 19, y + 7, Math.max(40, width - 164), ModernUi.theme().text);
-        ModernUi.drawTruncated(context, textRenderer, TimeUtil.formatDateTime(entry.getTimestamp()), x + 19, y + 20, Math.max(40, width - 164), ModernUi.theme().muted);
+        String linkState = entry.isFullyLinked() ? "Verknüpft" : entry.getLinkedAmount() > 0
+                ? "Rest: " + FormatUtil.formatAmount(entry.getRemainingAmount()) : "Klick: verknüpfen";
+        ModernUi.drawTruncated(context, textRenderer, TimeUtil.formatDateTime(entry.getTimestamp()) + " · " + linkState,
+                x + 19, y + 20, Math.max(40, width - 164), ModernUi.theme().muted);
         ModernUi.drawGuiTextRightAligned(context, textRenderer, (outgoing ? "-" : "+") + FormatUtil.formatAmount(entry.getAmount()), x + width - 12, y + 13, color);
     }
 
@@ -158,6 +168,10 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
         if (click.button() != 0) return super.mouseClicked(click, doubled);
         int toolbarY = contentY + 4;
         int filterWidth = Math.max(72, Math.min(104, contentWidth));
+        if (ModernUi.contains(click.x(), click.y(), manualButtonX, manualButtonY, manualButtonWidth, 24)) {
+            open(new ModernCreatePaylogScreen(manager, this));
+            return true;
+        }
         if (ModernUi.contains(click.x(), click.y(), contentX, toolbarY + 39, filterWidth, 24)) {
             directionIndex = (directionIndex + 1) % DIRECTION_FILTERS.length;
             requestedFilterKey = "";
@@ -170,6 +184,13 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
             pageOffset += PAGE_SIZE; schedule(filterKey()); return true;
         }
         if (scroll.mouseClicked(click.x(), click.y(), click.button())) return true;
+        if (ModernUi.contains(click.x(), click.y(), contentX, listY, contentWidth, listHeight)) {
+            int index = (int) ((click.y() - listY + scroll.offset()) / 39);
+            if (index >= renderedStart && index < renderedStart + renderedEntries.size()) {
+                open(new ModernPaylogLinkScreen(manager, renderedEntries.get(index - renderedStart), this));
+                return true;
+            }
+        }
         return super.mouseClicked(click, doubled);
     }
 

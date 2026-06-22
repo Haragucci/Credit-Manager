@@ -2,8 +2,9 @@ package op.creditmanager.client.core;
 
 import op.creditmanager.client.CreditManagerClient;
 import op.creditmanager.client.config.ClientConfigManager;
+import op.creditmanager.client.gui.modern.toast.ModernToastManager;
 import op.creditmanager.client.model.TransactionEntry;
-import op.creditmanager.client.util.ChatUtil;
+import op.creditmanager.client.util.FormatUtil;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.minecraft.client.MinecraftClient;
@@ -34,6 +35,11 @@ public class PaymentDetector {
     };
 
     private static final long DUPLIKAT_COOLDOWN_MS = 0_500;
+    private final CreditManager creditManager;
+
+    public PaymentDetector(CreditManager creditManager) {
+        this.creditManager = creditManager;
+    }
 
     public void process(String nachricht) {
         if (nachricht == null || nachricht.isBlank()) return;
@@ -82,6 +88,7 @@ public class PaymentDetector {
         eintrag.setSource("DETECTED");
         if (!TransactionRepository.getInstance().add(eintrag)) {
             CreditManagerClient.LOGGER.error("[PaymentDetector] Paylog konnte nicht sicher gespeichert werden.");
+            ModernToastManager.getInstance().showError("Erkannter Paylog konnte nicht gespeichert werden.");
             return;
         }
 
@@ -89,8 +96,27 @@ public class PaymentDetector {
         nf.setMinimumFractionDigits(2);
         nf.setMaximumFractionDigits(2);
 
-        if (ClientConfigManager.isShowPaylogNotifications()) {
-            ChatUtil.info("Paylog erkannt: " + vonSpieler + " -> " + anSpieler + " (" + nf.format(betrag) + "$");
+        if (ClientConfigManager.isAutoLinkDetectedPaylogsToDeals() && creditManager != null) {
+            try {
+                CreditManager.PaylogLinkResult result = creditManager.autoLinkDetectedPaylog(eintrag.getId());
+                if (result.linked()) {
+                    ModernToastManager.getInstance().showSuccess("Paylog automatisch mit " + result.credit().getDealName()
+                            + " verknüpft: " + FormatUtil.formatAmount(result.payment().getAmount()));
+                } else if (result.status() == CreditManager.PaylogLinkResult.Status.NO_SINGLE_DEAL_FITS) {
+                    ModernToastManager.getInstance().showWarning("Paylog erkannt, aber kein einzelner offener Deal deckt "
+                            + FormatUtil.formatAmount(betrag) + " ab.");
+                } else if (result.status() == CreditManager.PaylogLinkResult.Status.NO_MATCHING_DEAL) {
+                    ModernToastManager.getInstance().showWarning("Paylog erkannt, aber kein passender offener Deal wurde gefunden.");
+                } else if (ClientConfigManager.isShowPaylogNotifications()) {
+                    ModernToastManager.getInstance().showInfo("Paylog erkannt: " + vonSpieler + " → " + anSpieler
+                            + " (" + nf.format(betrag) + "$)");
+                }
+            } catch (CreditManager.CreditException exception) {
+                ModernToastManager.getInstance().showWarning("Paylog erkannt, automatische Buchung nicht möglich: " + exception.getMessage());
+            }
+        } else if (ClientConfigManager.isShowPaylogNotifications()) {
+            ModernToastManager.getInstance().showInfo("Paylog erkannt: " + vonSpieler + " → " + anSpieler
+                    + " (" + nf.format(betrag) + "$)");
         }
 
         CreditManagerClient.LOGGER.info("[PaymentDetector] Transaktion geloggt: "

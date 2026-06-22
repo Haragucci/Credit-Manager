@@ -17,7 +17,6 @@ public class CreditEntry {
     private String status;
     private List<Payment> payments;
     private String note;
-    /** Set once when a deal becomes final; never recomputed on a later save. */
     private Long completedAt;
     private boolean archived;
 
@@ -73,7 +72,7 @@ public class CreditEntry {
             if (p.getAmount() != null) {
                 paidAmount = Math.max(0, paidAmount - p.getAmount());
             }
-            updateStatus();
+            if (!"CANCELLED".equals(status)) updateStatus();
         }
     }
 
@@ -124,11 +123,11 @@ public class CreditEntry {
                 .filter(value -> value != null && Double.isFinite(value) && value > 0)
                 .mapToDouble(Double::doubleValue)
                 .sum();
-        updateStatus();
+        if (!"CANCELLED".equals(status)) updateStatus();
     }
 
     public void refreshPaymentState() {
-        updateStatus();
+        if (!"CANCELLED".equals(status)) updateStatus();
     }
 
     public String getNote() { return note; }

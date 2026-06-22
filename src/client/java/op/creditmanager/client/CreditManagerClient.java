@@ -6,11 +6,17 @@ import op.creditmanager.client.core.CreditRepository;
 import op.creditmanager.client.core.PaymentDetector;
 import op.creditmanager.client.core.TransactionRepository;
 import op.creditmanager.client.core.CreditEventRepository;
+import op.creditmanager.client.devtools.TestDataChatHook;
 import op.creditmanager.client.storage.FileManager;
 import op.creditmanager.client.storage.db.DatabaseManager;
 import op.creditmanager.client.storage.db.DatabaseHealthChecker;
 import op.creditmanager.client.storage.db.LegacyJsonMigrationService;
 import op.creditmanager.client.config.ClientConfigManager;
+import op.creditmanager.client.gui.modern.toast.ModernToastManager;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.util.Identifier;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
@@ -21,6 +27,8 @@ public class CreditManagerClient implements ClientModInitializer {
 
 	public static final String MOD_ID = "creditmanager";
 	public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
+
+	private static final String TEST_DATA_PROPERTY = "creditmanager.dev.testdata";
 
 	private static CreditManager creditManager;
 	private static CreditRepository creditRepository;
@@ -41,11 +49,21 @@ public class CreditManagerClient implements ClientModInitializer {
 		CreditEventRepository.getInstance().bind(creditRepository);
 
 		creditManager = new CreditManager(creditRepository);
+		registerDevHooks();
 
 		TransactionRepository.getInstance().load();
 		CreditEventRepository.getInstance().load();
 
-		paymentDetector = new PaymentDetector();
+		paymentDetector = new PaymentDetector(creditManager);
+
+		HudElementRegistry.attachElementBefore(VanillaHudElements.CHAT,
+				Identifier.of(MOD_ID, "global_flyins"), (context, tickCounter) -> {
+					MinecraftClient client = MinecraftClient.getInstance();
+					if (client.currentScreen == null) {
+						ModernToastManager.getInstance().render(context, client.textRenderer,
+								client.getWindow().getScaledWidth(), -1, -1, tickCounter.getTickProgress(false));
+					}
+				});
 
 		ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
 			if (creditManager != null) {
@@ -69,5 +87,15 @@ public class CreditManagerClient implements ClientModInitializer {
 		});
 
 		LOGGER.info("[CreditManager] Bereit.");
+	}
+
+	private static void registerDevHooks() {
+		if (TEST_DATA_PROPERTY == "") return;
+		try {
+			TestDataChatHook.register(creditManager);
+			LOGGER.warn("[CreditManager] TestDataChatHook aktiv. @TestData bleibt lokal.");
+		} catch (Throwable error) {
+			LOGGER.warn("[CreditManager] TestDataChatHook konnte nicht registriert werden.", error);
+		}
 	}
 }

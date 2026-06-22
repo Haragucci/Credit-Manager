@@ -25,9 +25,11 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
     private final ModernScrollArea scroll = new ModernScrollArea();
     private List<Payment> renderedPayments = List.of();
     private int renderedStart;
-    private boolean deleteArmed;
+    private DealAction pendingDealAction;
     private UUID paymentDeleteArmed;
     private int actionWidth;
+
+    private enum DealAction { ARCHIVE, CLOSE }
 
     public ModernCreditDetailScreen(CreditManager manager, CreditEntry entry, boolean debts, Screen parent) {
         super(manager, parent, "Deal-Details", debts ? "debts" : "claims");
@@ -79,19 +81,20 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
 
         boolean finished = CreditManager.STATUS_PAID.equals(entry.getStatus())
                 || CreditManager.STATUS_CANCELLED.equals(entry.getStatus());
+        boolean canReactivate = entry.isArchived() || CreditManager.STATUS_CANCELLED.equals(entry.getStatus());
 
         ModernUi.button(context, textRenderer, contentX, actionY, actionWidth, 23,
-                finished ? "Abgeschlossen" : "Zahlung",
+                finished ? canReactivate ? "Reaktivieren" : "Abgeschlossen" : "Zahlung",
                 finished ? ModernUi.theme().buttonNeutral : ModernUi.theme().buttonPrimary,
                 ModernUi.contains(mouseX, mouseY, contentX, actionY, actionWidth, 23));
 
         ModernUi.button(context, textRenderer, contentX + actionWidth + 8, actionY, actionWidth, 23,
-                "Bearbeiten", ModernUi.theme().buttonNeutral,
+                finished ? "Bearbeiten" : pendingDealAction == DealAction.CLOSE ? "Bestätigen" : "Abschließen", ModernUi.theme().buttonNeutral,
                 ModernUi.contains(mouseX, mouseY, contentX + actionWidth + 8, actionY, actionWidth, 23));
 
         ModernUi.button(context, textRenderer, contentX + (actionWidth + 8) * 2, actionY, actionWidth, 23,
-                deleteArmed ? "Bestätigen" : "Löschen",
-                ModernUi.theme().buttonDanger,
+                pendingDealAction == DealAction.ARCHIVE ? "Bestätigen" : "Archivieren",
+                ModernUi.theme().buttonNeutral,
                 ModernUi.contains(mouseX, mouseY, contentX + (actionWidth + 8) * 2, actionY, actionWidth, 23));
 
         List<Payment> payments = manager.getPaymentsForCredit(entry.getId()).stream()
@@ -168,17 +171,25 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
         int actionY = topY + 92;
         if (click.button() == 0) {
             if (ModernUi.contains(click.x(), click.y(), contentX, actionY, actionWidth, 23)) {
-                if (!CreditManager.STATUS_PAID.equals(entry.getStatus()) && !CreditManager.STATUS_CANCELLED.equals(entry.getStatus())) {
+                if (entry.isArchived() || CreditManager.STATUS_CANCELLED.equals(entry.getStatus())) {
+                    reactivateDeal();
+                } else if (CreditManager.STATUS_PAID.equals(entry.getStatus())) {
+                    toastInfo("Zahlungen können in der Liste per Rechtsklick gelöscht werden.");
+                } else {
                     open(new ModernPaymentScreen(manager, entry, debts, this));
                 }
                 return true;
             }
             if (ModernUi.contains(click.x(), click.y(), contentX + actionWidth + 8, actionY, actionWidth, 23)) {
-                open(new ModernEditCreditScreen(manager, entry, debts, this));
+                if (CreditManager.STATUS_PAID.equals(entry.getStatus()) || CreditManager.STATUS_CANCELLED.equals(entry.getStatus())) {
+                    open(new ModernEditCreditScreen(manager, entry, debts, this));
+                } else {
+                    closeDeal();
+                }
                 return true;
             }
             if (ModernUi.contains(click.x(), click.y(), contentX + (actionWidth + 8) * 2, actionY, actionWidth, 23)) {
-                deleteDeal();
+                archiveDeal();
                 return true;
             }
             if (ModernUi.contains(click.x(), click.y(), contentX, paymentListY, contentWidth, paymentListHeight)) {
@@ -202,18 +213,43 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
         return super.mouseClicked(click, doubled);
     }
 
-    private void deleteDeal() {
-        if (!deleteArmed) {
-            deleteArmed = true;
-            toastWarning("Erneut klicken, um den Deal zu löschen.");
+    private void archiveDeal() {
+        if (pendingDealAction != DealAction.ARCHIVE) {
+            pendingDealAction = DealAction.ARCHIVE;
+            toastWarning("Erneut klicken, um den Deal zu archivieren.");
             return;
         }
         try {
-            manager.deleteCredit(entry.getId());
-            toastSuccess("Deal gelöscht.");
-            closeToParent();
+            manager.archiveCredit(entry.getId());
+            pendingDealAction = null;
+            toastSuccess("Deal archiviert.");
         } catch (CreditManager.CreditException exception) {
-            deleteArmed = false;
+            pendingDealAction = null;
+            toastError(exception.getMessage());
+        }
+    }
+
+    private void closeDeal() {
+        if (pendingDealAction != DealAction.CLOSE) {
+            pendingDealAction = DealAction.CLOSE;
+            toastWarning("Erneut klicken, um den Deal ohne Zahlung abzuschließen.");
+            return;
+        }
+        try {
+            manager.closeCredit(entry.getId());
+            pendingDealAction = null;
+            toastSuccess("Deal abgeschlossen und archiviert.");
+        } catch (CreditManager.CreditException exception) {
+            pendingDealAction = null;
+            toastError(exception.getMessage());
+        }
+    }
+
+    private void reactivateDeal() {
+        try {
+            manager.reactivateCredit(entry.getId());
+            toastSuccess("Deal reaktiviert.");
+        } catch (CreditManager.CreditException exception) {
             toastError(exception.getMessage());
         }
     }
@@ -262,7 +298,7 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
         return switch (status) {
             case CreditManager.STATUS_PAID -> "Bezahlt";
             case CreditManager.STATUS_PARTIAL -> "Teilweise bezahlt";
-            case CreditManager.STATUS_CANCELLED -> "Storniert";
+            case CreditManager.STATUS_CANCELLED -> "Abgeschlossen";
             default -> "Offen";
         };
     }
@@ -273,7 +309,7 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
 
     @Override
     protected void clearTransientState() {
-        deleteArmed = false;
+        pendingDealAction = null;
         paymentDeleteArmed = null;
         scroll.reset();
         super.clearTransientState();

@@ -115,7 +115,6 @@ public final class CreditEventRepository {
         }
     }
 
-    /** Keeps the event view in sync after a structured recovery committed through the core repository. */
     synchronized void acceptRecoveredEvent(CreditEventEntry entry) {
         if (entry == null || entry.getId() == null || events.stream().anyMatch(value -> entry.getId().equals(value.getId()))) return;
         events.add(entry);

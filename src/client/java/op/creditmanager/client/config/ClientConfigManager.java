@@ -25,6 +25,17 @@ public final class ClientConfigManager {
         return save(loaded);
     }
 
+    public static synchronized boolean isAutoLinkDetectedPaylogsToDeals() {
+        return getConfig().isAutoLinkDetectedPaylogsToDeals();
+    }
+
+    public static synchronized boolean setAutoLinkDetectedPaylogsToDeals(boolean enabled) {
+        ClientConfig loaded = writableConfig();
+        if (loaded == null) return false;
+        loaded.setAutoLinkDetectedPaylogsToDeals(enabled);
+        return save(loaded);
+    }
+
     public static synchronized boolean isDetectPaylogsInOverlay() {
         return getConfig().isDetectPaylogsInOverlay();
     }

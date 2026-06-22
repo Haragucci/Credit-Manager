@@ -5,6 +5,8 @@ import op.creditmanager.client.model.TransactionEntry;
 import op.creditmanager.client.storage.db.DatabaseManager;
 
 import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
 
 /** Database-backed Paylog facade.  It intentionally never retains the full table in memory. */
 public final class TransactionRepository {
@@ -41,7 +43,19 @@ public final class TransactionRepository {
     public DatabaseManager.QueryPage<TransactionEntry> queryPage(String player, int direction, String query, int limit, int offset) {
         return DatabaseManager.getInstance().queryPaylogPage(player, direction, query, limit, offset);
     }
+    public Optional<TransactionEntry> find(UUID id) { return DatabaseManager.getInstance().findPaylog(id); }
     public synchronized long getRevision() { return revision; }
     public synchronized boolean isWritable() { return !recoveryRequired && DatabaseManager.getInstance().isHealthy(); }
-    public synchronized boolean resetCorruptTransactionsWithBackup() { return false; }
+    /**
+     * Paylogs share the transactional database with deals. A repair must
+     * therefore reset that database as a whole, never silently discard the
+     * obsolete transactions.json compatibility file.
+     */
+    public synchronized boolean resetCorruptTransactionsWithBackup() {
+        if (!recoveryRequired) return false;
+        if (!DatabaseManager.getInstance().resetCorruptDatabaseWithBackup()) return false;
+        recoveryRequired = false;
+        revision = DatabaseManager.getInstance().revision();
+        return true;
+    }
 }

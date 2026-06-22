@@ -91,6 +91,7 @@ public final class LegacyJsonMigrationService {
         readEvents(eventSource, events, preserved);
         readPaylogs(paylogSource, paylogs, preserved);
         createMissingCredits(credits, payments.values(), events.values());
+        reconcileCreditPaymentState(credits, payments, preserved);
 
         return new AutomaticPayload(List.copyOf(credits.values()), List.copyOf(payments.values()), List.copyOf(events.values()),
                 List.copyOf(paylogs.values()), List.copyOf(preserved));
@@ -243,6 +244,44 @@ public final class LegacyJsonMigrationService {
         for (CreditEventEntry event : events) groupedPayments.putIfAbsent(event.getCreditId(), List.of());
         for (Map.Entry<UUID, List<Payment>> missing : groupedPayments.entrySet()) {
             if (!credits.containsKey(missing.getKey())) credits.put(missing.getKey(), placeholderCredit(missing.getKey(), missing.getValue(), "Automatisch aus verwaisten Legacy-Daten erstellt"));
+        }
+    }
+
+    /**
+     * Old JSON sometimes stored only paidAmount while the individual payment
+     * list was missing. Preserve that information as an explicit migration
+     * payment so the database never starts with contradictory derived state.
+     */
+    private void reconcileCreditPaymentState(Map<UUID, CreditEntry> credits, Map<UUID, Payment> payments,
+                                             List<DatabaseManager.LegacyRecord> preserved) {
+        for (CreditEntry credit : credits.values()) {
+            List<Payment> linked = new ArrayList<>(payments.values().stream()
+                    .filter(payment -> credit.getId().equals(payment.getCreditId()))
+                    .sorted(Comparator.comparingLong(Payment::getTimestamp)).toList());
+            double total = linked.stream().map(Payment::getAmount).filter(Objects::nonNull).mapToDouble(Double::doubleValue).sum();
+            double recorded = Math.max(0D, credit.getPaidAmount());
+            if (recorded > total + 0.0001D) {
+                double difference = recorded - total;
+                UUID id = UUID.nameUUIDFromBytes(("migration-balance:" + credit.getId()).getBytes(StandardCharsets.UTF_8));
+                if (!payments.containsKey(id)) {
+                    Payment balance = new Payment(credit.getId(), credit.getDebtor(), credit.getCreditor(), difference, null, "MIGRATION_BALANCE");
+                    balance.setId(id);
+                    balance.setTimestamp(Math.max(1L, credit.getCreatedAt()));
+                    payments.put(id, balance);
+                    linked.add(balance);
+                    total += difference;
+                    preserve(preserved, "CREDIT", credit.getId().toString(), GSON.toJson(credit),
+                            "Gespeicherter paidAmount ohne Einzelzahlung wurde als MIGRATION_BALANCE erhalten.");
+                }
+            }
+            if (total > credit.getAmount() + 0.0001D) {
+                credit.setAmount(total);
+                preserve(preserved, "CREDIT", credit.getId().toString(), GSON.toJson(credit),
+                        "Zahlungssumme war größer als der Dealbetrag; Betrag wurde verlustfrei angepasst.");
+            }
+            String previousStatus = credit.getStatus();
+            credit.replacePayments(linked);
+            if ("CANCELLED".equals(previousStatus)) credit.setStatus("CANCELLED");
         }
     }
 

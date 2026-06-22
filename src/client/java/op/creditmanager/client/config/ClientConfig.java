@@ -4,10 +4,12 @@ import op.creditmanager.client.gui.modern.theme.ModernThemeMode;
 
 public class ClientConfig {
 
-    public static final int CURRENT_VERSION = 5;
+    public static final int CURRENT_VERSION = 6;
 
     private int configVersion = CURRENT_VERSION;
     private boolean automaticPaylogDetection = true;
+    /** Separately controls whether stored, detected paylogs are booked to a matching deal. */
+    private boolean autoLinkDetectedPaylogsToDeals;
     private boolean detectPaylogsInOverlay = true;
     private boolean showPaylogNotifications = false;
     private ModernThemeMode modernThemeMode = ModernThemeMode.DARK;
@@ -32,6 +34,14 @@ public class ClientConfig {
 
     public void setAutomaticPaylogDetection(boolean automaticPaylogDetection) {
         this.automaticPaylogDetection = automaticPaylogDetection;
+    }
+
+    public boolean isAutoLinkDetectedPaylogsToDeals() {
+        return autoLinkDetectedPaylogsToDeals;
+    }
+
+    public void setAutoLinkDetectedPaylogsToDeals(boolean autoLinkDetectedPaylogsToDeals) {
+        this.autoLinkDetectedPaylogsToDeals = autoLinkDetectedPaylogsToDeals;
     }
 
     public boolean isDetectPaylogsInOverlay() {

@@ -10,6 +10,8 @@ import op.creditmanager.client.core.CreditManager;
 import op.creditmanager.client.core.CreditRepository;
 import op.creditmanager.client.core.TransactionRepository;
 import op.creditmanager.client.model.CreditEntry;
+import op.creditmanager.client.model.CreditEventEntry;
+import op.creditmanager.client.model.CreditEventType;
 import op.creditmanager.client.storage.DataHealth;
 import op.creditmanager.client.storage.FileManager;
 
@@ -17,6 +19,7 @@ import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -65,6 +68,26 @@ class DatabaseSafetyTest {
         DatabaseManager database = DatabaseManager.getInstance();
         assertFalse(database.replaceCreditState(List.of(), List.of(), List.of()));
         assertEquals(1, database.loadCreditState().credits().size());
+    }
+
+    @Test
+    void batchedCreditMutationsCommitOnceWithoutReloadingOrReplacingExistingData() throws Exception {
+        manager();
+        DatabaseManager database = DatabaseManager.getInstance();
+        long revisionBefore = database.revision();
+        List<DatabaseManager.CreditMutation> mutations = java.util.stream.IntStream.range(0, 3)
+                .mapToObj(index -> batchMutation(index)).toList();
+
+        assertTrue(database.commitCreditMutationsBatch(mutations));
+        assertEquals(revisionBefore + 1, database.revision());
+        assertEquals(3, database.loadCreditState().credits().size());
+    }
+
+    private DatabaseManager.CreditMutation batchMutation(int index) {
+        CreditEntry credit = new CreditEntry(UUID.randomUUID(), "batch-deal-" + index, "creditor", "debtor_" + index, 10D + index, null, "TEST_DATA");
+        CreditEventEntry event = new CreditEventEntry(CreditEventType.CREDIT_CREATED, credit, credit.getAmount(), credit.getAmount(),
+                "TEST_DATA", "creditor", "TEST_DATA", false);
+        return new DatabaseManager.CreditMutation(credit, List.of(), List.of(), List.of(event));
     }
 
     @Test

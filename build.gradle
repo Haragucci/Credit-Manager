@@ -102,7 +102,7 @@ tasks.register('verifyReleaseJar') {
 		if (!entries.any { it ==~ /META-INF\/jars\/h2-.+\.jar/ }) {
 			throw new GradleException("Release jar does not embed H2: ${releaseJar}")
 		}
-		def forbidden = entries.findAll { it.startsWith('local-dev/') || it.contains('CreditManagerTestDataTool') || it.contains('/dev/') }
+		def forbidden = entries.findAll { it.startsWith('local-dev/') || it.contains('CreditManagerTestDataTool') || it.contains('TestDataChatHook') || it.contains('/dev/') }
 		if (!forbidden.isEmpty()) {
 			throw new GradleException("Release jar contains development-only files: ${forbidden}")
 		}

@@ -51,6 +51,33 @@ public final class DatabaseManager {
     private static final Gson GSON = new Gson();
     private static final Type STRING_LIST = new TypeToken<List<String>>() { }.getType();
     private static final Type BACKUP_MANIFEST_LIST = new TypeToken<List<BackupManifestEntry>>() { }.getType();
+    private static final List<String> REQUIRED_TABLES = List.of("metadata", "schema_migrations", "credits", "payments",
+            "credit_events", "paylogs", "data_health_records", "migration_log", "legacy_records");
+    private static final List<RequiredColumn> REQUIRED_COLUMNS = List.of(
+            new RequiredColumn("metadata", "meta_key", "VARCHAR(128)"), new RequiredColumn("metadata", "meta_value", "VARCHAR(4096)"),
+            new RequiredColumn("schema_migrations", "version", "INT"), new RequiredColumn("schema_migrations", "applied_at", "BIGINT DEFAULT 0"),
+            new RequiredColumn("credits", "id", "VARCHAR(36)"), new RequiredColumn("credits", "deal_name", "VARCHAR(256) DEFAULT ''"), new RequiredColumn("credits", "creditor", "VARCHAR(64) DEFAULT ''"), new RequiredColumn("credits", "debtor", "VARCHAR(64) DEFAULT ''"),
+            new RequiredColumn("credits", "amount", "DOUBLE PRECISION DEFAULT 0"), new RequiredColumn("credits", "paid_amount", "DOUBLE PRECISION DEFAULT 0"), new RequiredColumn("credits", "created_at", "BIGINT DEFAULT 0"), new RequiredColumn("credits", "due_date", "BIGINT"), new RequiredColumn("credits", "status", "VARCHAR(32) DEFAULT 'OPEN'"),
+            new RequiredColumn("credits", "note", "CLOB"), new RequiredColumn("credits", "search_text", "CLOB"), new RequiredColumn("credits", "completed_at", "BIGINT"), new RequiredColumn("credits", "archived", "BOOLEAN NOT NULL DEFAULT FALSE"), new RequiredColumn("credits", "revision", "BIGINT NOT NULL DEFAULT 0"),
+            new RequiredColumn("payments", "id", "VARCHAR(36)"), new RequiredColumn("payments", "credit_id", "VARCHAR(36)"), new RequiredColumn("payments", "from_player", "VARCHAR(64)"), new RequiredColumn("payments", "to_player", "VARCHAR(64)"), new RequiredColumn("payments", "amount", "DOUBLE PRECISION DEFAULT 0"),
+            new RequiredColumn("payments", "items_json", "CLOB"), new RequiredColumn("payments", "item_nbt", "CLOB"), new RequiredColumn("payments", "item_nbt_entries", "CLOB"), new RequiredColumn("payments", "created_at", "BIGINT DEFAULT 0"), new RequiredColumn("payments", "source", "VARCHAR(64)"), new RequiredColumn("payments", "paylog_id", "VARCHAR(36)"), new RequiredColumn("payments", "note", "CLOB"), new RequiredColumn("payments", "revision", "BIGINT NOT NULL DEFAULT 0"),
+            new RequiredColumn("credit_events", "id", "VARCHAR(36)"), new RequiredColumn("credit_events", "credit_id", "VARCHAR(36)"), new RequiredColumn("credit_events", "event_type", "VARCHAR(64)"), new RequiredColumn("credit_events", "amount", "DOUBLE PRECISION DEFAULT 0"), new RequiredColumn("credit_events", "paid_after", "DOUBLE PRECISION DEFAULT 0"),
+            new RequiredColumn("credit_events", "remaining_after", "DOUBLE PRECISION DEFAULT 0"), new RequiredColumn("credit_events", "created_at", "BIGINT DEFAULT 0"), new RequiredColumn("credit_events", "deal_name", "VARCHAR(256)"), new RequiredColumn("credit_events", "creditor", "VARCHAR(64)"), new RequiredColumn("credit_events", "debtor", "VARCHAR(64)"),
+            new RequiredColumn("credit_events", "note", "CLOB"), new RequiredColumn("credit_events", "amount_before", "DOUBLE PRECISION DEFAULT 0"), new RequiredColumn("credit_events", "amount_after", "DOUBLE PRECISION DEFAULT 0"), new RequiredColumn("credit_events", "actor", "VARCHAR(64)"), new RequiredColumn("credit_events", "source", "VARCHAR(64)"), new RequiredColumn("credit_events", "item_payment", "BOOLEAN NOT NULL DEFAULT FALSE"), new RequiredColumn("credit_events", "revision", "BIGINT NOT NULL DEFAULT 0"),
+            new RequiredColumn("paylogs", "id", "VARCHAR(36)"), new RequiredColumn("paylogs", "payer", "VARCHAR(64) DEFAULT ''"), new RequiredColumn("paylogs", "receiver", "VARCHAR(64) DEFAULT ''"), new RequiredColumn("paylogs", "amount", "DOUBLE PRECISION DEFAULT 0"), new RequiredColumn("paylogs", "raw_text", "CLOB"),
+            new RequiredColumn("paylogs", "normalized_text", "CLOB DEFAULT ''"), new RequiredColumn("paylogs", "created_at", "BIGINT DEFAULT 0"), new RequiredColumn("paylogs", "entry_hash", "VARCHAR(64)"), new RequiredColumn("paylogs", "source", "VARCHAR(64)"), new RequiredColumn("paylogs", "revision", "BIGINT NOT NULL DEFAULT 0"), new RequiredColumn("paylogs", "metadata", "CLOB"),
+            new RequiredColumn("data_health_records", "id", "VARCHAR(36)"), new RequiredColumn("data_health_records", "record_type", "VARCHAR(64)"), new RequiredColumn("data_health_records", "severity", "VARCHAR(32)"), new RequiredColumn("data_health_records", "source_table", "VARCHAR(64)"), new RequiredColumn("data_health_records", "source_id", "VARCHAR(128)"),
+            new RequiredColumn("data_health_records", "title", "VARCHAR(256)"), new RequiredColumn("data_health_records", "message", "CLOB"), new RequiredColumn("data_health_records", "raw_payload", "CLOB"), new RequiredColumn("data_health_records", "repair_payload", "CLOB"), new RequiredColumn("data_health_records", "status", "VARCHAR(32)"), new RequiredColumn("data_health_records", "created_at", "BIGINT DEFAULT 0"), new RequiredColumn("data_health_records", "resolved_at", "BIGINT"),
+            new RequiredColumn("migration_log", "id", "VARCHAR(36)"), new RequiredColumn("migration_log", "migration_type", "VARCHAR(64)"), new RequiredColumn("migration_log", "started_at", "BIGINT DEFAULT 0"), new RequiredColumn("migration_log", "completed_at", "BIGINT"), new RequiredColumn("migration_log", "details", "CLOB"), new RequiredColumn("migration_log", "status", "VARCHAR(32)"),
+            new RequiredColumn("legacy_records", "id", "VARCHAR(36)"), new RequiredColumn("legacy_records", "record_kind", "VARCHAR(64)"), new RequiredColumn("legacy_records", "original_id", "VARCHAR(256)"), new RequiredColumn("legacy_records", "raw_payload", "CLOB"), new RequiredColumn("legacy_records", "reason", "CLOB"), new RequiredColumn("legacy_records", "created_at", "BIGINT DEFAULT 0"), new RequiredColumn("legacy_records", "migration_id", "VARCHAR(36)")
+    );
+    private static final List<RequiredIndex> REQUIRED_INDICES = List.of(
+            new RequiredIndex("credits", "idx_credits_status", "CREATE INDEX IF NOT EXISTS idx_credits_status ON credits(status)"), new RequiredIndex("credits", "idx_credits_parties", "CREATE INDEX IF NOT EXISTS idx_credits_parties ON credits(debtor, creditor)"), new RequiredIndex("credits", "idx_credits_completed", "CREATE INDEX IF NOT EXISTS idx_credits_completed ON credits(completed_at)"), new RequiredIndex("credits", "idx_credits_archived", "CREATE INDEX IF NOT EXISTS idx_credits_archived ON credits(archived, status)"), new RequiredIndex("credits", "idx_history_final", "CREATE INDEX IF NOT EXISTS idx_history_final ON credits(status, completed_at)"),
+            new RequiredIndex("payments", "idx_payments_credit", "CREATE INDEX IF NOT EXISTS idx_payments_credit ON payments(credit_id)"), new RequiredIndex("payments", "idx_payments_paylog", "CREATE INDEX IF NOT EXISTS idx_payments_paylog ON payments(paylog_id)"), new RequiredIndex("payments", "idx_payments_created", "CREATE INDEX IF NOT EXISTS idx_payments_created ON payments(created_at)"),
+            new RequiredIndex("credit_events", "idx_events_credit", "CREATE INDEX IF NOT EXISTS idx_events_credit ON credit_events(credit_id)"), new RequiredIndex("credit_events", "idx_events_created", "CREATE INDEX IF NOT EXISTS idx_events_created ON credit_events(created_at)"),
+            new RequiredIndex("paylogs", "idx_paylogs_hash", "CREATE INDEX IF NOT EXISTS idx_paylogs_hash ON paylogs(entry_hash)"), new RequiredIndex("paylogs", "idx_paylogs_created", "CREATE INDEX IF NOT EXISTS idx_paylogs_created ON paylogs(created_at)"), new RequiredIndex("paylogs", "idx_paylogs_parties", "CREATE INDEX IF NOT EXISTS idx_paylogs_parties ON paylogs(payer, receiver)"), new RequiredIndex("paylogs", "idx_paylogs_amount", "CREATE INDEX IF NOT EXISTS idx_paylogs_amount ON paylogs(amount)"),
+            new RequiredIndex("data_health_records", "idx_health_status", "CREATE INDEX IF NOT EXISTS idx_health_status ON data_health_records(status, severity)"), new RequiredIndex("legacy_records", "idx_legacy_records_migration", "CREATE INDEX IF NOT EXISTS idx_legacy_records_migration ON legacy_records(migration_id)")
+    );
 
     private boolean initialized;
     private boolean healthy = true;
@@ -64,7 +91,7 @@ public final class DatabaseManager {
     public synchronized void initialize() {
         FileManager.initialize();
         Path requestedPath = FileManager.getDatabaseFile().toAbsolutePath();
-        if (initialized && requestedPath.equals(initializedAt)) return;
+        if (initialized && requestedPath.equals(initializedAt) && healthy && !writeLocked) return;
         initialized = false;
         healthy = true;
         writeLocked = false;
@@ -81,11 +108,12 @@ public final class DatabaseManager {
                         healthy = false;
                         CreditManagerClient.LOGGER.error("CreditManager database schema {} is newer than supported {}. Writes are locked.", installed, SCHEMA_VERSION);
                     } else {
+                        boolean repairedSchema = ensureRequiredSchemaObjects(connection);
                         for (int version = installed + 1; version <= SCHEMA_VERSION; version++) applyMigration(connection, version);
                         backfillCreditSearchText(connection);
                         backfillPaylogSearchText(connection);
-                        if (metadata(connection, "data_revision") == null) putMetadata(connection, "data_revision", "0");
-                        putMetadata(connection, "schema_version", String.valueOf(SCHEMA_VERSION));
+                        validateRequiredSchema(connection);
+                        repairSchemaMetadata(connection, repairedSchema);
                         connection.commit();
                     }
                 } catch (Exception error) {
@@ -101,6 +129,13 @@ public final class DatabaseManager {
                 DataHealth.reportRecoveryRequired("Aktive Datenbank ist leer, obwohl ein Backup mit CreditManager-Daten vorhanden ist.");
                 CreditManagerClient.LOGGER.error("CreditManager database is empty while a backup manifest reports domain data. Writes are locked.");
             }
+        } catch (SchemaValidationException exception) {
+            healthy = false;
+            writeLocked = true;
+            DataHealth.reportRecoveryRequired("Datenbank-Schema konnte nicht sicher repariert werden. Keine Daten wurden gelöscht.");
+            CreditManagerClient.LOGGER.error("CreditManager database schema validation failed; writes are locked.", exception);
+            initialized = true;
+            initializedAt = requestedPath;
         } catch (Exception exception) {
             if (!recovering && Files.exists(FileManager.getDatabaseStorageFile()) && restoreLatestValidBackupInternal()) {
                 initialized = false;
@@ -123,7 +158,97 @@ public final class DatabaseManager {
         try (Statement statement = connection.createStatement()) {
             statement.execute("CREATE TABLE IF NOT EXISTS metadata (meta_key VARCHAR(128) PRIMARY KEY, meta_value VARCHAR(4096) NOT NULL)");
             statement.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INT PRIMARY KEY, applied_at BIGINT NOT NULL)");
+            if (!columnExists(connection, "metadata", "meta_key")) statement.execute("ALTER TABLE metadata ADD COLUMN meta_key VARCHAR(128)");
+            if (!columnExists(connection, "metadata", "meta_value")) statement.execute("ALTER TABLE metadata ADD COLUMN meta_value VARCHAR(4096)");
+            if (!columnExists(connection, "schema_migrations", "version")) statement.execute("ALTER TABLE schema_migrations ADD COLUMN version INT");
+            if (!columnExists(connection, "schema_migrations", "applied_at")) statement.execute("ALTER TABLE schema_migrations ADD COLUMN applied_at BIGINT DEFAULT 0");
         }
+    }
+
+    /** Repairs physical schema drift independently from metadata.schema_version. */
+    private boolean ensureRequiredSchemaObjects(Connection connection) throws SQLException {
+        boolean repaired = false;
+        try (Statement statement = connection.createStatement()) {
+            repaired |= ensureTable(connection, statement, "credits", "CREATE TABLE credits (id VARCHAR(36) PRIMARY KEY, deal_name VARCHAR(256) NOT NULL, creditor VARCHAR(64) NOT NULL, debtor VARCHAR(64) NOT NULL, amount DOUBLE PRECISION NOT NULL, paid_amount DOUBLE PRECISION NOT NULL, created_at BIGINT NOT NULL, due_date BIGINT, status VARCHAR(32) NOT NULL, note CLOB, search_text CLOB, completed_at BIGINT, archived BOOLEAN NOT NULL DEFAULT FALSE, revision BIGINT NOT NULL)");
+            repaired |= ensureTable(connection, statement, "payments", "CREATE TABLE payments (id VARCHAR(36) PRIMARY KEY, credit_id VARCHAR(36) NOT NULL, from_player VARCHAR(64), to_player VARCHAR(64), amount DOUBLE PRECISION NOT NULL, items_json CLOB, item_nbt CLOB, item_nbt_entries CLOB, created_at BIGINT NOT NULL, source VARCHAR(64), paylog_id VARCHAR(36), note CLOB, revision BIGINT NOT NULL, CONSTRAINT fk_payment_credit FOREIGN KEY (credit_id) REFERENCES credits(id) ON DELETE CASCADE)");
+            repaired |= ensureTable(connection, statement, "credit_events", "CREATE TABLE credit_events (id VARCHAR(36) PRIMARY KEY, credit_id VARCHAR(36) NOT NULL, event_type VARCHAR(64) NOT NULL, amount DOUBLE PRECISION NOT NULL, paid_after DOUBLE PRECISION NOT NULL, remaining_after DOUBLE PRECISION NOT NULL, created_at BIGINT NOT NULL, deal_name VARCHAR(256), creditor VARCHAR(64), debtor VARCHAR(64), note CLOB, amount_before DOUBLE PRECISION NOT NULL, amount_after DOUBLE PRECISION NOT NULL, actor VARCHAR(64), source VARCHAR(64), item_payment BOOLEAN NOT NULL, revision BIGINT NOT NULL, CONSTRAINT fk_event_credit FOREIGN KEY (credit_id) REFERENCES credits(id) ON DELETE CASCADE)");
+            repaired |= ensureTable(connection, statement, "paylogs", "CREATE TABLE paylogs (id VARCHAR(36) PRIMARY KEY, payer VARCHAR(64) NOT NULL, receiver VARCHAR(64) NOT NULL, amount DOUBLE PRECISION NOT NULL, raw_text CLOB, normalized_text CLOB NOT NULL, created_at BIGINT NOT NULL, entry_hash VARCHAR(64) NOT NULL UNIQUE, source VARCHAR(64), revision BIGINT NOT NULL, metadata CLOB)");
+            repaired |= ensureTable(connection, statement, "data_health_records", "CREATE TABLE data_health_records (id VARCHAR(36) PRIMARY KEY, record_type VARCHAR(64) NOT NULL, severity VARCHAR(32) NOT NULL, source_table VARCHAR(64), source_id VARCHAR(128), title VARCHAR(256), message CLOB, raw_payload CLOB, repair_payload CLOB, status VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, resolved_at BIGINT)");
+            repaired |= ensureTable(connection, statement, "migration_log", "CREATE TABLE migration_log (id VARCHAR(36) PRIMARY KEY, migration_type VARCHAR(64) NOT NULL, started_at BIGINT NOT NULL, completed_at BIGINT, details CLOB, status VARCHAR(32) NOT NULL)");
+            repaired |= ensureTable(connection, statement, "legacy_records", "CREATE TABLE legacy_records (id VARCHAR(36) PRIMARY KEY, record_kind VARCHAR(64) NOT NULL, original_id VARCHAR(256), raw_payload CLOB NOT NULL, reason CLOB, created_at BIGINT NOT NULL, migration_id VARCHAR(36) NOT NULL)");
+            for (RequiredColumn column : REQUIRED_COLUMNS) repaired |= ensureColumn(connection, statement, column);
+            for (RequiredIndex index : REQUIRED_INDICES) repaired |= ensureIndex(connection, statement, index);
+        }
+        return repaired;
+    }
+
+    private boolean ensureTable(Connection connection, Statement statement, String table, String definition) throws SQLException {
+        if (tableExists(connection, table)) return false;
+        statement.execute(definition);
+        return true;
+    }
+
+    private boolean ensureColumn(Connection connection, Statement statement, RequiredColumn column) throws SQLException {
+        if (columnExists(connection, column.table(), column.name())) return false;
+        statement.execute("ALTER TABLE " + column.table() + " ADD COLUMN " + column.name() + ' ' + column.definition());
+        return true;
+    }
+
+    private boolean ensureIndex(Connection connection, Statement statement, RequiredIndex index) throws SQLException {
+        if (indexExists(connection, index.table(), index.name())) return false;
+        statement.execute(index.definition());
+        return true;
+    }
+
+    private boolean tableExists(Connection connection, String table) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE LOWER(TABLE_NAME)=? AND LOWER(TABLE_SCHEMA) NOT IN ('information_schema', 'pg_catalog')")) {
+            statement.setString(1, table.toLowerCase(Locale.ROOT));
+            try (ResultSet result = statement.executeQuery()) { return result.next(); }
+        }
+    }
+
+    private boolean columnExists(Connection connection, String table, String column) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE LOWER(TABLE_NAME)=? AND LOWER(COLUMN_NAME)=? AND LOWER(TABLE_SCHEMA) NOT IN ('information_schema', 'pg_catalog')")) {
+            statement.setString(1, table.toLowerCase(Locale.ROOT));
+            statement.setString(2, column.toLowerCase(Locale.ROOT));
+            try (ResultSet result = statement.executeQuery()) { return result.next(); }
+        }
+    }
+
+    private boolean indexExists(Connection connection, String table, String index) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT 1 FROM INFORMATION_SCHEMA.INDEXES WHERE LOWER(TABLE_NAME)=? AND LOWER(INDEX_NAME)=? AND LOWER(TABLE_SCHEMA) NOT IN ('information_schema', 'pg_catalog')")) {
+            statement.setString(1, table.toLowerCase(Locale.ROOT));
+            statement.setString(2, index.toLowerCase(Locale.ROOT));
+            try (ResultSet result = statement.executeQuery()) { return result.next(); }
+        }
+    }
+
+    private void validateRequiredSchema(Connection connection) throws SQLException {
+        for (String table : REQUIRED_TABLES) if (!tableExists(connection, table)) throw new SchemaValidationException("Required table is missing: " + table);
+        for (RequiredColumn column : REQUIRED_COLUMNS) if (!columnExists(connection, column.table(), column.name())) throw new SchemaValidationException("Required column is missing: " + column.table() + '.' + column.name());
+        for (RequiredIndex index : REQUIRED_INDICES) if (!indexExists(connection, index.table(), index.name())) throw new SchemaValidationException("Required index is missing: " + index.name());
+        executeSmokeQuery(connection, "SELECT COUNT(*) FROM credits");
+        executeSmokeQuery(connection, "SELECT COUNT(*) FROM payments");
+        executeSmokeQuery(connection, "SELECT COUNT(*) FROM paylogs");
+        executeSmokeQuery(connection, "SELECT p.id, p.metadata, COALESCE((SELECT SUM(amount) FROM payments WHERE paylog_id=p.id), 0) AS linked_amount FROM paylogs p WHERE 1=0");
+        executeSmokeQuery(connection, "SELECT id FROM credits WHERE (status IN ('PAID','CLOSED','CANCELLED') OR archived=TRUE) AND COALESCE(search_text,'') LIKE '%' LIMIT 1");
+    }
+
+    private void executeSmokeQuery(Connection connection, String sql) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(sql); ResultSet ignored = statement.executeQuery()) { }
+    }
+
+    private void repairSchemaMetadata(Connection connection, boolean repairedSchema) throws SQLException {
+        for (int version = 1; version <= SCHEMA_VERSION; version++) {
+            try (PreparedStatement statement = connection.prepareStatement("MERGE INTO schema_migrations (version, applied_at) KEY(version) VALUES (?, ?)")) {
+                statement.setInt(1, version);
+                statement.setLong(2, System.currentTimeMillis());
+                statement.executeUpdate();
+            }
+        }
+        if (metadata(connection, "data_revision") == null) putMetadata(connection, "data_revision", "0");
+        putMetadata(connection, "schema_version", String.valueOf(SCHEMA_VERSION));
+        if (repairedSchema) storeHealth(connection, "SCHEMA_DRIFT_REPAIRED", "INFO", "metadata", "schema_version", "Schemaabweichung repariert", "Fehlende Tabellen, Spalten oder Indizes wurden ohne das Löschen von Nutzerdaten ergänzt.", null, null);
     }
 
     private int installedSchemaVersion(Connection connection) throws SQLException {
@@ -198,10 +323,14 @@ public final class DatabaseManager {
              ResultSet result = select.executeQuery();
              PreparedStatement update = connection.prepareStatement("UPDATE credits SET search_text=? WHERE id=? AND (search_text IS NULL OR search_text<>?)")) {
             while (result.next()) {
-                CreditEntry entry = new CreditEntry();
-                entry.setId(UUID.fromString(result.getString("id"))); entry.setDealName(result.getString("deal_name")); entry.setCreditor(result.getString("creditor")); entry.setDebtor(result.getString("debtor")); entry.setAmount(result.getDouble("amount")); entry.setPaidAmount(result.getDouble("paid_amount")); entry.setCreatedAt(result.getLong("created_at")); long due = result.getLong("due_date"); entry.setDueDate(result.wasNull() ? null : due); entry.setStatus(result.getString("status")); entry.setNote(result.getString("note")); long completed = result.getLong("completed_at"); entry.setCompletedAt(result.wasNull() ? null : completed); entry.setArchived(result.getBoolean("archived"));
-                String searchText = DealSearchText.build(entry);
-                update.setString(1, searchText); update.setString(2, entry.getId().toString()); update.setString(3, searchText); update.addBatch();
+                try {
+                    CreditEntry entry = new CreditEntry();
+                    entry.setId(UUID.fromString(result.getString("id"))); entry.setDealName(result.getString("deal_name")); entry.setCreditor(result.getString("creditor")); entry.setDebtor(result.getString("debtor")); entry.setAmount(result.getDouble("amount")); entry.setPaidAmount(result.getDouble("paid_amount")); entry.setCreatedAt(result.getLong("created_at")); long due = result.getLong("due_date"); entry.setDueDate(result.wasNull() ? null : due); entry.setStatus(result.getString("status")); entry.setNote(result.getString("note")); long completed = result.getLong("completed_at"); entry.setCompletedAt(result.wasNull() ? null : completed); entry.setArchived(result.getBoolean("archived"));
+                    String searchText = DealSearchText.build(entry);
+                    update.setString(1, searchText); update.setString(2, entry.getId().toString()); update.setString(3, searchText); update.addBatch();
+                } catch (RuntimeException rowError) {
+                    storeHealth(connection, "CREDIT_SEARCH_BACKFILL", "WARNING", "credits", result.getString("id"), "Suchtext konnte nicht ergänzt werden", "Dieser Deal bleibt erhalten und kann weiterhin über klassische Felder gesucht werden.", rowPayload(result), null);
+                }
             }
             update.executeBatch();
         }
@@ -322,41 +451,57 @@ public final class DatabaseManager {
      * it can never remove unrelated deals, payments or events.
      */
     public synchronized boolean commitCreditMutation(CreditMutation mutation) {
-        if (mutation == null || mutation.credit() == null || mutation.credit().getId() == null) return false;
+        if (!isValidMutation(mutation)) return false;
+        return inTransaction(connection -> {
+            long rowRevision = nextRevision(connection);
+            applyCreditMutation(connection, mutation, rowRevision);
+            bumpRevision(connection);
+        });
+    }
+
+    /** Applies independent credit mutations in one transaction and increments the data revision once. */
+    public synchronized boolean commitCreditMutationsBatch(Collection<CreditMutation> mutations) {
+        if (mutations == null || mutations.isEmpty()) return false;
+        List<CreditMutation> values = List.copyOf(mutations);
+        if (values.stream().anyMatch(mutation -> !isValidMutation(mutation))) return false;
+        return inTransaction(connection -> {
+            long rowRevision = nextRevision(connection);
+            for (CreditMutation mutation : values) applyCreditMutation(connection, mutation, rowRevision);
+            bumpRevision(connection);
+        });
+    }
+
+    private boolean isValidMutation(CreditMutation mutation) {
+        return mutation != null && mutation.credit() != null && mutation.credit().getId() != null;
+    }
+
+    private void applyCreditMutation(Connection connection, CreditMutation mutation, long rowRevision) throws SQLException {
         List<Payment> upserts = mutation.paymentUpserts() == null ? List.of() : List.copyOf(mutation.paymentUpserts());
         List<UUID> deletions = mutation.paymentDeletions() == null ? List.of() : List.copyOf(mutation.paymentDeletions());
         List<CreditEventEntry> events = mutation.events() == null ? List.of() : List.copyOf(mutation.events());
-        return inTransaction(connection -> {
-            long rowRevision = nextRevision(connection);
-            for (Payment payment : upserts) {
-                if (!isValidPayment(payment) || !mutation.credit().getId().equals(payment.getCreditId())) {
-                    throw new SQLException("Invalid payment mutation");
-                }
-                validatePaylogPaymentLink(connection, payment);
-            }
-            for (CreditEventEntry event : events) {
-                if (!isValidEvent(event) || !mutation.credit().getId().equals(event.getCreditId())) {
-                    throw new SQLException("Invalid credit event mutation");
-                }
-            }
+        for (Payment payment : upserts) {
+            if (!isValidPayment(payment) || !mutation.credit().getId().equals(payment.getCreditId())) throw new SQLException("Invalid payment mutation");
+            validatePaylogPaymentLink(connection, payment);
+        }
+        for (CreditEventEntry event : events) {
+            if (!isValidEvent(event) || !mutation.credit().getId().equals(event.getCreditId())) throw new SQLException("Invalid credit event mutation");
+        }
 
-            upsertCredit(connection, mutation.credit(), rowRevision);
-            for (UUID paymentId : deletions) {
-                if (paymentId == null) throw new SQLException("Invalid payment deletion");
-                try (PreparedStatement statement = connection.prepareStatement("DELETE FROM payments WHERE id=? AND credit_id=?")) {
-                    statement.setString(1, paymentId.toString());
-                    statement.setString(2, mutation.credit().getId().toString());
-                    if (statement.executeUpdate() != 1) throw new SQLException("Payment no longer exists");
-                }
+        upsertCredit(connection, mutation.credit(), rowRevision);
+        for (UUID paymentId : deletions) {
+            if (paymentId == null) throw new SQLException("Invalid payment deletion");
+            try (PreparedStatement statement = connection.prepareStatement("DELETE FROM payments WHERE id=? AND credit_id=?")) {
+                statement.setString(1, paymentId.toString());
+                statement.setString(2, mutation.credit().getId().toString());
+                if (statement.executeUpdate() != 1) throw new SQLException("Payment no longer exists");
             }
-            for (Payment payment : upserts) upsertPayment(connection, payment, rowRevision);
+        }
+        for (Payment payment : upserts) upsertPayment(connection, payment, rowRevision);
 
-            List<Payment> persistedPayments = loadPaymentsForCredit(connection, mutation.credit().getId());
-            validateDerivedCreditState(mutation.credit(), persistedPayments.stream().mapToDouble(payment -> payment.getAmount()).sum());
-            validatePersistedPaylogLinks(connection, persistedPayments);
-            for (CreditEventEntry event : events) upsertEvent(connection, event, rowRevision);
-            bumpRevision(connection);
-        });
+        List<Payment> persistedPayments = loadPaymentsForCredit(connection, mutation.credit().getId());
+        validateDerivedCreditState(mutation.credit(), persistedPayments.stream().mapToDouble(payment -> payment.getAmount()).sum());
+        validatePersistedPaylogLinks(connection, persistedPayments);
+        for (CreditEventEntry event : events) upsertEvent(connection, event, rowRevision);
     }
 
     public synchronized boolean importLegacy(DatabaseState state, Collection<TransactionEntry> paylogs, String details) {
@@ -742,8 +887,7 @@ public final class DatabaseManager {
                 return result.next() ? Optional.of(readPaylog(result)) : Optional.empty();
             }
         } catch (SQLException exception) {
-            CreditManagerClient.LOGGER.warn("Paylog lookup failed", exception);
-            return Optional.empty();
+            throw queryFailure("Paylog konnte nicht aus der Datenbank geladen werden.", exception);
         }
     }
 
@@ -817,8 +961,7 @@ public final class DatabaseManager {
                 }
             }
         } catch (SQLException exception) {
-            CreditManagerClient.LOGGER.warn("Paylog query failed", exception);
-            return new QueryPage<>(List.of(), 0, Math.max(0, offset), pageSize);
+            throw queryFailure("Paylogs konnten nicht aus der Datenbank geladen werden.", exception);
         }
     }
 
@@ -844,8 +987,7 @@ public final class DatabaseManager {
                 }
             }
         } catch (SQLException exception) {
-            CreditManagerClient.LOGGER.warn("Available-paylog query failed", exception);
-            return new QueryPage<>(List.of(), 0, Math.max(0, offset), pageSize);
+            throw queryFailure("Verfügbare Paylogs konnten nicht aus der Datenbank geladen werden.", exception);
         }
     }
 
@@ -873,8 +1015,9 @@ public final class DatabaseManager {
         List<String> values = new ArrayList<>(); values.add(lowerPlayer); values.add(lowerPlayer);
         if (!includeArchived) where.append(" AND archived=FALSE");
         for (String token : DealSearchText.tokens(query)) {
-            where.append(" AND COALESCE(search_text,'') LIKE ? ESCAPE '!'");
-            values.add('%' + escapeLike(token) + '%');
+            where.append(" AND (COALESCE(search_text,'') LIKE ? ESCAPE '!' OR LOWER(COALESCE(deal_name,'')) LIKE ? ESCAPE '!' OR LOWER(COALESCE(debtor,'')) LIKE ? ESCAPE '!' OR LOWER(COALESCE(creditor,'')) LIKE ? ESCAPE '!' OR LOWER(COALESCE(status,'')) LIKE ? ESCAPE '!' OR LOWER(COALESCE(note,'')) LIKE ? ESCAPE '!' OR LOWER(COALESCE(id,'')) LIKE ? ESCAPE '!')");
+            String like = '%' + escapeLike(token) + '%';
+            for (int index = 0; index < 7; index++) values.add(like);
         }
         String order = historyOrder(sort == null ? DealHistorySort.NEWEST : sort);
         try (Connection connection = connection()) {
@@ -882,8 +1025,7 @@ public final class DatabaseManager {
             List<CreditEntry> entries = readCredits(connection, "SELECT * FROM credits" + where + " ORDER BY " + order + " LIMIT ? OFFSET ?", values, pageSize, Math.max(0, offset));
             return new QueryPage<>(List.copyOf(entries), count, Math.max(0, offset), pageSize);
         } catch (SQLException exception) {
-            CreditManagerClient.LOGGER.warn("Deal-history query failed", exception);
-            return new QueryPage<>(List.of(), 0, Math.max(0, offset), pageSize);
+            throw queryFailure("Deal-History konnte nicht aus der Datenbank geladen werden.", exception);
         }
     }
 
@@ -1360,6 +1502,13 @@ public final class DatabaseManager {
 
     private Connection connection() throws SQLException { return openConnection(FileManager.getDatabaseFile()); }
     private Connection openConnection(Path databaseBase) throws SQLException { return DriverManager.getConnection(databaseUrl(databaseBase)); }
+    private IllegalStateException queryFailure(String message, SQLException exception) {
+        healthy = false;
+        writeLocked = true;
+        DataHealth.reportRecoveryRequired(message + " Daten wurden nicht gelöscht; bitte die Wiederherstellung öffnen.");
+        CreditManagerClient.LOGGER.error(message, exception);
+        return new IllegalStateException(message + " Datenbankprüfung erforderlich.", exception);
+    }
     private String databaseUrl(Path databaseBase) {
         String path = databaseBase.toAbsolutePath().normalize().toString().replace('\\', '/').replace(";", "\\;");
         return "jdbc:h2:file:" + path + ";MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;AUTO_SERVER=FALSE";
@@ -1404,6 +1553,8 @@ public final class DatabaseManager {
         private static BackupValidation invalid() { return new BackupValidation(false, 0, 0, 0, 0); }
         private int domainCount() { return creditCount + paymentCount + paylogCount + eventCount; }
     }
+    private record RequiredColumn(String table, String name, String definition) { }
+    private record RequiredIndex(String table, String name, String definition) { }
     public record LegacyRecord(String kind, String originalId, String rawPayload, String reason) { }
     public record AutomaticMigrationResult(boolean success, int credits, int payments, int events, int paylogs, int preservedRecords) {
         private static AutomaticMigrationResult failed() { return new AutomaticMigrationResult(false, 0, 0, 0, 0, 0); }
@@ -1418,5 +1569,8 @@ public final class DatabaseManager {
     public record DataHealthRecord(UUID id, String type, String severity, String sourceTable, String sourceId, String title, String message, String rawPayload, String repairPayload, String status, long createdAt, Long resolvedAt) { }
     private DataHealthRecord readHealth(ResultSet result) throws SQLException { long resolved = result.getLong("resolved_at"); return new DataHealthRecord(UUID.fromString(result.getString("id")), result.getString("record_type"), result.getString("severity"), result.getString("source_table"), result.getString("source_id"), result.getString("title"), result.getString("message"), result.getString("raw_payload"), result.getString("repair_payload"), result.getString("status"), result.getLong("created_at"), result.wasNull() ? null : resolved); }
     @FunctionalInterface private interface DatabaseWork { void run(Connection connection) throws Exception; }
+    private static final class SchemaValidationException extends SQLException {
+        private SchemaValidationException(String message) { super(message); }
+    }
     private static final class DuplicatePaylogException extends RuntimeException { }
 }

@@ -16,6 +16,10 @@ CreditManager ist eine clientseitige Fabric-Mod für Minecraft **1.21.11**. Sie 
 
 Dort lassen sich Deals, Zahlungen, Paylogs, Statistiken und Einstellungen verwalten.
 
+## Lokale Testdaten
+
+Der optionale `@TestData`-Chat-Hook ist standardmäßig vollständig deaktiviert und gehört nicht in das Release-Jar. Für eine lokale Entwicklungsumgebung muss er ausdrücklich als JVM-Argument aktiviert werden: `-Dcreditmanager.dev.testdata=true` (der ältere Name `-Dcreditmanager.devTestData=true` wird ebenfalls unterstützt).
+
 ## Funktionen
 
 - Forderungen und Schulden mit Betrag, Fälligkeit, Bezeichnung und Notiz

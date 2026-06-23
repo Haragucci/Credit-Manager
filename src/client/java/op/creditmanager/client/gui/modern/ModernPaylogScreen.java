@@ -35,6 +35,7 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
     private int filterButtonX, filterButtonY, filterButtonWidth;
     private List<ModernLayout.Bounds> toolbarButtons = List.of();
     private List<ModernLayout.Bounds> pagingButtons = List.of();
+    private List<ModernLayout.Bounds> errorButtons = List.of();
     private List<TransactionEntry> renderedEntries = List.of();
     private int renderedStart;
     private DatabaseManager.QueryPage<TransactionEntry> page = new DatabaseManager.QueryPage<>(List.of(), 0, 0, PAGE_SIZE);
@@ -46,6 +47,7 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
     private long requestSequence;
     private boolean disposed;
     private String queryError;
+    private int errorCardY;
 
     public ModernPaylogScreen(CreditManager manager, Screen parent) { super(manager, parent, "Paylogs", "paylogs"); }
 
@@ -64,16 +66,22 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
     @Override public void tick() {
         super.tick();
         if (disposed) return;
+        if (!DatabaseManager.getInstance().isHealthy()) {
+            queryError = "Paylogs können erst nach der Datenbankprüfung geladen werden.";
+            forceQuery = false;
+            return;
+        }
         String filterKey = filterKey();
         if (!filterKey.equals(requestedFilterKey)) {
             requestedFilterKey = filterKey;
             pageOffset = 0;
             scroll.reset();
+            queryError = null;
             debouncer.update(filterKey, System.currentTimeMillis());
         } else if (pending != null && pending.future().isDone()) {
             applyFinishedQuery(pending);
             pending = null;
-        } else if (pending == null && (forceQuery || debouncer.ready(System.currentTimeMillis()) || !pageKey(filterKey).equals(appliedKey) && !filterKey.equals(requestedFilterKey))) {
+        } else if (pending == null && queryError == null && (forceQuery || debouncer.ready(System.currentTimeMillis()) || !pageKey(filterKey).equals(appliedKey) && !filterKey.equals(requestedFilterKey))) {
             forceQuery = false;
             schedule(filterKey);
         }
@@ -87,7 +95,6 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
         int direction = directionIndex;
         int offset = pageOffset;
         pending = new PendingQuery(sequence, key, CompletableFuture.supplyAsync(() -> TransactionRepository.getInstance().queryPage(player, direction, query, PAGE_SIZE, offset), ModernQueryExecutor.get()));
-        queryError = null;
     }
 
     private void applyFinishedQuery(PendingQuery result) {
@@ -128,9 +135,13 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
 
         String state = pending == null ? "Seite " + page.pageNumber() + "/" + page.pageCount() + " · " + page.totalCount() + " Ergebnis" + (page.totalCount() == 1 ? "" : "se") : "Lade Seite " + (pageOffset / PAGE_SIZE + 1) + "…";
         ModernUi.drawTruncated(context, textRenderer, state, contentX, toolbarY + toolbarHeight + 4, contentWidth, pending == null ? ModernUi.theme().muted : ModernUi.theme().warning);
-        listY = toolbarY + toolbarHeight + 18;
+        int baseListY = toolbarY + toolbarHeight + 18;
+        errorCardY = baseListY;
+        int errorCardHeight = queryError == null ? 0 : errorCardHeight();
+        listY = baseListY + errorCardHeight;
         int pagingHeight = ModernLayout.stack(contentWidth, 2, 88, 8) ? 54 : 23;
         listHeight = Math.max(45, contentY + contentHeight - listY - pagingHeight - 10);
+        if (queryError != null) drawQueryErrorCard(context, mouseX, mouseY);
         drawRows(context, mouseX, mouseY);
         drawPaging(context, mouseX, mouseY);
         super.render(context, mouseX, mouseY, delta);
@@ -148,8 +159,8 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
         renderedEntries = entries.subList(renderedStart, end);
         if (renderedEntries.isEmpty()) {
             ModernUi.card(context, contentX, listY, contentWidth, Math.min(65, listHeight), false);
-            String message = queryError != null ? queryError : pending == null ? "Keine Paylogs für diesen Filter gefunden." : "Paylogs werden geladen…";
-            ModernUi.drawCentered(context, textRenderer, message, contentX + contentWidth / 2, listY + 25, queryError == null ? ModernUi.theme().muted : ModernUi.theme().danger);
+            String message = queryError != null ? "Ergebnisanzeige wartet auf die Datenbankprüfung." : pending == null ? "Keine Paylogs für diesen Filter gefunden." : "Paylogs werden geladen…";
+            ModernUi.drawCentered(context, textRenderer, message, contentX + contentWidth / 2, listY + 25, queryError == null ? ModernUi.theme().muted : ModernUi.theme().warning);
             return;
         }
         context.enableScissor(contentX, listY, contentX + contentWidth, listY + listHeight);
@@ -174,6 +185,23 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
                 next && ModernUi.contains(mouseX, mouseY, nextBounds.x(), nextBounds.y(), nextBounds.width(), nextBounds.height()));
     }
 
+    private int errorCardHeight() { return ModernLayout.stack(Math.max(1, contentWidth - 12), 2, 74, 8) ? 76 : 48; }
+
+    private void drawQueryErrorCard(DrawContext context, int mouseX, int mouseY) {
+        int padding = contentWidth > 16 ? 6 : 0;
+        int width = Math.max(1, contentWidth - padding * 2);
+        int height = errorCardHeight();
+        ModernUi.card(context, contentX, errorCardY, contentWidth, height, false);
+        ModernUi.drawTruncated(context, textRenderer, "Datenbank-Schema/Reparatur erforderlich", contentX + padding, errorCardY + 5, width, ModernUi.theme().danger);
+        errorButtons = ModernLayout.buttonRow(contentX + padding, errorCardY + 21, width, 2, 74, 23, 8);
+        ModernLayout.Bounds recovery = errorButtons.getFirst();
+        ModernLayout.Bounds retry = errorButtons.get(1);
+        ModernUi.button(context, textRenderer, recovery.x(), recovery.y(), recovery.width(), recovery.height(), "Recovery öffnen", ModernUi.theme().buttonPrimary,
+                ModernUi.contains(mouseX, mouseY, recovery.x(), recovery.y(), recovery.width(), recovery.height()));
+        ModernUi.button(context, textRenderer, retry.x(), retry.y(), retry.width(), retry.height(), "Neu laden", ModernUi.theme().buttonNeutral,
+                ModernUi.contains(mouseX, mouseY, retry.x(), retry.y(), retry.width(), retry.height()));
+    }
+
     private void drawTransaction(DrawContext context, int mouseX, int mouseY, TransactionEntry entry, int x, int y, int width) {
         boolean outgoing = equals(entry.getFromPlayer(), currentPlayerName());
         int color = outgoing ? ModernUi.theme().danger : ModernUi.theme().success;
@@ -191,6 +219,16 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
     @Override public boolean mouseClicked(Click click, boolean doubled) {
         if (handleSidebarClick(click)) return true;
         if (click.button() != 0) return super.mouseClicked(click, doubled);
+        if (queryError != null && errorButtons.size() == 2 && ModernUi.contains(click.x(), click.y(), errorButtons.getFirst().x(), errorButtons.getFirst().y(), errorButtons.getFirst().width(), errorButtons.getFirst().height())) {
+            open(new ModernRecoveryScreen(manager));
+            return true;
+        }
+        if (queryError != null && errorButtons.size() == 2 && ModernUi.contains(click.x(), click.y(), errorButtons.get(1).x(), errorButtons.get(1).y(), errorButtons.get(1).width(), errorButtons.get(1).height())) {
+            queryError = null;
+            forceQuery = true;
+            debouncer.commitImmediately(filterKey());
+            return true;
+        }
         if (ModernUi.contains(click.x(), click.y(), manualButtonX, manualButtonY, manualButtonWidth, 24)) {
             open(new ModernCreatePaylogScreen(manager, this));
             return true;
@@ -234,7 +272,7 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
         scroll.reset();
         if (searchField != null) searchField.setText("");
         page = new DatabaseManager.QueryPage<>(List.of(), 0, 0, PAGE_SIZE);
-        appliedKey = ""; requestedFilterKey = ""; pending = null; queryError = null; pageOffset = 0; forceQuery = false;
+        appliedKey = ""; requestedFilterKey = ""; pending = null; queryError = null; errorButtons = List.of(); pageOffset = 0; forceQuery = false;
         super.clearTransientState();
     }
 

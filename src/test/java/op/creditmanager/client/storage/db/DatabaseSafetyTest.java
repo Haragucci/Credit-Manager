@@ -18,11 +18,13 @@ import op.creditmanager.client.storage.FileManager;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DatabaseSafetyTest {
@@ -37,6 +39,34 @@ class DatabaseSafetyTest {
         configField().set(null, previousConfig);
         configRecoveryField().setBoolean(null, previousConfigRecovery);
         DataHealth.clearReasons();
+    }
+
+    @Test
+    void dataHealthDeduplicatesRepeatedReasons() {
+        DataHealth.reportRecoveryRequired("identischer Testgrund");
+        DataHealth.reportRecoveryRequired("identischer Testgrund");
+        DataHealth.reportRecoveryRequired("identischer Testgrund");
+        assertEquals(List.of("identischer Testgrund"), DataHealth.reasons());
+    }
+
+    @Test
+    void transactionRecoveryCanRecheckAnUnhealthyDatabaseEvenBeforeItsOwnFlagIsUpdated() throws Exception {
+        useTemporaryDataDirectory();
+        DatabaseManager database = DatabaseManager.getInstance();
+        database.initialize();
+        Field healthy = DatabaseManager.class.getDeclaredField("healthy");
+        Field writeLocked = DatabaseManager.class.getDeclaredField("writeLocked");
+        Field transactionRecovery = TransactionRepository.class.getDeclaredField("recoveryRequired");
+        healthy.setAccessible(true);
+        writeLocked.setAccessible(true);
+        transactionRecovery.setAccessible(true);
+        healthy.setBoolean(database, false);
+        writeLocked.setBoolean(database, true);
+        transactionRecovery.setBoolean(TransactionRepository.getInstance(), false);
+
+        assertTrue(TransactionRepository.getInstance().resetCorruptTransactionsWithBackup());
+        assertTrue(database.isHealthy());
+        assertFalse(database.isWriteLocked());
     }
 
     @Test
@@ -147,6 +177,55 @@ class DatabaseSafetyTest {
         assertEquals(1, database.loadCreditState().credits().size());
     }
 
+    @Test
+    void physicallyCorruptDatabaseWithoutBackupIsQuarantinedWithoutCreatingAnEmptyDatabase() throws Exception {
+        CreditManager manager = manager();
+        manager.createCredit("creditor", "debtor", 100D, null, "keep-quarantined", null);
+        DatabaseManager database = DatabaseManager.getInstance();
+        Path active = FileManager.getDatabaseStorageFile();
+        corrupt(active);
+        resetDatabaseInitialization();
+
+        database.initialize();
+
+        assertEquals(DatabaseManager.DatabaseAvailability.NEEDS_USER_RECOVERY, database.availability());
+        assertTrue(database.requiresUserRecovery());
+        assertFalse(database.isHealthy());
+        assertTrue(database.isWriteLocked());
+        assertFalse(Files.exists(active));
+        assertThrows(IllegalStateException.class, database::loadCreditState);
+        try (var files = Files.list(FileManager.getQuarantineDirectory())) {
+            assertTrue(files.anyMatch(path -> path.getFileName().toString().endsWith(".mv.db")));
+        }
+        try (var files = Files.list(FileManager.getQuarantineDirectory())) {
+            assertTrue(files.anyMatch(path -> path.getFileName().toString().endsWith(".manifest.json")));
+        }
+
+        database.initialize();
+        assertFalse(Files.exists(active));
+    }
+
+    @Test
+    void physicallyCorruptDatabaseRestoresTheLatestValidatedBackupWithoutReadingItAgain() throws Exception {
+        CreditManager manager = manager();
+        CreditEntry kept = manager.createCredit("creditor", "debtor", 100D, null, "restore-after-corruption", null);
+        DatabaseManager database = DatabaseManager.getInstance();
+        assertTrue(database.createBackup());
+        Path active = FileManager.getDatabaseStorageFile();
+        corrupt(active);
+        resetDatabaseInitialization();
+
+        database.initialize();
+
+        assertTrue(database.isHealthy());
+        assertFalse(database.isWriteLocked());
+        assertEquals(DatabaseManager.DatabaseAvailability.RESTORED_FROM_BACKUP, database.availability());
+        assertEquals(List.of(kept.getId()), database.loadCreditState().credits().stream().map(CreditEntry::getId).toList());
+        try (var files = Files.list(FileManager.getQuarantineDirectory())) {
+            assertTrue(files.anyMatch(path -> path.getFileName().toString().endsWith(".mv.db")));
+        }
+    }
+
     private CreditManager manager() throws Exception {
         useTemporaryDataDirectory();
         CreditRepository repository = new CreditRepository();
@@ -173,14 +252,22 @@ class DatabaseSafetyTest {
         Field initializedAt = DatabaseManager.class.getDeclaredField("initializedAt");
         Field healthy = DatabaseManager.class.getDeclaredField("healthy");
         Field writeLocked = DatabaseManager.class.getDeclaredField("writeLocked");
+        Field availability = DatabaseManager.class.getDeclaredField("availability");
         initialized.setAccessible(true);
         initializedAt.setAccessible(true);
         healthy.setAccessible(true);
         writeLocked.setAccessible(true);
+        availability.setAccessible(true);
         initialized.setBoolean(DatabaseManager.getInstance(), false);
         initializedAt.set(DatabaseManager.getInstance(), null);
         healthy.setBoolean(DatabaseManager.getInstance(), true);
         writeLocked.setBoolean(DatabaseManager.getInstance(), false);
+        availability.set(DatabaseManager.getInstance(), DatabaseManager.DatabaseAvailability.UNKNOWN);
+    }
+
+    private void corrupt(Path active) throws Exception {
+        byte[] contents = Files.readAllBytes(active);
+        Files.write(active, Arrays.copyOf(contents, Math.min(contents.length, 16)));
     }
 
     private Field dataDirectoryField() throws Exception {

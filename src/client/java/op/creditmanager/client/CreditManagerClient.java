@@ -39,21 +39,24 @@ public class CreditManagerClient implements ClientModInitializer {
 
 		FileManager.initialize();
 		ClientConfigManager.reload();
-		DatabaseManager.getInstance().initialize();
-		DatabaseHealthChecker.getInstance().check();
-		LegacyJsonMigrationService.getInstance().inspectAtStartup();
+		DatabaseManager database = DatabaseManager.getInstance();
+		database.initialize();
 
 		creditRepository = new CreditRepository();
-		creditRepository.load();
 		CreditEventRepository.getInstance().bind(creditRepository);
-
 		creditManager = new CreditManager(creditRepository);
-		registerDevHooks();
-
-		TransactionRepository.getInstance().load();
-		CreditEventRepository.getInstance().load();
-
-		paymentDetector = new PaymentDetector(creditManager);
+		if (database.isHealthy()) {
+			DatabaseHealthChecker.getInstance().check();
+			LegacyJsonMigrationService.getInstance().inspectAtStartup();
+			creditRepository.load();
+			TransactionRepository.getInstance().load();
+			CreditEventRepository.getInstance().load();
+			registerDevHooks();
+			paymentDetector = new PaymentDetector(creditManager);
+		} else {
+			TransactionRepository.getInstance().load();
+			LOGGER.error("[CreditManager] Datenbank-Recovery erforderlich; Datenzugriffe werden bis zur Wiederherstellung übersprungen.");
+		}
 
 		HudElementRegistry.attachElementBefore(VanillaHudElements.CHAT,
 				Identifier.of(MOD_ID, "global_flyins"), (context, tickCounter) -> {

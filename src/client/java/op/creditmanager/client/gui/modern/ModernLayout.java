@@ -5,7 +5,6 @@ import net.minecraft.client.gui.widget.TextFieldWidget;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Pure layout primitives shared by Modern screens and layout tests. */
 public final class ModernLayout {
     private ModernLayout() { }
 

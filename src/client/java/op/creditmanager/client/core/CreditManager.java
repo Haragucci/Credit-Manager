@@ -1,5 +1,6 @@
 package op.creditmanager.client.core;
 
+import op.creditmanager.client.CreditManagerClient;
 import op.creditmanager.client.model.CreditEntry;
 import op.creditmanager.client.model.CreditEventEntry;
 import op.creditmanager.client.model.CreditEventType;
@@ -275,6 +276,25 @@ public class CreditManager {
         reloadData();
         return !requiresRecovery();
     }
+    public boolean recheckAndRepairDatabase() {
+        if (!DatabaseManager.getInstance().recheckAndRepair()) return false;
+        repository.load();
+        CreditEventRepository.getInstance().bind(repository);
+        CreditEventRepository.getInstance().load();
+        TransactionRepository.getInstance().load();
+        ClientConfigManager.reload();
+        if (!requiresRecovery()) DataHealth.clearReasons();
+        return !requiresRecovery();
+    }
+    public boolean createEmptyDatabaseAfterPhysicalRecovery() {
+        if (!DatabaseManager.getInstance().createEmptyDatabaseAfterPhysicalRecovery()) return false;
+        repository.load();
+        CreditEventRepository.getInstance().bind(repository);
+        CreditEventRepository.getInstance().load();
+        TransactionRepository.getInstance().load();
+        if (!requiresRecovery()) DataHealth.clearReasons();
+        return !requiresRecovery();
+    }
     public boolean repairDefaultRecovery(UUID token) {
         if (CONFIG_RECOVERY_TOKEN.equals(token)) return ClientConfigManager.resetCorruptConfigWithDefaults();
         if (TRANSACTION_RECOVERY_TOKEN.equals(token)) return TransactionRepository.getInstance().resetCorruptTransactionsWithBackup();
@@ -288,12 +308,12 @@ public class CreditManager {
         return repaired;
     }
     public void reloadData() {
-        DataHealth.clearReasons();
         LegacyJsonMigrationService.getInstance().inspectAtStartup();
         repository.load();
         CreditEventRepository.getInstance().load();
         TransactionRepository.getInstance().load();
         ClientConfigManager.reload();
+        if (!requiresRecovery()) DataHealth.clearReasons();
     }
 
     private List<CreditEntry> open(List<CreditEntry> entries) {
@@ -315,7 +335,16 @@ public class CreditManager {
         if (!DatabaseManager.getInstance().commitCreditMutation(mutation)) {
             throw new CreditException("Vorgang wurde nicht gespeichert; der vorherige Datenstand bleibt unverändert.");
         }
-        repository.load();
+        if (!repository.load()) {
+            repository.applyCommittedMutation(draft, paymentUpserts, paymentDeletions, events);
+            CreditEventRepository.getInstance().bind(repository);
+            CreditEventRepository.getInstance().acceptCommittedEvents(events);
+            TransactionRepository.getInstance().load();
+            CreditEntry target = published == null ? draft : published;
+            syncCredit(target, draft);
+            CreditManagerClient.LOGGER.warn("CreditManager commit succeeded, but the follow-up reload failed. The committed deal remains visible from the staged in-memory state.");
+            return;
+        }
         CreditEventRepository.getInstance().bind(repository);
         CreditEventRepository.getInstance().load();
         TransactionRepository.getInstance().load();

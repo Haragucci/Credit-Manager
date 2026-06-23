@@ -114,6 +114,9 @@ public class PaymentDetector {
                 }
             } catch (CreditManager.CreditException exception) {
                 ModernToastManager.getInstance().showWarning("Paylog erkannt, automatische Buchung nicht möglich: " + exception.getMessage());
+            } catch (RuntimeException exception) {
+                CreditManagerClient.LOGGER.warn("Paylog was saved, but optional auto-linking failed", exception);
+                ModernToastManager.getInstance().showWarning("Paylog erkannt, automatische Verknüpfung nicht möglich. Der Paylog bleibt gespeichert.");
             }
         } else if (ClientConfigManager.isShowPaylogNotifications()) {
             ModernToastManager.getInstance().showInfo("Paylog erkannt: " + vonSpieler + " → " + anSpieler

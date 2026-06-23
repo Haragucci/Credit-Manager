@@ -63,6 +63,25 @@ class CreditRepositoryDatabaseTest {
     }
 
     @Test
+    void stagedLoadKeepsThePreviousInMemoryStateWhenReadingTheDatabaseFails() throws Exception {
+        useTemporaryDataDirectory();
+        CreditRepository repository = new CreditRepository();
+        repository.load();
+        CreditEntry credit = new CreditEntry(UUID.randomUUID(), "staged-deal", "creditor", "debtor", 100D, null, null);
+        repository.putCredit(credit);
+        assertTrue(repository.saveAll());
+        assertTrue(repository.load());
+
+        try (Connection connection = connection(); var statement = connection.createStatement()) {
+            statement.execute("ALTER TABLE credits DROP COLUMN deal_name");
+        }
+
+        assertFalse(repository.load());
+        assertTrue(repository.findCreditById(credit.getId()).isPresent());
+        assertEquals(1, repository.getAllCredits().size());
+    }
+
+    @Test
     void failedDatabaseTransactionLeavesThePreviousStateIntact() throws Exception {
         useTemporaryDataDirectory();
         CreditRepository repository = new CreditRepository(); repository.load();

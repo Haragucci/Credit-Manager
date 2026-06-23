@@ -18,9 +18,14 @@ public final class TransactionRepository {
 
     public synchronized void load() {
         try {
-            DatabaseManager.getInstance().initialize();
-            revision = DatabaseManager.getInstance().revision();
-            recoveryRequired = !DatabaseManager.getInstance().isHealthy();
+            DatabaseManager database = DatabaseManager.getInstance();
+            database.initialize();
+            if (database.requiresUserRecovery() || !database.isHealthy()) {
+                recoveryRequired = true;
+                return;
+            }
+            revision = database.revision();
+            recoveryRequired = false;
         } catch (RuntimeException exception) {
             recoveryRequired = true;
             CreditManagerClient.LOGGER.error("Could not initialise Paylog database access", exception);
@@ -49,10 +54,23 @@ public final class TransactionRepository {
     public synchronized boolean isWritable() { return !recoveryRequired && DatabaseManager.getInstance().isHealthy(); }
 
     public synchronized boolean resetCorruptTransactionsWithBackup() {
-        if (!recoveryRequired) return false;
-        if (!DatabaseManager.getInstance().resetCorruptDatabaseWithBackup()) return false;
+        DatabaseManager database = DatabaseManager.getInstance();
+        if (!recoveryRequired && database.isHealthy() && !database.isWriteLocked()) return false;
+        if (database.recheckAndRepair()) {
+            recoveryRequired = false;
+            revision = database.revision();
+            return true;
+        }
+        if (!database.resetCorruptDatabaseWithBackup()) return false;
         recoveryRequired = false;
-        revision = DatabaseManager.getInstance().revision();
+        revision = database.revision();
         return true;
+    }
+
+    public synchronized boolean recheckDatabase() {
+        boolean repaired = DatabaseManager.getInstance().recheckAndRepair();
+        recoveryRequired = !repaired;
+        if (repaired) revision = DatabaseManager.getInstance().revision();
+        return repaired;
     }
 }

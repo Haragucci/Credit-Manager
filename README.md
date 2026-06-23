@@ -18,7 +18,7 @@ Dort lassen sich Deals, Zahlungen, Paylogs, Statistiken und Einstellungen verwal
 
 ## Lokale Testdaten
 
-Der optionale `@TestData`-Chat-Hook ist standardmäßig vollständig deaktiviert und gehört nicht in das Release-Jar. Für eine lokale Entwicklungsumgebung muss er ausdrücklich als JVM-Argument aktiviert werden: `-Dcreditmanager.dev.testdata=true` (der ältere Name `-Dcreditmanager.devTestData=true` wird ebenfalls unterstützt).
+Der optionale `@TestData`-Chat-Hook ist standardmäßig vollständig deaktiviert und gehört nicht in das Release-Jar. Für eine lokale Entwicklungsumgebung muss er ausdrücklich als JVM-Argument aktiviert werden: `-Dcreditmanager.dev.testdata=true` (der ältere Name `-Dcreditmanager.devTestData=true` wird ebenfalls unterstützt). In IntelliJ oder Gradle gehört dies in die JVM-Argumente, nicht in die Programmargumente.
 
 ## Funktionen
 

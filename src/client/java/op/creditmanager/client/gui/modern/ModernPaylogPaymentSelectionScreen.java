@@ -130,7 +130,7 @@ public final class ModernPaylogPaymentSelectionScreen extends ModernBaseScreen {
     @Override public boolean mouseClicked(Click click, boolean doubled) {
         if (handleSidebarClick(click)) return true;
         if (click.button() == 0 && queryError != null && errorButtons.size() == 2 && ModernUi.contains(click.x(), click.y(), errorButtons.getFirst().x(), errorButtons.getFirst().y(), errorButtons.getFirst().width(), errorButtons.getFirst().height())) { open(new ModernRecoveryScreen(manager)); return true; }
-        if (click.button() == 0 && queryError != null && errorButtons.size() == 2 && ModernUi.contains(click.x(), click.y(), errorButtons.get(1).x(), errorButtons.get(1).y(), errorButtons.get(1).width(), errorButtons.get(1).height())) { queryError = null; force = true; debouncer.commitImmediately(rawKey); return true; }
+        if (click.button() == 0 && queryError != null && errorButtons.size() == 2 && ModernUi.contains(click.x(), click.y(), errorButtons.get(1).x(), errorButtons.get(1).y(), errorButtons.get(1).width(), errorButtons.get(1).height())) { if (!manager.recheckAndRepairDatabase()) { queryError = "Datenbankprüfung konnte nicht abgeschlossen werden."; return true; } queryError = null; force = true; debouncer.commitImmediately(rawKey); return true; }
         if (scroll.mouseClicked(click.x(), click.y(), click.button())) return true;
         if (click.button() == 0 && ModernUi.contains(click.x(), click.y(), contentX, listY, contentWidth, listHeight)) {
             int index = (int) ((click.y() - listY + scroll.offset()) / 42);

@@ -13,7 +13,6 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PaylogLinkMigrationTest {
@@ -93,7 +92,7 @@ class PaylogLinkMigrationTest {
     }
 
     @Test
-    void aQueryFailureIsNeverReportedAsAnEmptyPaylogPage() throws Exception {
+    void runtimeSchemaDriftIsRepairedBeforeThePaylogQueryIsRetried() throws Exception {
         useTemporaryDataDirectory();
         createVersionSixDriftDatabase(false, false, false);
         DatabaseManager manager = DatabaseManager.getInstance();
@@ -102,11 +101,27 @@ class PaylogLinkMigrationTest {
             statement.execute("ALTER TABLE payments DROP COLUMN paylog_id");
         }
 
-        assertThrows(IllegalStateException.class, () -> manager.queryPaylogPage("debtor", 0, "", 50, 0));
-        assertTrue(manager.isWriteLocked());
-        manager.initialize();
+        assertEquals(1, manager.queryPaylogPage("debtor", 0, "", 50, 0).entries().size());
         assertTrue(columnExists("payments", "paylog_id"));
         assertTrue(manager.isHealthy());
+        assertFalse(manager.isWriteLocked());
+    }
+
+    @Test
+    void runtimeSchemaDriftIsRepairedBeforeTheHistoryQueryIsRetried() throws Exception {
+        useTemporaryDataDirectory();
+        createVersionSixDriftDatabase(false, false, false);
+        DatabaseManager manager = DatabaseManager.getInstance();
+        manager.initialize();
+        try (var connection = DriverManager.getConnection(jdbcUrl()); var statement = connection.createStatement()) {
+            statement.execute("ALTER TABLE credits DROP COLUMN search_text");
+        }
+
+        assertEquals(1, manager.queryDealHistoryPage("creditor", "legacy", false,
+                DatabaseManager.DealHistorySort.NEWEST, 50, 0).entries().size());
+        assertTrue(columnExists("credits", "search_text"));
+        assertTrue(manager.isHealthy());
+        assertFalse(manager.isWriteLocked());
     }
 
     private void useTemporaryDataDirectory() throws Exception {

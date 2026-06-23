@@ -50,6 +50,8 @@ class PaylogLinkingDatabaseTest {
         assertEquals(second.getId(), result.credit().getId());
         assertTrue(manager.getPaymentsForCredit(first.getId()).isEmpty());
         assertEquals(60D, manager.getPaymentsForCredit(second.getId()).getFirst().getAmount());
+        assertTrue(op.creditmanager.client.storage.db.DatabaseManager.getInstance().isHealthy());
+        assertFalse(op.creditmanager.client.storage.db.DatabaseManager.getInstance().isWriteLocked());
     }
 
     @Test
@@ -64,6 +66,8 @@ class PaylogLinkingDatabaseTest {
         assertEquals(CreditManager.PaylogLinkResult.Status.NO_SINGLE_DEAL_FITS, result.status());
         assertTrue(manager.getAllCreditsAsCreditor("creditor").stream().allMatch(credit -> credit.getPayments().isEmpty()));
         assertEquals(70D, TransactionRepository.getInstance().find(paylog.getId()).orElseThrow().getRemainingAmount());
+        assertTrue(op.creditmanager.client.storage.db.DatabaseManager.getInstance().isHealthy());
+        assertFalse(op.creditmanager.client.storage.db.DatabaseManager.getInstance().isWriteLocked());
     }
 
     @Test

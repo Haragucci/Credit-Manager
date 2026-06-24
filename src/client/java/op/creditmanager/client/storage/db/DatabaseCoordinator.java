@@ -79,6 +79,7 @@ final class DatabaseCoordinator {
     private final DatabaseHealthInspectionService healthInspectionService = new DatabaseHealthInspectionService(this);
     private final DatabaseSchemaManager schemaManager = new DatabaseSchemaManager(metadataDao, paylogSearchTokens, healthInspectionService::storeHealth);
     private final DatabaseQueryService queryService = new DatabaseQueryService(this);
+    private final CreditStateReplacementService creditStateReplacementService = new CreditStateReplacementService(this);
 
     DatabaseCoordinator() { }
     public synchronized DatabaseAvailability availability() { return availability; }
@@ -360,29 +361,7 @@ final class DatabaseCoordinator {
     }
 
     public synchronized boolean replaceCreditState(Collection<CreditEntry> credits, Collection<Payment> payments, Collection<CreditEventEntry> events) {
-        if (credits == null || payments == null || events == null) return false;
-        return inTransaction(connection -> {
-            if (hasDomainData(connection) && credits.isEmpty()) {
-                throw new SQLException("Refusing to replace non-empty CreditManager data with an empty state");
-            }
-            if (hasOpenHealthErrors(connection)) {
-                throw new SQLException("Refusing full-state replacement while unresolved data-health errors exist");
-            }
-            validateState(connection, credits, payments, events);
-            Set<UUID> affectedPaylogs = loadLinkedPaylogIds(connection);
-            for (Payment payment : payments) {
-                if (payment.getPaylogId() != null) affectedPaylogs.add(payment.getPaylogId());
-            }
-            deleteStaleRows(connection, "credit_events", eventIds(events));
-            deleteStaleRows(connection, "payments", paymentIds(payments));
-            deleteStaleRows(connection, "credits", creditIds(credits));
-            long rowRevision = nextRevision(connection);
-            for (CreditEntry credit : credits) upsertCredit(connection, credit, rowRevision);
-            for (Payment payment : payments) upsertPayment(connection, payment, rowRevision);
-            for (CreditEventEntry event : events) upsertEvent(connection, event, rowRevision);
-            refreshPaylogLinkAmounts(connection, affectedPaylogs);
-            bumpRevision(connection);
-        });
+        return creditStateReplacementService.replace(credits, payments, events);
     }
 
     public synchronized boolean commitCreditMutation(CreditMutation mutation) {
@@ -935,7 +914,7 @@ final class DatabaseCoordinator {
     public synchronized List<DataHealthRecord> listHealthRecords(boolean includeResolved) { return healthInspectionService.listHealthRecords(includeResolved); }
     public synchronized boolean resolveHealthRecord(UUID id, String repairPayload, boolean ignored) { return healthInspectionService.resolveHealthRecord(id, repairPayload, ignored); }
 
-    private void validateState(Connection connection, Collection<CreditEntry> credits, Collection<Payment> payments, Collection<CreditEventEntry> events) throws SQLException {
+    void validateState(Connection connection, Collection<CreditEntry> credits, Collection<Payment> payments, Collection<CreditEventEntry> events) throws SQLException {
         Set<UUID> creditIds = new HashSet<>();
         Map<UUID, Double> paymentTotals = new LinkedHashMap<>();
         for (CreditEntry credit : credits) {
@@ -1021,7 +1000,7 @@ final class DatabaseCoordinator {
     private boolean isValidEvent(CreditEventEntry value) { return value != null && value.getId() != null && value.getCreditId() != null && value.getType() != null && Double.isFinite(value.getAmount()); }
     private boolean isValidPaylog(TransactionEntry value) { return value != null && CreditValidationRules.isValidPlayerName(value.getFromPlayer()) && CreditValidationRules.isValidPlayerName(value.getToPlayer()) && MoneyRules.isPositive(value.getAmount()) && value.getTimestamp() > 0 && safe(value.getRawText()).length() <= CreditValidationRules.MAX_PAYLOG_RAW_TEXT_LENGTH && safe(value.getMetadata()).length() <= CreditValidationRules.MAX_METADATA_LENGTH; }
 
-    private void upsertCredit(Connection connection, CreditEntry entry, long rowRevision) throws SQLException {
+    void upsertCredit(Connection connection, CreditEntry entry, long rowRevision) throws SQLException {
         Long completed = entry.getCompletedAt();
         boolean finalStatus = "PAID".equals(entry.getStatus()) || "CLOSED".equals(entry.getStatus()) || "CANCELLED".equals(entry.getStatus());
         if (finalStatus && completed == null) completed = existingCompletedAt(connection, entry.getId());
@@ -1033,7 +1012,7 @@ final class DatabaseCoordinator {
         }
     }
 
-    private void upsertPayment(Connection connection, Payment payment, long rowRevision) throws SQLException {
+    void upsertPayment(Connection connection, Payment payment, long rowRevision) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("MERGE INTO payments (id, credit_id, from_player, to_player, amount, items_json, item_nbt, item_nbt_entries, created_at, source, paylog_id, note, revision) KEY(id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)") ) {
             statement.setString(1, payment.getId().toString()); statement.setString(2, payment.getCreditId().toString()); statement.setString(3, payment.getFromPlayer()); statement.setString(4, payment.getToPlayer()); statement.setDouble(5, payment.getAmount()); statement.setString(6, GSON.toJson(payment.getItems())); statement.setString(7, payment.getItemNbt()); statement.setString(8, GSON.toJson(payment.getItemNbtEntries())); statement.setLong(9, payment.getTimestamp()); statement.setString(10, payment.getSource()); statement.setString(11, payment.getPaylogId() == null ? null : payment.getPaylogId().toString()); statement.setString(12, payment.getNote()); statement.setLong(13, rowRevision); statement.executeUpdate();
         }
@@ -1049,7 +1028,7 @@ final class DatabaseCoordinator {
         }
     }
 
-    private void refreshPaylogLinkAmounts(Connection connection, Collection<UUID> paylogIds) throws SQLException {
+    void refreshPaylogLinkAmounts(Connection connection, Collection<UUID> paylogIds) throws SQLException {
         if (paylogIds == null || paylogIds.isEmpty()) return;
         List<UUID> values = paylogIds.stream().filter(Objects::nonNull).distinct().toList();
         for (int start = 0; start < values.size(); start += ID_BATCH_SIZE) {
@@ -1064,57 +1043,7 @@ final class DatabaseCoordinator {
         }
     }
 
-    private Set<UUID> loadLinkedPaylogIds(Connection connection) throws SQLException {
-        Set<UUID> paylogIds = new HashSet<>();
-        try (PreparedStatement statement = connection.prepareStatement("SELECT DISTINCT paylog_id FROM payments WHERE paylog_id IS NOT NULL"); ResultSet result = statement.executeQuery()) {
-            while (result.next()) {
-                String value = result.getString(1);
-                if (validUuid(value)) paylogIds.add(UUID.fromString(value));
-            }
-        }
-        return paylogIds;
-    }
-
-    private void deleteStaleRows(Connection connection, String table, Set<String> replacementIds) throws SQLException {
-        List<String> staleIds = loadRowIds(connection, table);
-        staleIds.removeAll(replacementIds);
-        for (int start = 0; start < staleIds.size(); start += ID_BATCH_SIZE) {
-            List<String> chunk = staleIds.subList(start, Math.min(staleIds.size(), start + ID_BATCH_SIZE));
-            String placeholders = String.join(",", java.util.Collections.nCopies(chunk.size(), "?"));
-            try (PreparedStatement statement = connection.prepareStatement("DELETE FROM " + table + " WHERE id IN (" + placeholders + ")")) {
-                for (int index = 0; index < chunk.size(); index++) statement.setString(index + 1, chunk.get(index));
-                statement.executeUpdate();
-            }
-        }
-    }
-
-    private List<String> loadRowIds(Connection connection, String table) throws SQLException {
-        List<String> ids = new ArrayList<>();
-        try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery("SELECT id FROM " + table)) {
-            while (result.next()) ids.add(result.getString(1));
-        }
-        return ids;
-    }
-
-    private Set<String> creditIds(Collection<CreditEntry> credits) {
-        Set<String> ids = new HashSet<>();
-        for (CreditEntry credit : credits) ids.add(credit.getId().toString());
-        return ids;
-    }
-
-    private Set<String> paymentIds(Collection<Payment> payments) {
-        Set<String> ids = new HashSet<>();
-        for (Payment payment : payments) ids.add(payment.getId().toString());
-        return ids;
-    }
-
-    private Set<String> eventIds(Collection<CreditEventEntry> events) {
-        Set<String> ids = new HashSet<>();
-        for (CreditEventEntry event : events) ids.add(event.getId().toString());
-        return ids;
-    }
-
-    private void upsertEvent(Connection connection, CreditEventEntry event, long rowRevision) throws SQLException {
+    void upsertEvent(Connection connection, CreditEventEntry event, long rowRevision) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("MERGE INTO credit_events (id, credit_id, event_type, amount, paid_after, remaining_after, created_at, deal_name, creditor, debtor, note, amount_before, amount_after, actor, source, item_payment, revision) KEY(id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)") ) {
             statement.setString(1, event.getId().toString()); statement.setString(2, event.getCreditId().toString()); statement.setString(3, event.getType().name()); statement.setDouble(4, event.getAmount()); statement.setDouble(5, event.getPaidAmountAfter()); statement.setDouble(6, event.getRemainingAmountAfter()); statement.setLong(7, event.getTimestamp()); statement.setString(8, event.getDealName()); statement.setString(9, event.getCreditor()); statement.setString(10, event.getDebtor()); statement.setString(11, event.getNote()); statement.setDouble(12, event.getAmountBefore()); statement.setDouble(13, event.getAmountAfter()); statement.setString(14, event.getActor()); statement.setString(15, event.getSource()); statement.setBoolean(16, event.isItemPayment()); statement.setLong(17, rowRevision); statement.executeUpdate();
         }
@@ -1315,11 +1244,11 @@ final class DatabaseCoordinator {
         }
     }
 
-    private boolean hasDomainData(Connection connection) throws SQLException {
+    boolean hasDomainData(Connection connection) throws SQLException {
         try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery("SELECT (SELECT COUNT(*) FROM credits) + (SELECT COUNT(*) FROM payments) + (SELECT COUNT(*) FROM credit_events) + (SELECT COUNT(*) FROM paylogs)")) { result.next(); return result.getLong(1) > 0; }
     }
 
-    private boolean hasOpenHealthErrors(Connection connection) throws SQLException {
+    boolean hasOpenHealthErrors(Connection connection) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("SELECT 1 FROM data_health_records WHERE status='OPEN' AND severity='ERROR' LIMIT 1");
              ResultSet result = statement.executeQuery()) {
             return result.next();
@@ -1405,7 +1334,7 @@ final class DatabaseCoordinator {
     }
     long count(Connection connection, String sql, List<String> values) throws SQLException { try (PreparedStatement statement = connection.prepareStatement(sql)) { bindStrings(statement, values); try (ResultSet result = statement.executeQuery()) { result.next(); return result.getLong(1); } } }
     void bindStrings(PreparedStatement statement, List<String> values) throws SQLException { for (int index = 0; index < values.size(); index++) statement.setString(index + 1, values.get(index)); }
-    private long nextRevision(Connection connection) throws SQLException { return metadataDao.nextRevision(connection); }
+    long nextRevision(Connection connection) throws SQLException { return metadataDao.nextRevision(connection); }
     private long revision(Connection connection) throws SQLException { return metadataDao.revision(connection); }
     void bumpRevision(Connection connection) throws SQLException { metadataDao.bumpRevision(connection); }
     private String metadata(Connection connection, String key) throws SQLException { return metadataDao.read(connection, key); }

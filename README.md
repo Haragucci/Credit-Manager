@@ -55,6 +55,10 @@ Alle Daten liegen im Minecraft-Spielordner unter `CreditManagerLogs/`.
 2. Die CreditManager-`.jar` in den Ordner `mods` legen.
 3. Minecraft mit Fabric starten.
 
+## Entwicklung und Release
+
+Die vollständige Build-, Release- und Fabric-Smoke-Test-Checkliste steht in [docs/RELEASE_VALIDATION.md](docs/RELEASE_VALIDATION.md).
+
 ## Hinweis und Lizenz
 
 CreditManager ist ein privates, inoffizielles Projekt und steht in keiner offiziellen Verbindung zu OPSUCHT.net, Mojang, Microsoft oder Fabric.

@@ -8,19 +8,9 @@ import op.creditmanager.client.core.CreditManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import op.creditmanager.client.gui.GuiRouter;
-import op.creditmanager.client.util.ChatUtil.*;
 
-import static op.creditmanager.client.util.ChatUtil.format;
-import static op.creditmanager.client.util.ChatUtil.send;
-
-
-public class CreditManagerCommand {
-
-    public static void register(CommandDispatcher<FabricClientCommandSource> dispatcher, CreditManager manager) {
-        registerCommand(dispatcher, manager, "CreditManager");
-        registerCommand(dispatcher, manager, "cm");
-        registerCommand(dispatcher, manager, "OpCreditManager");
-        dispatcher.register(ClientCommandManager.literal("test-paylog").executes(ctx ->
+/* Test Command
+dispatcher.register(ClientCommandManager.literal("test-paylog").executes(ctx ->
         {
             MinecraftClient client = MinecraftClient.getInstance();
             if (client != null && client.player != null) {
@@ -30,6 +20,15 @@ public class CreditManagerCommand {
                 client.player.sendMessage(finalText, false);
             }
         return 1;}));
+ */
+
+
+public class CreditManagerCommand {
+
+    public static void register(CommandDispatcher<FabricClientCommandSource> dispatcher, CreditManager manager) {
+        registerCommand(dispatcher, manager, "CreditManager");
+        registerCommand(dispatcher, manager, "cm");
+        registerCommand(dispatcher, manager, "OpCreditManager");
     }
 
     private static void registerCommand(CommandDispatcher<FabricClientCommandSource> dispatcher, CreditManager manager, String name) {

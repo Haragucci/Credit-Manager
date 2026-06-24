@@ -25,29 +25,6 @@ public final class ModernUi {
     private static final Map<String, HoverAnimation> HOVER_ANIMATIONS = new HashMap<>();
     private static final Map<String, PositionAnimation> POSITION_ANIMATIONS = new HashMap<>();
 
-    @Deprecated public static final int OVERLAY = 0xB8101519;
-    @Deprecated public static final int PANEL = 0xFF151A20;
-    @Deprecated public static final int PANEL_ALT = 0xFF1C242C;
-    @Deprecated public static final int CARD = 0xFF202A33;
-    @Deprecated public static final int CARD_HOVER = 0xFF2B3843;
-    @Deprecated public static final int BORDER = 0xFF3C5360;
-    @Deprecated public static final int TEXT = 0xFFF1F5F3;
-    @Deprecated public static final int MUTED = 0xFFABB8B3;
-    @Deprecated public static final int GREEN = 0xFF72D98A;
-    @Deprecated public static final int RED = 0xFFE66E67;
-    @Deprecated public static final int YELLOW = 0xFFF2BD58;
-    @Deprecated public static final int BLUE = 0xFF9BE7B0;
-    @Deprecated public static final int BUTTON_PRIMARY = 0xFF2F8550;
-    @Deprecated public static final int BUTTON_GOLD = 0xFF8D6A27;
-    @Deprecated public static final int BUTTON_NEUTRAL = 0xFF3B4A54;
-    @Deprecated public static final int BUTTON_DANGER = 0xFF934641;
-    @Deprecated public static final int NAV_ACTIVE = 0xFF294F3B;
-    @Deprecated public static final int NAV_HOVER = 0xFF243D31;
-    @Deprecated public static final int SELECTION = 0x7079D88C;
-    @Deprecated public static final int HOVER_POSITIVE = 0x3372D98A;
-    @Deprecated public static final int HOVER_DANGER = 0x33E66E67;
-    @Deprecated public static final int SHADOW = 0xB7080B0E;
-
     private ModernUi() {
     }
 

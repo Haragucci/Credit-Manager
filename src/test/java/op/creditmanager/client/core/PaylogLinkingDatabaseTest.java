@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import op.creditmanager.client.config.ClientConfig;
 import op.creditmanager.client.config.ClientConfigManager;
+import op.creditmanager.client.config.PaylogAutoLinkMode;
 import op.creditmanager.client.model.CreditEntry;
 import op.creditmanager.client.model.Payment;
 import op.creditmanager.client.model.TransactionEntry;
@@ -131,6 +132,7 @@ class PaylogLinkingDatabaseTest {
         assertEquals(30D, result.remainingPaylogAmount());
         assertEquals(paylog.getId(), payment.getPaylogId());
         assertEquals(CreditManager.STATUS_PAID, credit.getStatus());
+        assertEquals(50D, TransactionRepository.getInstance().find(paylog.getId()).orElseThrow().getLinkedAmount());
 
         CreditRepository reloaded = new CreditRepository();
         reloaded.load();
@@ -141,6 +143,7 @@ class PaylogLinkingDatabaseTest {
         assertEquals(CreditManager.STATUS_OPEN, credit.getStatus());
         assertFalse(credit.isArchived());
         assertEquals(80D, TransactionRepository.getInstance().find(paylog.getId()).orElseThrow().getRemainingAmount());
+        assertEquals(0D, TransactionRepository.getInstance().find(paylog.getId()).orElseThrow().getLinkedAmount());
 
         manager.closeCredit(credit.getId());
         assertFalse(credit.isArchived());
@@ -202,6 +205,15 @@ class PaylogLinkingDatabaseTest {
     }
 
     @Test
+    void legacyManualPaymentSourceMustMatchTheDebtor() throws Exception {
+        CreditManager manager = manager();
+        CreditEntry credit = manager.createCredit("creditor", "debtor", 10D, null, "payment_source", null);
+
+        assertThrows(CreditManager.CreditException.class, () -> manager.addMoneyPayment(credit.getId(), "creditor", 1D));
+        assertEquals(1D, manager.addMoneyPayment(credit.getId(), 1D).getAmount());
+    }
+
+    @Test
     void healthCheckFindsBrokenPaylogLinks() throws Exception {
         CreditManager manager = manager();
         CreditEntry credit = manager.createCredit("creditor", "debtor", 100D, null, "health", null);
@@ -217,6 +229,151 @@ class PaylogLinkingDatabaseTest {
         assertTrue(findings.stream().anyMatch(record -> "PAYLOG_LINK_AMOUNT".equals(record.type())));
         assertTrue(findings.stream().anyMatch(record -> "PAYLOG_LINK_ORPHAN".equals(record.type())));
         assertTrue(findings.stream().anyMatch(record -> "PAYLOG_LINK_OVERBOOKED".equals(record.type())));
+    }
+
+    @Test
+    void autoLinkExactOnlyRejectsPartialPayment() throws Exception {
+        CreditManager manager = manager();
+        CreditEntry credit = manager.createCredit("creditor", "debtor", 100D, null, "exact", null);
+        TransactionEntry paylog = paylog(50D);
+
+        CreditManager.PaylogLinkResult result = manager.autoLinkDetectedPaylog(paylog.getId(), PaylogAutoLinkMode.EXACT_ONLY, false);
+
+        assertEquals(CreditManager.PaylogLinkResult.Status.NO_SINGLE_DEAL_FITS, result.status());
+        assertTrue(manager.getPaymentsForCredit(credit.getId()).isEmpty());
+        assertEquals(50D, TransactionRepository.getInstance().find(paylog.getId()).orElseThrow().getRemainingAmount());
+    }
+
+    @Test
+    void autoLinkOffKeepsMatchingPaylogUnlinked() throws Exception {
+        CreditManager manager = manager();
+        CreditEntry credit = manager.createCredit("creditor", "debtor", 100D, null, "off", null);
+        TransactionEntry paylog = paylog(100D);
+
+        CreditManager.PaylogLinkResult result = manager.autoLinkDetectedPaylog(paylog.getId(), PaylogAutoLinkMode.OFF, false);
+
+        assertEquals(CreditManager.PaylogLinkResult.Status.AUTO_LINK_DISABLED, result.status());
+        assertEquals(credit.getId(), result.credit().getId());
+        assertTrue(manager.getPaymentsForCredit(credit.getId()).isEmpty());
+        assertEquals(100D, TransactionRepository.getInstance().find(paylog.getId()).orElseThrow().getRemainingAmount());
+    }
+
+    @Test
+    void autoLinkExactOnlyRejectsOverpay() throws Exception {
+        CreditManager manager = manager();
+        CreditEntry credit = manager.createCredit("creditor", "debtor", 100D, null, "exact", null);
+        TransactionEntry paylog = paylog(120D);
+
+        CreditManager.PaylogLinkResult result = manager.autoLinkDetectedPaylog(paylog.getId(), PaylogAutoLinkMode.EXACT_ONLY, false);
+
+        assertEquals(CreditManager.PaylogLinkResult.Status.NO_SINGLE_DEAL_FITS, result.status());
+        assertTrue(manager.getPaymentsForCredit(credit.getId()).isEmpty());
+        assertEquals(120D, TransactionRepository.getInstance().find(paylog.getId()).orElseThrow().getRemainingAmount());
+    }
+
+    @Test
+    void autoLinkExactOnlyLinksExactPayment() throws Exception {
+        CreditManager manager = manager();
+        CreditEntry credit = manager.createCredit("creditor", "debtor", 100D, null, "exact", null);
+        TransactionEntry paylog = paylog(100D);
+
+        CreditManager.PaylogLinkResult result = manager.autoLinkDetectedPaylog(paylog.getId(), PaylogAutoLinkMode.EXACT_ONLY, false);
+
+        assertTrue(result.linked());
+        assertEquals(credit.getId(), result.credit().getId());
+        assertEquals(CreditManager.STATUS_PAID, credit.getStatus());
+        assertEquals(0D, result.remainingPaylogAmount());
+    }
+
+    @Test
+    void autoLinkPartialModeLinksPartialPayment() throws Exception {
+        CreditManager manager = manager();
+        CreditEntry credit = manager.createCredit("creditor", "debtor", 100D, null, "partial", null);
+        TransactionEntry paylog = paylog(50D);
+
+        CreditManager.PaylogLinkResult result = manager.autoLinkDetectedPaylog(paylog.getId(), PaylogAutoLinkMode.EXACT_OR_PARTIAL, false);
+
+        assertTrue(result.linked());
+        assertEquals(50D, result.payment().getAmount());
+        assertEquals(CreditManager.STATUS_PARTIAL, credit.getStatus());
+        assertEquals(0D, result.remainingPaylogAmount());
+    }
+
+    @Test
+    void autoLinkPartialModeRejectsOverpay() throws Exception {
+        CreditManager manager = manager();
+        CreditEntry credit = manager.createCredit("creditor", "debtor", 100D, null, "partial", null);
+        TransactionEntry paylog = paylog(120D);
+
+        CreditManager.PaylogLinkResult result = manager.autoLinkDetectedPaylog(paylog.getId(), PaylogAutoLinkMode.EXACT_OR_PARTIAL, false);
+
+        assertEquals(CreditManager.PaylogLinkResult.Status.NO_SINGLE_DEAL_FITS, result.status());
+        assertTrue(manager.getPaymentsForCredit(credit.getId()).isEmpty());
+        assertEquals(120D, TransactionRepository.getInstance().find(paylog.getId()).orElseThrow().getRemainingAmount());
+    }
+
+    @Test
+    void autoLinkOverpayModeClosesDealAndKeepsPaylogRemainder() throws Exception {
+        CreditManager manager = manager();
+        CreditEntry credit = manager.createCredit("creditor", "debtor", 100D, null, "overpay", null);
+        TransactionEntry paylog = paylog(120D);
+
+        CreditManager.PaylogLinkResult result = manager.autoLinkDetectedPaylog(paylog.getId(),
+                PaylogAutoLinkMode.EXACT_PARTIAL_OR_OVERPAY_CLOSE, true);
+
+        assertTrue(result.linked());
+        assertEquals(100D, result.payment().getAmount());
+        assertEquals(20D, result.remainingPaylogAmount());
+        assertEquals(CreditManager.STATUS_PAID, credit.getStatus());
+        TransactionEntry linkedPaylog = TransactionRepository.getInstance().find(paylog.getId()).orElseThrow();
+        assertEquals(100D, linkedPaylog.getLinkedAmount());
+        assertEquals(20D, linkedPaylog.getRemainingAmount());
+    }
+
+    @Test
+    void autoLinkOverpayModeRequiresCompletionSetting() throws Exception {
+        CreditManager manager = manager();
+        CreditEntry credit = manager.createCredit("creditor", "debtor", 100D, null, "overpay_setting", null);
+        TransactionEntry paylog = paylog(120D);
+
+        CreditManager.PaylogLinkResult result = manager.autoLinkDetectedPaylog(paylog.getId(),
+                PaylogAutoLinkMode.EXACT_PARTIAL_OR_OVERPAY_CLOSE, false);
+
+        assertEquals(CreditManager.PaylogLinkResult.Status.NO_SINGLE_DEAL_FITS, result.status());
+        assertTrue(manager.getPaymentsForCredit(credit.getId()).isEmpty());
+        assertEquals(120D, TransactionRepository.getInstance().find(paylog.getId()).orElseThrow().getRemainingAmount());
+    }
+
+    @Test
+    void autoLinkPrefersExactMatchOverOlderPartialCandidate() throws Exception {
+        CreditManager manager = manager();
+        CreditEntry olderPartial = manager.createCredit("creditor", "debtor", 150D, null, "older", null);
+        CreditEntry exact = manager.createCredit("creditor", "debtor", 100D, null, "exact", null);
+        olderPartial.setCreatedAt(1L);
+        exact.setCreatedAt(2L);
+        TransactionEntry paylog = paylog(100D);
+
+        CreditManager.PaylogLinkResult result = manager.autoLinkDetectedPaylog(paylog.getId(), PaylogAutoLinkMode.EXACT_OR_PARTIAL, false);
+
+        assertTrue(result.linked());
+        assertEquals(exact.getId(), result.credit().getId());
+        assertTrue(manager.getPaymentsForCredit(olderPartial.getId()).isEmpty());
+    }
+
+    @Test
+    void autoLinkMultipleCandidatesDoesNotPickRandomly() throws Exception {
+        CreditManager manager = manager();
+        CreditEntry oldest = manager.createCredit("creditor", "debtor", 100D, null, "oldest", null);
+        CreditEntry newer = manager.createCredit("creditor", "debtor", 100D, null, "newer", null);
+        manager.getSafeCredit(oldest.getId()).setCreatedAt(1L);
+        manager.getSafeCredit(newer.getId()).setCreatedAt(2L);
+        TransactionEntry paylog = paylog(50D);
+
+        CreditManager.PaylogLinkResult result = manager.autoLinkDetectedPaylog(paylog.getId(), PaylogAutoLinkMode.EXACT_OR_PARTIAL, false);
+
+        assertTrue(result.linked());
+        assertEquals(oldest.getId(), result.credit().getId());
+        assertTrue(manager.getPaymentsForCredit(newer.getId()).isEmpty());
     }
 
     private CreditManager manager() throws Exception {

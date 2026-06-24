@@ -6,6 +6,7 @@ import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.text.Text;
 import op.creditmanager.client.core.CreditManager;
+import op.creditmanager.client.core.validation.CreditValidationRules;
 import op.creditmanager.client.gui.modern.widget.ModernScrollArea;
 import op.creditmanager.client.model.CreditEntry;
 import op.creditmanager.client.util.FormatUtil;
@@ -59,8 +60,8 @@ public final class ModernEditCreditScreen extends ModernBaseScreen {
         playerField = field(fieldWidth, 32);
         amountField = field(fieldWidth, 20);
         dueField = field(fieldWidth, 10);
-        labelField = field(fieldWidth, 32);
-        noteField = field(fieldWidth, 128);
+        labelField = field(fieldWidth, CreditValidationRules.MAX_LABEL_LENGTH);
+        noteField = field(fieldWidth, CreditValidationRules.MAX_NOTE_LENGTH);
         if (draftPlayer == null) restoreOriginalValues();
         else {
             playerField.setText(draftPlayer);
@@ -124,7 +125,7 @@ public final class ModernEditCreditScreen extends ModernBaseScreen {
         drawField(context, mouseX, mouseY, "Betrag", amountField, fieldY + 54, validation.amountError());
         drawField(context, mouseX, mouseY, "Fälligkeit (optional, TT.MM.JJJJ)", dueField, fieldY + 108, validation.dueError());
         drawField(context, mouseX, mouseY, "Bezeichnung (optional)", labelField, fieldY + 162, null);
-        drawField(context, mouseX, mouseY, "Notiz (optional, " + noteField.getText().length() + "/128)", noteField, fieldY + 216, null);
+        drawField(context, mouseX, mouseY, "Notiz (optional, " + noteField.getText().length() + "/" + CreditValidationRules.MAX_NOTE_LENGTH + ")", noteField, fieldY + 216, null);
 
         drawPreview(context, y + 386, validation);
         drawActions(context, mouseX, mouseY, y + 465, validation.valid() && changed, changed);

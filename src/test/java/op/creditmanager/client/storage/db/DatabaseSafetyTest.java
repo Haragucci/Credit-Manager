@@ -12,6 +12,7 @@ import op.creditmanager.client.core.TransactionRepository;
 import op.creditmanager.client.model.CreditEntry;
 import op.creditmanager.client.model.CreditEventEntry;
 import op.creditmanager.client.model.CreditEventType;
+import op.creditmanager.client.model.TransactionEntry;
 import op.creditmanager.client.storage.DataHealth;
 import op.creditmanager.client.storage.FileManager;
 
@@ -54,14 +55,14 @@ class DatabaseSafetyTest {
         useTemporaryDataDirectory();
         DatabaseManager database = DatabaseManager.getInstance();
         database.initialize();
-        Field healthy = DatabaseManager.class.getDeclaredField("healthy");
-        Field writeLocked = DatabaseManager.class.getDeclaredField("writeLocked");
+        Field healthy = databaseField("healthy");
+        Field writeLocked = databaseField("writeLocked");
         Field transactionRecovery = TransactionRepository.class.getDeclaredField("recoveryRequired");
         healthy.setAccessible(true);
         writeLocked.setAccessible(true);
         transactionRecovery.setAccessible(true);
-        healthy.setBoolean(database, false);
-        writeLocked.setBoolean(database, true);
+        healthy.setBoolean(databaseTarget(), false);
+        writeLocked.setBoolean(databaseTarget(), true);
         transactionRecovery.setBoolean(TransactionRepository.getInstance(), false);
 
         assertTrue(TransactionRepository.getInstance().resetCorruptTransactionsWithBackup());
@@ -114,9 +115,9 @@ class DatabaseSafetyTest {
     }
 
     private DatabaseManager.CreditMutation batchMutation(int index) {
-        CreditEntry credit = new CreditEntry(UUID.randomUUID(), "batch-deal-" + index, "creditor", "debtor_" + index, 10D + index, null, "TEST_DATA");
+        CreditEntry credit = new CreditEntry(UUID.randomUUID(), "batch-deal-" + index, "creditor", "debtor_" + index, 10D + index, null, "TEST_FIXTURE");
         CreditEventEntry event = new CreditEventEntry(CreditEventType.CREDIT_CREATED, credit, credit.getAmount(), credit.getAmount(),
-                "TEST_DATA", "creditor", "TEST_DATA", false);
+                "TEST_FIXTURE", "creditor", "TEST_FIXTURE", false);
         return new DatabaseManager.CreditMutation(credit, List.of(), List.of(), List.of(event));
     }
 
@@ -226,6 +227,21 @@ class DatabaseSafetyTest {
         }
     }
 
+    @Test
+    void detailedPaylogBatchReportsDuplicatesWithoutRollingBackValidEntries() throws Exception {
+        useTemporaryDataDirectory();
+        TransactionEntry original = testPaylog("batch", 12D);
+        TransactionEntry duplicate = testPaylog("batch", 12D);
+        duplicate.setTimestamp(original.getTimestamp());
+        duplicate.setRawText(original.getRawText());
+        DatabaseManager.BatchInsertResult result = DatabaseManager.getInstance().addPaylogsBatchDetailed(List.of(original, duplicate));
+
+        assertEquals(2, result.requested());
+        assertEquals(1, result.inserted());
+        assertEquals(1, result.skipped());
+        assertEquals(0, result.failed());
+    }
+
     private CreditManager manager() throws Exception {
         useTemporaryDataDirectory();
         CreditRepository repository = new CreditRepository();
@@ -248,21 +264,22 @@ class DatabaseSafetyTest {
     }
 
     private void resetDatabaseInitialization() throws Exception {
-        Field initialized = DatabaseManager.class.getDeclaredField("initialized");
-        Field initializedAt = DatabaseManager.class.getDeclaredField("initializedAt");
-        Field healthy = DatabaseManager.class.getDeclaredField("healthy");
-        Field writeLocked = DatabaseManager.class.getDeclaredField("writeLocked");
-        Field availability = DatabaseManager.class.getDeclaredField("availability");
+        Field initialized = databaseField("initialized");
+        Field initializedAt = databaseField("initializedAt");
+        Field healthy = databaseField("healthy");
+        Field writeLocked = databaseField("writeLocked");
+        Field availability = databaseField("availability");
         initialized.setAccessible(true);
         initializedAt.setAccessible(true);
         healthy.setAccessible(true);
         writeLocked.setAccessible(true);
         availability.setAccessible(true);
-        initialized.setBoolean(DatabaseManager.getInstance(), false);
-        initializedAt.set(DatabaseManager.getInstance(), null);
-        healthy.setBoolean(DatabaseManager.getInstance(), true);
-        writeLocked.setBoolean(DatabaseManager.getInstance(), false);
-        availability.set(DatabaseManager.getInstance(), DatabaseManager.DatabaseAvailability.UNKNOWN);
+        Object target = databaseTarget();
+        initialized.setBoolean(target, false);
+        initializedAt.set(target, null);
+        healthy.setBoolean(target, true);
+        writeLocked.setBoolean(target, false);
+        availability.set(target, DatabaseManager.DatabaseAvailability.UNKNOWN);
     }
 
     private void corrupt(Path active) throws Exception {
@@ -270,10 +287,30 @@ class DatabaseSafetyTest {
         Files.write(active, Arrays.copyOf(contents, Math.min(contents.length, 16)));
     }
 
+    private TransactionEntry testPaylog(String runId, double amount) {
+        TransactionEntry entry = new TransactionEntry("debtor_" + runId, "creditor", amount);
+        entry.setSource("TEST_FIXTURE");
+        entry.setRawText("fixture:" + runId + ": paylog");
+        entry.setMetadata("{\"testRunId\":\"" + runId + "\"}");
+        return entry;
+    }
+
     private Field dataDirectoryField() throws Exception {
         Field field = FileManager.class.getDeclaredField("dataDirectory");
         field.setAccessible(true);
         return field;
+    }
+
+    private Field databaseField(String name) throws Exception {
+        Field field = DatabaseCoordinator.class.getDeclaredField(name);
+        field.setAccessible(true);
+        return field;
+    }
+
+    private Object databaseTarget() throws Exception {
+        Field field = DatabaseManager.class.getDeclaredField("coordinator");
+        field.setAccessible(true);
+        return field.get(DatabaseManager.getInstance());
     }
 
     private Field configField() throws Exception {

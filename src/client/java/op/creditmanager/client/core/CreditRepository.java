@@ -103,12 +103,12 @@ public class CreditRepository {
     }
 
     public synchronized void putCredit(CreditEntry entry) { credits.put(entry.getId(), entry); rebuildPlayerIndex(); revision++; }
-    synchronized void replaceLoadedCredit(CreditEntry entry) {
+    public synchronized void replaceLoadedCredit(CreditEntry entry) {
         if (entry == null || entry.getId() == null) return;
         credits.put(entry.getId(), entry);
         rebuildPlayerIndex();
     }
-    synchronized void applyCommittedMutation(CreditEntry credit, List<Payment> paymentUpserts, List<UUID> paymentDeletions,
+    public synchronized void applyCommittedMutation(CreditEntry credit, List<Payment> paymentUpserts, List<UUID> paymentDeletions,
                                              List<CreditEventEntry> newEvents) {
         if (credit == null || credit.getId() == null) return;
         Map<UUID, CreditEntry> nextCredits = new ConcurrentHashMap<>(credits);

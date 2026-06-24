@@ -4,13 +4,20 @@ import op.creditmanager.client.gui.modern.theme.ModernThemeMode;
 
 public class ClientConfig {
 
-    public static final int CURRENT_VERSION = 6;
+    public static final int CURRENT_VERSION = 7;
 
     private int configVersion = CURRENT_VERSION;
     private boolean automaticPaylogDetection = true;
     private boolean autoLinkDetectedPaylogsToDeals;
     private boolean detectPaylogsInOverlay = true;
     private boolean showPaylogNotifications = false;
+    private boolean showAnyPaylogFlyIns = false;
+    private boolean showDealDetectionPaylogFlyIns = true;
+    private PaylogAutoLinkMode paylogAutoLinkMode = PaylogAutoLinkMode.EXACT_OR_PARTIAL;
+    private boolean completeDealOnPaylogOverpay = false;
+    private boolean notifyWhenPaylogHasMatchingDeal = true;
+    private boolean notifyWhenPaylogHasNoMatchingDeal = false;
+    private boolean notifyWhenPaylogHasMultipleMatchingDeals = true;
     private ModernThemeMode modernThemeMode = ModernThemeMode.DARK;
     private GuiFontMode guiFontMode = GuiFontMode.MOD;
     private int customMainColor = 0xFF1F7A3A;
@@ -36,11 +43,12 @@ public class ClientConfig {
     }
 
     public boolean isAutoLinkDetectedPaylogsToDeals() {
-        return autoLinkDetectedPaylogsToDeals;
+        return getPaylogAutoLinkMode() != PaylogAutoLinkMode.OFF;
     }
 
     public void setAutoLinkDetectedPaylogsToDeals(boolean autoLinkDetectedPaylogsToDeals) {
         this.autoLinkDetectedPaylogsToDeals = autoLinkDetectedPaylogsToDeals;
+        paylogAutoLinkMode = autoLinkDetectedPaylogsToDeals ? PaylogAutoLinkMode.EXACT_OR_PARTIAL : PaylogAutoLinkMode.OFF;
     }
 
     public boolean isDetectPaylogsInOverlay() {
@@ -52,11 +60,70 @@ public class ClientConfig {
     }
 
     public boolean isShowPaylogNotifications() {
-        return showPaylogNotifications;
+        return showAnyPaylogFlyIns;
     }
 
     public void setShowPaylogNotifications(boolean showPaylogNotifications) {
         this.showPaylogNotifications = showPaylogNotifications;
+        this.showAnyPaylogFlyIns = showPaylogNotifications;
+    }
+
+    public boolean isShowAnyPaylogFlyIns() {
+        return showAnyPaylogFlyIns;
+    }
+
+    public void setShowAnyPaylogFlyIns(boolean showAnyPaylogFlyIns) {
+        this.showAnyPaylogFlyIns = showAnyPaylogFlyIns;
+        this.showPaylogNotifications = showAnyPaylogFlyIns;
+    }
+
+    public boolean isShowDealDetectionPaylogFlyIns() {
+        return showDealDetectionPaylogFlyIns;
+    }
+
+    public void setShowDealDetectionPaylogFlyIns(boolean showDealDetectionPaylogFlyIns) {
+        this.showDealDetectionPaylogFlyIns = showDealDetectionPaylogFlyIns;
+    }
+
+    public PaylogAutoLinkMode getPaylogAutoLinkMode() {
+        return paylogAutoLinkMode == null ? PaylogAutoLinkMode.OFF : paylogAutoLinkMode;
+    }
+
+    public void setPaylogAutoLinkMode(PaylogAutoLinkMode paylogAutoLinkMode) {
+        this.paylogAutoLinkMode = paylogAutoLinkMode == null ? PaylogAutoLinkMode.OFF : paylogAutoLinkMode;
+        this.autoLinkDetectedPaylogsToDeals = this.paylogAutoLinkMode != PaylogAutoLinkMode.OFF;
+    }
+
+    public boolean isCompleteDealOnPaylogOverpay() {
+        return completeDealOnPaylogOverpay;
+    }
+
+    public void setCompleteDealOnPaylogOverpay(boolean completeDealOnPaylogOverpay) {
+        this.completeDealOnPaylogOverpay = completeDealOnPaylogOverpay;
+    }
+
+    public boolean isNotifyWhenPaylogHasMatchingDeal() {
+        return notifyWhenPaylogHasMatchingDeal;
+    }
+
+    public void setNotifyWhenPaylogHasMatchingDeal(boolean notifyWhenPaylogHasMatchingDeal) {
+        this.notifyWhenPaylogHasMatchingDeal = notifyWhenPaylogHasMatchingDeal;
+    }
+
+    public boolean isNotifyWhenPaylogHasNoMatchingDeal() {
+        return notifyWhenPaylogHasNoMatchingDeal;
+    }
+
+    public void setNotifyWhenPaylogHasNoMatchingDeal(boolean notifyWhenPaylogHasNoMatchingDeal) {
+        this.notifyWhenPaylogHasNoMatchingDeal = notifyWhenPaylogHasNoMatchingDeal;
+    }
+
+    public boolean isNotifyWhenPaylogHasMultipleMatchingDeals() {
+        return notifyWhenPaylogHasMultipleMatchingDeals;
+    }
+
+    public void setNotifyWhenPaylogHasMultipleMatchingDeals(boolean notifyWhenPaylogHasMultipleMatchingDeals) {
+        this.notifyWhenPaylogHasMultipleMatchingDeals = notifyWhenPaylogHasMultipleMatchingDeals;
     }
 
     public ModernThemeMode getModernThemeMode() {
@@ -108,6 +175,23 @@ public class ClientConfig {
 
     public void normalize() {
         boolean needsThemeMigration = configVersion < 2;
+        boolean needsPaylogSettingsMigration = configVersion < 7;
+        if (needsPaylogSettingsMigration) {
+            showAnyPaylogFlyIns = showPaylogNotifications;
+            showDealDetectionPaylogFlyIns = autoLinkDetectedPaylogsToDeals || showPaylogNotifications;
+            notifyWhenPaylogHasMatchingDeal = true;
+            notifyWhenPaylogHasNoMatchingDeal = false;
+            notifyWhenPaylogHasMultipleMatchingDeals = true;
+            paylogAutoLinkMode = autoLinkDetectedPaylogsToDeals
+                    ? PaylogAutoLinkMode.EXACT_OR_PARTIAL
+                    : PaylogAutoLinkMode.OFF;
+            completeDealOnPaylogOverpay = false;
+        }
+        if (paylogAutoLinkMode == null) {
+            paylogAutoLinkMode = PaylogAutoLinkMode.OFF;
+        }
+        autoLinkDetectedPaylogsToDeals = paylogAutoLinkMode != PaylogAutoLinkMode.OFF;
+        showPaylogNotifications = showAnyPaylogFlyIns;
         configVersion = CURRENT_VERSION;
         if (modernThemeMode == null) {
             modernThemeMode = ModernThemeMode.DARK;

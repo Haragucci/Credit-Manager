@@ -130,7 +130,7 @@ public final class CreditEventRepository {
         revision++;
     }
 
-    synchronized void acceptCommittedEvents(List<CreditEventEntry> values) {
+    public synchronized void acceptCommittedEvents(List<CreditEventEntry> values) {
         if (values == null || values.isEmpty()) return;
         for (CreditEventEntry entry : values) {
             if (entry != null && entry.getId() != null && events.stream().noneMatch(existing -> entry.getId().equals(existing.getId()))) events.add(entry);

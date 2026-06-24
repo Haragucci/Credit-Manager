@@ -319,7 +319,7 @@ public class ModernPaymentScreen extends ModernBaseScreen {
             } else if (selectedPaylog != null) {
                 saved = manager.addPaylogPayment(entry.getId(), selectedPaylog.getId(), amount, parseSelectedTimestamp(), noteField.getText()).payment();
             } else {
-                saved = manager.addMoneyPayment(entry.getId(), currentPlayerName(), amount);
+                saved = manager.addMoneyPayment(entry.getId(), amount);
             }
             if (saved.getAmount() + 0.0001D < amount) {
                 toastWarning("Es wurden nur " + FormatUtil.formatAmount(saved.getAmount())
@@ -355,7 +355,7 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         if (descriptions.isEmpty()) {
             throw new CreditManager.CreditException("Die ausgewählten Items sind nicht mehr im Inventar.");
         }
-        return manager.addItemPayment(entry.getId(), currentPlayerName(), descriptions, sharedValue, serializedStacks);
+        return manager.addItemPayment(entry.getId(), descriptions, sharedValue, serializedStacks);
     }
 
     private PlayerInventory playerInventory() {

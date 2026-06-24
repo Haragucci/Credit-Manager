@@ -54,7 +54,7 @@ public class ChatUtil {
         error(message);
     }
 
-    private static Text format(String message) {
+    public static Text format(String message) {
         return Text.literal(message);
     }
 

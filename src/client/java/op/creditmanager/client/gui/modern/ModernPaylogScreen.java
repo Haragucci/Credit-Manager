@@ -22,6 +22,7 @@ import java.util.concurrent.CompletableFuture;
 
 public final class ModernPaylogScreen extends ModernBaseScreen {
     private static final int PAGE_SIZE = DatabaseManager.PAGE_SIZE;
+    private static final int PAYLOG_TOOLBAR_BUTTON_NUDGE = 4;
     private static final String[] DIRECTION_FILTERS = {"Alle", "Eingehend", "Ausgehend"};
 
     private final ModernScrollArea scroll = new ModernScrollArea();
@@ -120,10 +121,10 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
         toolbarButtons = ModernLayout.buttonRow(contentX, toolbarY + 32, compactToolbar ? contentWidth : manualButtonWidth,
                 compactToolbar ? 2 : 1, 72, 24, 8);
         ModernLayout.Bounds manual = toolbarButtons.getFirst();
-        manualButtonX = compactToolbar ? manual.x() : contentX + contentWidth - manualButtonWidth;
+        manualButtonX = compactToolbar ? manual.x() : contentX + contentWidth - manualButtonWidth - PAYLOG_TOOLBAR_BUTTON_NUDGE;
         manualButtonY = compactToolbar ? manual.y() : toolbarY + 4;
         manualButtonWidth = compactToolbar ? manual.width() : manualButtonWidth;
-        filterButtonX = compactToolbar ? toolbarButtons.get(1).x() : contentX;
+        filterButtonX = compactToolbar ? toolbarButtons.get(1).x() : contentX + PAYLOG_TOOLBAR_BUTTON_NUDGE;
         filterButtonY = compactToolbar ? toolbarButtons.get(1).y() : toolbarY + 32;
         filterButtonWidth = compactToolbar ? toolbarButtons.get(1).width() : Math.max(72, Math.min(104, contentWidth));
         int toolbarHeight = compactToolbar ? ModernLayout.rowHeight(toolbarButtons, 0) + 32 : 60;

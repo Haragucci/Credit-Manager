@@ -92,6 +92,20 @@ class PaylogLinkMigrationTest {
     }
 
     @Test
+    void schemaVersionSixMigratesPaylogLinkCachesAndSearchTokens() throws Exception {
+        useTemporaryDataDirectory();
+        createVersionSixDriftDatabase(false, false, false);
+
+        DatabaseManager manager = DatabaseManager.getInstance();
+        manager.initialize();
+
+        assertTrue(columnExists("paylogs", "linked_amount"));
+        assertTrue(columnExists("paylogs", "link_count"));
+        assertTrue(tableExists("paylog_search_tokens"));
+        assertEquals(1, manager.queryPaylogPage("debtor", 0, "legacy", 50, 0).entries().size());
+    }
+
+    @Test
     void runtimeSchemaDriftIsRepairedBeforeThePaylogQueryIsRetried() throws Exception {
         useTemporaryDataDirectory();
         createVersionSixDriftDatabase(false, false, false);
@@ -150,6 +164,13 @@ class PaylogLinkMigrationTest {
         try (var connection = DriverManager.getConnection(jdbcUrl()); var statement = connection.prepareStatement("SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE LOWER(TABLE_NAME)=? AND LOWER(COLUMN_NAME)=?")) {
             statement.setString(1, table);
             statement.setString(2, column);
+            try (var result = statement.executeQuery()) { return result.next(); }
+        }
+    }
+
+    private boolean tableExists(String table) throws Exception {
+        try (var connection = DriverManager.getConnection(jdbcUrl()); var statement = connection.prepareStatement("SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE LOWER(TABLE_NAME)=?")) {
+            statement.setString(1, table);
             try (var result = statement.executeQuery()) { return result.next(); }
         }
     }

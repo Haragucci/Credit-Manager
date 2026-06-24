@@ -31,13 +31,6 @@ sourceSets {
 		compileClasspath += sourceSets.client.output
 		runtimeClasspath += sourceSets.client.output
 	}
-	// Deliberately isolated from main/client/release classpaths. Local sources
-	// are ignored by Git and only compiled on an explicit dev-test-data request.
-	devTestData {
-		java.srcDir 'local-dev'
-		compileClasspath += sourceSets.client.runtimeClasspath
-		runtimeClasspath += sourceSets.client.runtimeClasspath
-	}
 }
 
 
@@ -75,11 +68,13 @@ tasks.named('test') {
 	useJUnitPlatform()
 }
 
-tasks.register('compileDevTestData') {
-	group = 'development'
-	description = 'Compiles the ignored local test-data helper when explicitly enabled.'
-	onlyIf { Boolean.getBoolean('creditmanager.devTestData') }
-	dependsOn tasks.named('devTestDataClasses')
+tasks.register('performanceTest', Test) {
+	group = 'verification'
+	description = 'Runs opt-in CreditManager performance tests.'
+	testClassesDirs = sourceSets.test.output.classesDirs
+	classpath = sourceSets.test.runtimeClasspath
+	useJUnitPlatform { includeTags 'performance' }
+	onlyIf { providers.gradleProperty('creditmanager.performanceTests').map { it.toBoolean() }.orElse(false).get() }
 }
 
 tasks.register('verifyAmountParser', JavaExec) {
@@ -88,6 +83,17 @@ tasks.register('verifyAmountParser', JavaExec) {
 	dependsOn tasks.named('compileTestJava')
 	classpath = sourceSets.test.runtimeClasspath
 	mainClass = 'op.creditmanager.client.util.FormatUtilSelfTest'
+}
+
+tasks.register('verifyReadmeVersion') {
+	group = 'verification'
+	description = 'Verifies that the documented version matches the Gradle version.'
+	doLast {
+		def expected = "**Version:** `${project.version}`"
+		if (!file('README.md').getText('UTF-8').contains(expected)) {
+			throw new GradleException("README version does not match project version ${project.version}")
+		}
+	}
 }
 
 tasks.register('verifyReleaseJar') {
@@ -102,15 +108,37 @@ tasks.register('verifyReleaseJar') {
 		if (!entries.any { it ==~ /META-INF\/jars\/h2-.+\.jar/ }) {
 			throw new GradleException("Release jar does not embed H2: ${releaseJar}")
 		}
-		def forbidden = entries.findAll { it.startsWith('local-dev/') || it.contains('CreditManagerTestDataTool') || it.contains('TestDataChatHook') || it.contains('/dev/') }
+		def forbiddenTerms = ['CmTest', 'devtools', 'TestData', 'DevFeatureGate', 'TEST_DATA', 'CMTEST', 'DevTest', 'TestDataChatHook', 'local-dev']
+		def forbidden = entries.findAll { entry -> forbiddenTerms.any { term -> entry.contains(term) } }
 		if (!forbidden.isEmpty()) {
 			throw new GradleException("Release jar contains development-only files: ${forbidden}")
 		}
 	}
 }
 
+tasks.register('verifyNoDevCommandsInRelease') {
+	group = 'verification'
+	description = 'Verifies that the release jar contains no development command classes.'
+	dependsOn tasks.named('remapJar')
+	doLast {
+		def releaseJar = tasks.named('remapJar').get().archiveFile.get().asFile
+		def forbiddenTerms = ['CmTest', 'devtools', 'TestData', 'DevFeatureGate', 'TEST_DATA', 'CMTEST', 'DevTest', 'TestDataChatHook', 'local-dev']
+		def forbidden = new java.util.zip.ZipFile(releaseJar).withCloseable { zip ->
+			zip.entries().collect { entry ->
+				def payload = entry.directory || !entry.name.startsWith('op/creditmanager/') ? '' : new String(zip.getInputStream(entry).bytes, java.nio.charset.StandardCharsets.ISO_8859_1)
+				[name: entry.name, payload: payload]
+			}.findAll { entry -> forbiddenTerms.any { term -> entry.name.contains(term) || entry.payload.contains(term) } }
+		}
+		if (!forbidden.isEmpty()) {
+			throw new GradleException("Release jar contains development command classes: ${forbidden}")
+		}
+	}
+}
+
 tasks.named('check') {
 	dependsOn tasks.named('verifyReleaseJar')
+	dependsOn tasks.named('verifyReadmeVersion')
+	dependsOn tasks.named('verifyNoDevCommandsInRelease')
 }
 
 java {
@@ -130,9 +158,6 @@ jar {
 	from("LICENSE") {
 		rename { "${it}_$projectName"}
 	}
-	// IntelliJ needs the hook on the local client classpath, but it must never
-	// be shipped in the remapped production jar.
-	exclude 'op/creditmanager/client/devtools/**'
 }
 
 // configure the maven publication

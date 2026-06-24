@@ -27,8 +27,6 @@ public class CreditManagerClient implements ClientModInitializer {
 	public static final String MOD_ID = "creditmanager";
 	public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
-	private static final String TEST_DATA_PROPERTY = "creditmanager.dev.testdata";
-
 	private static CreditManager creditManager;
 	private static CreditRepository creditRepository;
 	private static PaymentDetector paymentDetector;
@@ -51,7 +49,6 @@ public class CreditManagerClient implements ClientModInitializer {
 			creditRepository.load();
 			TransactionRepository.getInstance().load();
 			CreditEventRepository.getInstance().load();
-			registerDevHooks();
 			paymentDetector = new PaymentDetector(creditManager);
 		} else {
 			TransactionRepository.getInstance().load();
@@ -91,14 +88,4 @@ public class CreditManagerClient implements ClientModInitializer {
 		LOGGER.info("[CreditManager] Bereit.");
 	}
 
-	private static void registerDevHooks() {
-		if (TEST_DATA_PROPERTY == "") return;
-		try {
-			Class<?> hook = Class.forName("op.creditmanager.client.devtools.TestDataChatHook");
-			hook.getMethod("register", CreditManager.class).invoke(null, creditManager);
-			LOGGER.warn("[CreditManager] TestDataChatHook aktiv. @TestData bleibt lokal.");
-		} catch (Throwable error) {
-			LOGGER.debug("[CreditManager] Optionaler TestDataChatHook ist nicht verfügbar.", error);
-		}
-	}
 }

@@ -64,18 +64,8 @@ public class FormatUtil {
                 .replace('.', ',');
     }
 
-    @Deprecated
-    public static String formatiereBetrag(double betrag) {
-        return formatAmount(betrag);
-    }
-
     public static String formatAmountColored(double betrag) {
         return "§6" + formatAmount(betrag) + "§r";
-    }
-
-    @Deprecated
-    public static String formatiereBetragFarbig(double betrag) {
-        return formatAmountColored(betrag);
     }
 
     public static String getStatusDisplay(String status) {
@@ -93,11 +83,6 @@ public class FormatUtil {
         };
     }
 
-    @Deprecated
-    public static String getStatusAnzeige(String status) {
-        return getStatusDisplay(status);
-    }
-
     public static String shortId(CreditEntry eintrag) {
         if (eintrag == null || eintrag.getId() == null) {
             return "unknown";
@@ -105,11 +90,6 @@ public class FormatUtil {
 
         String id = eintrag.getId().toString();
         return id.length() <= 8 ? id : id.substring(0, 8);
-    }
-
-    @Deprecated
-    public static String kurzId(CreditEntry eintrag) {
-        return shortId(eintrag);
     }
 
     public static String formatCreditSummary(CreditEntry e) {
@@ -355,8 +335,4 @@ public class FormatUtil {
         return count;
     }
 
-    @Deprecated
-    public static String formatiereDealZeile(CreditEntry e) {
-        return formatCreditSummary(e);
-    }
 }

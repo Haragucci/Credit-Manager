@@ -19,6 +19,7 @@ import op.creditmanager.client.storage.FileManager;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.DriverManager;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
@@ -99,6 +100,94 @@ class DatabaseSafetyTest {
         DatabaseManager database = DatabaseManager.getInstance();
         assertFalse(database.replaceCreditState(List.of(), List.of(), List.of()));
         assertEquals(1, database.loadCreditState().credits().size());
+    }
+
+    @Test
+    void fullStateReplacementRemovesStaleCreditsPaymentsAndEvents() throws Exception {
+        CreditManager manager = manager();
+        CreditEntry kept = manager.createCredit("creditor", "debtor", 100D, null, "kept", null);
+        CreditEntry stale = manager.createCredit("creditor", "other", 80D, null, "stale", null);
+        var keptPayment = manager.addMoneyPayment(kept.getId(), "debtor", 25D);
+        manager.addMoneyPayment(stale.getId(), "other", 20D);
+        DatabaseManager database = DatabaseManager.getInstance();
+        DatabaseManager.DatabaseState state = database.loadCreditState();
+
+        assertTrue(database.replaceCreditState(
+                state.credits().stream().filter(credit -> credit.getId().equals(kept.getId())).toList(),
+                state.payments().stream().filter(payment -> payment.getId().equals(keptPayment.getId())).toList(),
+                state.events().stream().filter(event -> event.getCreditId().equals(kept.getId())).toList()));
+
+        DatabaseManager.DatabaseState replaced = database.loadCreditState();
+        assertEquals(List.of(kept.getId()), replaced.credits().stream().map(CreditEntry::getId).toList());
+        assertEquals(List.of(keptPayment.getId()), replaced.payments().stream().map(payment -> payment.getId()).toList());
+        assertTrue(replaced.events().stream().allMatch(event -> event.getCreditId().equals(kept.getId())));
+    }
+
+    @Test
+    void fullStateReplacementKeepsPaylogsMigrationRecordsLegacyRecordsAndMetadata() throws Exception {
+        CreditManager manager = manager();
+        CreditEntry kept = manager.createCredit("creditor", "debtor", 100D, null, "kept", null);
+        manager.createCredit("creditor", "other", 80D, null, "stale", null);
+        TransactionEntry paylog = testPaylog("preserved", 25D);
+        assertTrue(TransactionRepository.getInstance().add(paylog));
+        insertNonDomainRecords();
+        DatabaseManager database = DatabaseManager.getInstance();
+        DatabaseManager.DatabaseState state = database.loadCreditState();
+
+        assertTrue(database.replaceCreditState(
+                state.credits().stream().filter(credit -> credit.getId().equals(kept.getId())).toList(),
+                List.of(),
+                state.events().stream().filter(event -> event.getCreditId().equals(kept.getId())).toList()));
+
+        assertEquals(1L, countRows("paylogs"));
+        assertEquals(1L, countRows("migration_log"));
+        assertEquals(1L, countRows("legacy_records"));
+        assertEquals(1L, countRows("metadata", "meta_key='review_retained'"));
+        assertEquals(1L, countRows("credits"));
+    }
+
+    @Test
+    void fullStateReplacementRefreshesPaylogLinkAmountsAfterRemovingLinkedPayment() throws Exception {
+        CreditManager manager = manager();
+        CreditEntry credit = manager.createCredit("creditor", "debtor", 100D, null, "linked", null);
+        TransactionEntry paylog = new TransactionEntry("debtor", "creditor", 80D);
+        paylog.setSource("TEST_FIXTURE");
+        paylog.setRawText("fixture:linked:paylog");
+        assertTrue(TransactionRepository.getInstance().add(paylog));
+        assertTrue(manager.linkPaylogToDeal(paylog.getId(), credit.getId()).linked());
+        DatabaseManager database = DatabaseManager.getInstance();
+        DatabaseManager.DatabaseState state = database.loadCreditState();
+        CreditEntry replacement = state.credits().getFirst();
+        replacement.replacePayments(List.of());
+        replacement.setCompletedAt(null);
+
+        assertTrue(database.replaceCreditState(List.of(replacement), List.of(),
+                state.events().stream().filter(event -> event.getType() == CreditEventType.CREDIT_CREATED).toList()));
+
+        assertEquals(0D, paylogLinkedAmount(paylog.getId()));
+        assertEquals(0L, paylogLinkCount(paylog.getId()));
+    }
+
+    @Test
+    void orphanPaymentCreatesOpenErrorHealthRecord() throws Exception {
+        manager();
+        insertOrphanPayment();
+
+        var findings = DatabaseManager.getInstance().runHealthCheck();
+
+        assertTrue(findings.stream().anyMatch(record -> "PAYMENT_CREDIT_ORPHAN".equals(record.type())
+                && "ERROR".equals(record.severity()) && "OPEN".equals(record.status())));
+    }
+
+    @Test
+    void orphanEventCreatesOpenErrorHealthRecord() throws Exception {
+        manager();
+        insertOrphanEvent();
+
+        var findings = DatabaseManager.getInstance().runHealthCheck();
+
+        assertTrue(findings.stream().anyMatch(record -> "EVENT_CREDIT_ORPHAN".equals(record.type())
+                && "ERROR".equals(record.severity()) && "OPEN".equals(record.status())));
     }
 
     @Test
@@ -293,6 +382,71 @@ class DatabaseSafetyTest {
         entry.setRawText("fixture:" + runId + ": paylog");
         entry.setMetadata("{\"testRunId\":\"" + runId + "\"}");
         return entry;
+    }
+
+    private void insertNonDomainRecords() throws Exception {
+        try (var connection = openConnection()) {
+            try (var migration = connection.prepareStatement("INSERT INTO migration_log (id, migration_type, started_at, completed_at, details, status) VALUES (?, ?, ?, ?, ?, ?)");
+                 var legacy = connection.prepareStatement("INSERT INTO legacy_records (id, record_kind, original_id, raw_payload, reason, created_at, migration_id) VALUES (?, ?, ?, ?, ?, ?, ?)");
+                 var metadata = connection.prepareStatement("MERGE INTO metadata (meta_key, meta_value) KEY(meta_key) VALUES (?, ?)")) {
+                long now = System.currentTimeMillis();
+                String migrationId = UUID.randomUUID().toString();
+                migration.setString(1, migrationId); migration.setString(2, "REVIEW_FIXTURE"); migration.setLong(3, now); migration.setLong(4, now); migration.setString(5, "fixture"); migration.setString(6, "COMPLETED"); migration.executeUpdate();
+                legacy.setString(1, UUID.randomUUID().toString()); legacy.setString(2, "REVIEW_FIXTURE"); legacy.setString(3, "fixture"); legacy.setString(4, "{}"); legacy.setString(5, "fixture"); legacy.setLong(6, now); legacy.setString(7, migrationId); legacy.executeUpdate();
+                metadata.setString(1, "review_retained"); metadata.setString(2, "true"); metadata.executeUpdate();
+            }
+        }
+    }
+
+    private void insertOrphanPayment() throws Exception {
+        try (var connection = openConnection(); var statement = connection.createStatement()) {
+            statement.execute("SET REFERENTIAL_INTEGRITY FALSE");
+            statement.executeUpdate("INSERT INTO payments (id, credit_id, from_player, to_player, amount, items_json, created_at, source, revision) VALUES ('" + UUID.randomUUID() + "', '" + UUID.randomUUID() + "', 'debtor', 'creditor', 5, '[]', 1, 'MANUAL', 0)");
+            statement.execute("SET REFERENTIAL_INTEGRITY TRUE");
+        }
+    }
+
+    private void insertOrphanEvent() throws Exception {
+        try (var connection = openConnection(); var statement = connection.createStatement()) {
+            statement.execute("SET REFERENTIAL_INTEGRITY FALSE");
+            statement.executeUpdate("INSERT INTO credit_events (id, credit_id, event_type, amount, paid_after, remaining_after, created_at, deal_name, creditor, debtor, note, amount_before, amount_after, actor, source, item_payment, revision) VALUES ('" + UUID.randomUUID() + "', '" + UUID.randomUUID() + "', 'CREDIT_CREATED', 5, 0, 5, 1, 'orphan', 'creditor', 'debtor', NULL, 0, 0, 'creditor', 'MANUAL', FALSE, 0)");
+            statement.execute("SET REFERENTIAL_INTEGRITY TRUE");
+        }
+    }
+
+    private long countRows(String table) throws Exception {
+        return countRows(table, "1=1");
+    }
+
+    private long countRows(String table, String condition) throws Exception {
+        try (var connection = openConnection(); var statement = connection.createStatement(); var result = statement.executeQuery("SELECT COUNT(*) FROM " + table + " WHERE " + condition)) {
+            result.next();
+            return result.getLong(1);
+        }
+    }
+
+    private double paylogLinkedAmount(UUID paylogId) throws Exception {
+        try (var connection = openConnection(); var statement = connection.prepareStatement("SELECT linked_amount FROM paylogs WHERE id=?")) {
+            statement.setString(1, paylogId.toString());
+            try (var result = statement.executeQuery()) {
+                result.next();
+                return result.getDouble(1);
+            }
+        }
+    }
+
+    private long paylogLinkCount(UUID paylogId) throws Exception {
+        try (var connection = openConnection(); var statement = connection.prepareStatement("SELECT link_count FROM paylogs WHERE id=?")) {
+            statement.setString(1, paylogId.toString());
+            try (var result = statement.executeQuery()) {
+                result.next();
+                return result.getLong(1);
+            }
+        }
+    }
+
+    private java.sql.Connection openConnection() throws Exception {
+        return DriverManager.getConnection("jdbc:h2:file:" + FileManager.getDatabaseFile().toAbsolutePath() + ";MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;AUTO_SERVER=FALSE");
     }
 
     private Field dataDirectoryField() throws Exception {

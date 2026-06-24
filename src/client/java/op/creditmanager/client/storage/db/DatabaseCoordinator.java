@@ -63,6 +63,7 @@ import java.util.zip.ZipFile;
 final class DatabaseCoordinator {
     public static final int SCHEMA_VERSION = 7;
     public static final int PAGE_SIZE = 500;
+    private static final int ID_BATCH_SIZE = 500;
     private static final Gson GSON = new Gson();
     private static final Type STRING_LIST = new TypeToken<List<String>>() { }.getType();
     private static final Type BACKUP_MANIFEST_LIST = new TypeToken<List<BackupManifestEntry>>() { }.getType();
@@ -340,8 +341,15 @@ final class DatabaseCoordinator {
         try (Connection connection = connection()) {
             List<CreditEntry> credits = readCredits(connection, "SELECT * FROM credits", List.of());
             List<Payment> payments = loadPayments(connection);
+            Map<UUID, List<Payment>> paymentsByCredit = new LinkedHashMap<>();
+            for (Payment payment : payments) {
+                paymentsByCredit.computeIfAbsent(payment.getCreditId(), ignored -> new ArrayList<>()).add(payment);
+            }
+            for (List<Payment> creditPayments : paymentsByCredit.values()) {
+                creditPayments.sort(Comparator.comparingLong(Payment::getTimestamp));
+            }
             for (CreditEntry credit : credits) {
-                credit.replacePayments(payments.stream().filter(payment -> credit.getId().equals(payment.getCreditId())).toList());
+                credit.replacePayments(paymentsByCredit.getOrDefault(credit.getId(), List.of()));
             }
             return new DatabaseState(credits, payments, loadEvents(connection));
         } catch (SQLException exception) {
@@ -361,10 +369,18 @@ final class DatabaseCoordinator {
                 throw new SQLException("Refusing full-state replacement while unresolved data-health errors exist");
             }
             validateState(connection, credits, payments, events);
+            Set<UUID> affectedPaylogs = loadLinkedPaylogIds(connection);
+            for (Payment payment : payments) {
+                if (payment.getPaylogId() != null) affectedPaylogs.add(payment.getPaylogId());
+            }
+            deleteStaleRows(connection, "credit_events", eventIds(events));
+            deleteStaleRows(connection, "payments", paymentIds(payments));
+            deleteStaleRows(connection, "credits", creditIds(credits));
             long rowRevision = nextRevision(connection);
             for (CreditEntry credit : credits) upsertCredit(connection, credit, rowRevision);
             for (Payment payment : payments) upsertPayment(connection, payment, rowRevision);
             for (CreditEventEntry event : events) upsertEvent(connection, event, rowRevision);
+            refreshPaylogLinkAmounts(connection, affectedPaylogs);
             bumpRevision(connection);
         });
     }
@@ -470,7 +486,7 @@ final class DatabaseCoordinator {
                     counts[0]++;
                 } else if (!sameCredit(connection, credit)) {
                     preserveLegacyRecord(connection, new LegacyRecord("CREDIT", credit.getId().toString(), GSON.toJson(credit),
-                            "Abweichender JSON-Deal mit identischer UUID; die vorhandene Datenbankzeile bleibt maÃƒÆ’Ã…Â¸geblich."), migrationId, counts);
+                            "Abweichender JSON-Deal mit identischer UUID; die vorhandene Datenbankzeile bleibt maßgeblich."), migrationId, counts);
                 }
             }
             for (Payment payment : state.payments()) {
@@ -479,7 +495,7 @@ final class DatabaseCoordinator {
                     counts[1]++;
                 } else if (!samePayment(connection, payment)) {
                     preserveLegacyRecord(connection, new LegacyRecord("PAYMENT", payment.getId().toString(), GSON.toJson(payment),
-                            "Abweichende JSON-Zahlung mit identischer UUID; die vorhandene Datenbankzeile bleibt maÃƒÆ’Ã…Â¸geblich."), migrationId, counts);
+                            "Abweichende JSON-Zahlung mit identischer UUID; die vorhandene Datenbankzeile bleibt maßgeblich."), migrationId, counts);
                 }
             }
             for (CreditEventEntry event : state.events()) {
@@ -488,14 +504,14 @@ final class DatabaseCoordinator {
                     counts[2]++;
                 } else if (!sameEvent(connection, event)) {
                     preserveLegacyRecord(connection, new LegacyRecord("EVENT", event.getId().toString(), GSON.toJson(event),
-                            "Abweichendes JSON-Event mit identischer UUID; die vorhandene Datenbankzeile bleibt maÃƒÆ’Ã…Â¸geblich."), migrationId, counts);
+                            "Abweichendes JSON-Event mit identischer UUID; die vorhandene Datenbankzeile bleibt maßgeblich."), migrationId, counts);
                 }
             }
             for (TransactionEntry paylog : paylogs) {
                 if (paylog.getId() != null && rowExists(connection, "paylogs", paylog.getId().toString())) {
                     if (!samePaylog(connection, paylog)) {
                         preserveLegacyRecord(connection, new LegacyRecord("PAYLOG", paylog.getId().toString(), GSON.toJson(paylog),
-                                "Abweichender JSON-Paylog mit identischer UUID; die vorhandene Datenbankzeile bleibt maÃƒÆ’Ã…Â¸geblich."), migrationId, counts);
+                                "Abweichender JSON-Paylog mit identischer UUID; die vorhandene Datenbankzeile bleibt maßgeblich."), migrationId, counts);
                     }
                 } else if (insertPaylog(connection, paylog, true, rowRevision)) counts[3]++;
             }
@@ -1035,14 +1051,67 @@ final class DatabaseCoordinator {
 
     private void refreshPaylogLinkAmounts(Connection connection, Collection<UUID> paylogIds) throws SQLException {
         if (paylogIds == null || paylogIds.isEmpty()) return;
-        try (PreparedStatement statement = connection.prepareStatement("UPDATE paylogs SET linked_amount=COALESCE((SELECT SUM(amount) FROM payments WHERE paylog_id=paylogs.id),0), link_count=COALESCE((SELECT COUNT(*) FROM payments WHERE paylog_id=paylogs.id),0) WHERE id=?")) {
-            for (UUID paylogId : paylogIds) {
-                if (paylogId == null) continue;
-                statement.setString(1, paylogId.toString());
-                statement.addBatch();
+        List<UUID> values = paylogIds.stream().filter(Objects::nonNull).distinct().toList();
+        for (int start = 0; start < values.size(); start += ID_BATCH_SIZE) {
+            int end = Math.min(values.size(), start + ID_BATCH_SIZE);
+            try (PreparedStatement statement = connection.prepareStatement("UPDATE paylogs SET linked_amount=COALESCE((SELECT SUM(amount) FROM payments WHERE paylog_id=paylogs.id),0), link_count=COALESCE((SELECT COUNT(*) FROM payments WHERE paylog_id=paylogs.id),0) WHERE id=?")) {
+                for (UUID paylogId : values.subList(start, end)) {
+                    statement.setString(1, paylogId.toString());
+                    statement.addBatch();
+                }
+                statement.executeBatch();
             }
-            statement.executeBatch();
         }
+    }
+
+    private Set<UUID> loadLinkedPaylogIds(Connection connection) throws SQLException {
+        Set<UUID> paylogIds = new HashSet<>();
+        try (PreparedStatement statement = connection.prepareStatement("SELECT DISTINCT paylog_id FROM payments WHERE paylog_id IS NOT NULL"); ResultSet result = statement.executeQuery()) {
+            while (result.next()) {
+                String value = result.getString(1);
+                if (validUuid(value)) paylogIds.add(UUID.fromString(value));
+            }
+        }
+        return paylogIds;
+    }
+
+    private void deleteStaleRows(Connection connection, String table, Set<String> replacementIds) throws SQLException {
+        List<String> staleIds = loadRowIds(connection, table);
+        staleIds.removeAll(replacementIds);
+        for (int start = 0; start < staleIds.size(); start += ID_BATCH_SIZE) {
+            List<String> chunk = staleIds.subList(start, Math.min(staleIds.size(), start + ID_BATCH_SIZE));
+            String placeholders = String.join(",", java.util.Collections.nCopies(chunk.size(), "?"));
+            try (PreparedStatement statement = connection.prepareStatement("DELETE FROM " + table + " WHERE id IN (" + placeholders + ")")) {
+                for (int index = 0; index < chunk.size(); index++) statement.setString(index + 1, chunk.get(index));
+                statement.executeUpdate();
+            }
+        }
+    }
+
+    private List<String> loadRowIds(Connection connection, String table) throws SQLException {
+        List<String> ids = new ArrayList<>();
+        try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery("SELECT id FROM " + table)) {
+            while (result.next()) ids.add(result.getString(1));
+        }
+        return ids;
+    }
+
+    private Set<String> creditIds(Collection<CreditEntry> credits) {
+        Set<String> ids = new HashSet<>();
+        for (CreditEntry credit : credits) ids.add(credit.getId().toString());
+        return ids;
+    }
+
+    private Set<String> paymentIds(Collection<Payment> payments) {
+        Set<String> ids = new HashSet<>();
+        for (Payment payment : payments) ids.add(payment.getId().toString());
+        return ids;
+    }
+
+    private Set<String> eventIds(Collection<CreditEventEntry> events) {
+        Set<String> ids = new HashSet<>();
+        for (CreditEventEntry event : events) ids.add(event.getId().toString());
+        return ids;
     }
 
     private void upsertEvent(Connection connection, CreditEventEntry event, long rowRevision) throws SQLException {

@@ -110,7 +110,10 @@ public class FileManager {
                 files.filter(path -> path.getFileName().toString().endsWith(".tmp")).forEach(FileManager::deleteQuietly);
             }
             try (var files = Files.list(backups)) {
-                files.filter(Files::isRegularFile).sorted(Comparator.comparingLong(FileManager::modified).reversed()).skip(12).forEach(FileManager::deleteQuietly);
+                files.filter(Files::isRegularFile)
+                        .collect(java.util.stream.Collectors.groupingBy(FileManager::backupType))
+                        .values()
+                        .forEach(group -> group.stream().sorted(Comparator.comparingLong(FileManager::modified).reversed()).skip(12).forEach(FileManager::deleteQuietly));
             }
         } catch (IOException exception) {
             CreditManagerClient.LOGGER.warn("Could not tidy CreditManager data directory", exception);
@@ -118,5 +121,10 @@ public class FileManager {
     }
 
     private static long modified(Path path) { try { return Files.getLastModifiedTime(path).toMillis(); } catch (IOException ignored) { return 0L; } }
+    private static String backupType(Path path) {
+        String name = path.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+        int marker = name.indexOf("_backup_");
+        return marker > 0 ? name.substring(0, marker) : name;
+    }
     private static void deleteQuietly(Path path) { try { Files.deleteIfExists(path); } catch (IOException ignored) { } }
 }

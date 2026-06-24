@@ -25,6 +25,10 @@ class PaymentMessageParserTest {
 
         DetectedPayment tenPointOneMillion = parser.parse("OPSUCHT » Spieler hat dir 10.100.000$ gegeben.", "Ich").orElseThrow();
         assertEquals(10_100_000D, tenPointOneMillion.amount());
+
+        DetectedPayment formattedName = parser.parse("§aOPSUCHT » §bSpieler_42 hat dir 10.000$ gegeben.", "Ich").orElseThrow();
+        assertEquals("spieler_42", formattedName.fromPlayer());
+        assertEquals(10_000D, formattedName.amount());
     }
 
     @Test

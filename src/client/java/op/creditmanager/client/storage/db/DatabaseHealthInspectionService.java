@@ -27,10 +27,10 @@ final class DatabaseHealthInspectionService {
                 try (ResultSet result = statement.executeQuery("SELECT * FROM credits")) {
                     while (result.next()) inspectCredit(connection, result);
                 }
-                try (ResultSet result = statement.executeQuery("SELECT p.*, l.id AS paylog_exists, l.amount AS paylog_amount, l.payer AS paylog_payer, l.receiver AS paylog_receiver FROM payments p LEFT JOIN credits c ON c.id=p.credit_id LEFT JOIN paylogs l ON l.id=p.paylog_id")) {
+                try (ResultSet result = statement.executeQuery("SELECT p.*, c.id AS credit_exists, l.id AS paylog_exists, l.amount AS paylog_amount, l.payer AS paylog_payer, l.receiver AS paylog_receiver FROM payments p LEFT JOIN credits c ON c.id=p.credit_id LEFT JOIN paylogs l ON l.id=p.paylog_id")) {
                     while (result.next()) inspectPayment(connection, result);
                 }
-                try (ResultSet result = statement.executeQuery("SELECT e.* FROM credit_events e LEFT JOIN credits c ON c.id=e.credit_id")) {
+                try (ResultSet result = statement.executeQuery("SELECT e.*, c.id AS credit_exists FROM credit_events e LEFT JOIN credits c ON c.id=e.credit_id")) {
                     while (result.next()) inspectEvent(connection, result);
                 }
                 try (ResultSet result = statement.executeQuery("SELECT * FROM paylogs")) {
@@ -91,6 +91,7 @@ final class DatabaseHealthInspectionService {
     private void inspectPayment(Connection connection, ResultSet result) throws SQLException {
         String id = result.getString("id");
         if (!validUuid(id) || !validUuid(result.getString("credit_id"))) storeHealth(connection, "PAYMENT_ID", "ERROR", "payments", id, "Ungültige Zahlungs-ID", "Zahlung oder zugehörige Deal-ID ist ungültig.", rowPayload(result), null);
+        if (result.getString("credit_exists") == null) storeHealth(connection, "PAYMENT_CREDIT_ORPHAN", "ERROR", "payments", id, "Verwaiste Zahlung", "Die Zahlung verweist auf einen nicht vorhandenen Deal.", rowPayload(result), null);
         double amount = result.getDouble("amount");
         if (!Double.isFinite(amount) || amount <= 0) storeHealth(connection, "PAYMENT_AMOUNT", "ERROR", "payments", id, "Ungültiger Zahlungsbetrag", "Eine Zahlung muss einen positiven endlichen Betrag haben.", rowPayload(result), null);
         if (blank(result.getString("from_player")) || blank(result.getString("to_player"))) storeHealth(connection, "PAYMENT_DIRECTION", "WARNING", "payments", id, "Fehlende Zahlungsrichtung", "Sender oder Empfänger der Zahlung fehlt.", rowPayload(result), null);
@@ -110,7 +111,7 @@ final class DatabaseHealthInspectionService {
                 storeHealth(connection, "PAYLOG_LINK_DIRECTION", "ERROR", "payments", id, "Falsche Paylog-Richtung", "Die Zahlungsrichtung passt nicht zum verknüpften Paylog.", rowPayload(result), null);
             }
             if (amount > result.getDouble("paylog_amount") + 0.0001D) {
-                storeHealth(connection, "PAYLOG_LINK_AMOUNT", "ERROR", "payments", id, "Ungültiger Paylog-Betrag", "Eine einzelne Zahlung ist gröÃƒÆ’Ã…Â¸er als ihr Paylog.", rowPayload(result), null);
+                storeHealth(connection, "PAYLOG_LINK_AMOUNT", "ERROR", "payments", id, "Ungültiger Paylog-Betrag", "Eine einzelne Zahlung ist größer als ihr Paylog.", rowPayload(result), null);
             }
         }
     }
@@ -118,6 +119,7 @@ final class DatabaseHealthInspectionService {
     private void inspectEvent(Connection connection, ResultSet result) throws SQLException {
         String id = result.getString("id");
         if (!validUuid(id) || !validUuid(result.getString("credit_id"))) storeHealth(connection, "EVENT_ID", "ERROR", "credit_events", id, "Ungültige Event-ID", "Event oder zugehörige Deal-ID ist ungültig.", rowPayload(result), null);
+        if (result.getString("credit_exists") == null) storeHealth(connection, "EVENT_CREDIT_ORPHAN", "ERROR", "credit_events", id, "Verwaistes Event", "Das Event verweist auf einen nicht vorhandenen Deal.", rowPayload(result), null);
         try { CreditEventType.valueOf(result.getString("event_type")); }
         catch (RuntimeException error) { storeHealth(connection, "EVENT_TYPE", "ERROR", "credit_events", id, "Unbekannter Eventtyp", "Das Event kann keiner bekannten Aktion zugeordnet werden.", rowPayload(result), null); }
     }
@@ -132,7 +134,7 @@ final class DatabaseHealthInspectionService {
             try (ResultSet linked = statement.executeQuery()) {
                 linked.next();
                 if (linked.getDouble(1) > result.getDouble("amount") + 0.0001D) {
-                    storeHealth(connection, "PAYLOG_LINK_OVERBOOKED", "ERROR", "paylogs", id, "Paylog überbucht", "Die Summe verknüpfter Zahlungen ist gröÃƒÆ’Ã…Â¸er als der Paylog-Betrag.", rowPayload(result), null);
+                    storeHealth(connection, "PAYLOG_LINK_OVERBOOKED", "ERROR", "paylogs", id, "Paylog überbucht", "Die Summe verknüpfter Zahlungen ist größer als der Paylog-Betrag.", rowPayload(result), null);
                 }
             }
         }

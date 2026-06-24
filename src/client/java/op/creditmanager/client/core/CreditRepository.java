@@ -237,7 +237,18 @@ public class CreditRepository {
     private double safeAmount(double value) { return Double.isFinite(value) && value > 0 ? value : 1D; }
 
     private void reconcilePayments() { reconcilePayments(credits, payments); }
-    private void reconcilePayments(Map<UUID, CreditEntry> targetCredits, Map<UUID, Payment> targetPayments) { for (CreditEntry entry : targetCredits.values()) entry.replacePayments(targetPayments.values().stream().filter(payment -> entry.getId().equals(payment.getCreditId())).sorted(Comparator.comparingLong(Payment::getTimestamp)).toList()); }
+    private void reconcilePayments(Map<UUID, CreditEntry> targetCredits, Map<UUID, Payment> targetPayments) {
+        Map<UUID, List<Payment>> paymentsByCredit = new LinkedHashMap<>();
+        for (Payment payment : targetPayments.values()) {
+            paymentsByCredit.computeIfAbsent(payment.getCreditId(), ignored -> new ArrayList<>()).add(payment);
+        }
+        for (List<Payment> creditPayments : paymentsByCredit.values()) {
+            creditPayments.sort(Comparator.comparingLong(Payment::getTimestamp));
+        }
+        for (CreditEntry entry : targetCredits.values()) {
+            entry.replacePayments(paymentsByCredit.getOrDefault(entry.getId(), List.of()));
+        }
+    }
     private void rebuildPlayerIndex() { rebuildPlayerIndex(players, credits); }
     private void rebuildPlayerIndex(Map<String, PlayerCreditData> targetPlayers, Map<UUID, CreditEntry> targetCredits) {
         targetPlayers.clear();

@@ -13,6 +13,7 @@ class MoneyRulesTest {
         assertEquals(10D, MoneyRules.minRemaining(20D, 10D));
         assertEquals(0D, MoneyRules.minRemaining(-1D, 10D));
         assertTrue(MoneyRules.isPositive(0.01D));
+        assertTrue(MoneyRules.isPositive(MoneyRules.MAX_AMOUNT));
         assertFalse(MoneyRules.isPositive(0D));
         assertFalse(MoneyRules.isPositive(MoneyRules.MAX_AMOUNT + 1D));
     }
@@ -32,6 +33,8 @@ class MoneyRulesTest {
         assertEquals(1_000_000.5D, MoneyRules.parse("1,000,000.50").orElseThrow());
         assertTrue(MoneyRules.parse("abc").isEmpty());
         assertTrue(MoneyRules.parse("1.00.000").isEmpty());
+        assertTrue(MoneyRules.parse("1.000,000").isEmpty());
+        assertTrue(MoneyRules.parse("1,000.000").isEmpty());
         assertTrue(MoneyRules.parse("1.234.56.78").isEmpty());
     }
 }

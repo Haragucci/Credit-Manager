@@ -26,7 +26,7 @@ public final class CreditMutationService {
                        List<CreditEventEntry> events, CreditEntry published) throws CreditException {
         DatabaseManager.CreditMutation mutation = new DatabaseManager.CreditMutation(draft, paymentUpserts, paymentDeletions, events);
         if (!DatabaseManager.getInstance().commitCreditMutation(mutation)) {
-            throw new CreditException("Vorgang wurde nicht gespeichert; der vorherige Datenstand bleibt unverÃ¤ndert.");
+            throw new CreditException("Vorgang wurde nicht gespeichert; der vorherige Datenstand bleibt unverändert.");
         }
         if (!repository.load()) {
             repository.applyCommittedMutation(draft, paymentUpserts, paymentDeletions, events);

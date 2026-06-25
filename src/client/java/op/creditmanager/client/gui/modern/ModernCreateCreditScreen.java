@@ -7,6 +7,7 @@ import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.text.Text;
 import op.creditmanager.client.core.CreditManager;
+import op.creditmanager.client.core.validation.CreditValidationRules;
 import op.creditmanager.client.gui.CenteredTextFieldWidget;
 import op.creditmanager.client.util.FormatUtil;
 import op.creditmanager.client.util.TimeUtil;
@@ -41,8 +42,8 @@ public class ModernCreateCreditScreen extends ModernBaseScreen {
         playerField = addField(fieldX, fieldStartY, debts ? "Gläubiger *" : "Schuldner *", 32);
         amountField = addField(fieldX, fieldStartY + fieldGap, "Betrag * (z.B. 2.5k)", 20);
         dueDateField = addField(fieldX, fieldStartY + fieldGap * 2, "Fällig am (TT.MM.JJJJ, optional)", 10);
-        labelField = addField(fieldX, fieldStartY + fieldGap * 3, "Bezeichnung (optional)", 32);
-        noteField = addField(fieldX, fieldStartY + fieldGap * 4, "Notiz (optional)", 64);
+        labelField = addField(fieldX, fieldStartY + fieldGap * 3, "Bezeichnung (optional)", CreditValidationRules.MAX_LABEL_LENGTH);
+        noteField = addField(fieldX, fieldStartY + fieldGap * 4, "Notiz (optional)", CreditValidationRules.MAX_NOTE_LENGTH);
         actionY = fieldStartY + fieldGap * 4 + 28;
     }
 

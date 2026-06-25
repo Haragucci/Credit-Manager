@@ -28,12 +28,17 @@ public final class CreditEventRepository {
 
     public synchronized void bind(CreditRepository repository) { this.core = repository; }
 
-    public synchronized void load() {
+    public synchronized boolean load() {
         JsonStorage.LoadResult<List<CreditEventEntry>> result = core == null || !core.hasPrimaryState()
                 ? JsonStorage.load(FileManager.getCreditEventsFile(), LIST_TYPE, new ArrayList<>())
                 : new JsonStorage.LoadResult<>(core.getEvents(), false, false);
-        recoveryRequired = result.recoveryRequired();
-        events.clear();
+        if (result.recoveryRequired()) {
+            recoveryRequired = true;
+            DataHealth.reportRecoveryRequired("Historien-Ereignisse konnten nicht vollständig gelesen werden; die zuletzt sichtbaren Ereignisse bleiben erhalten.");
+            return false;
+        }
+        List<CreditEventEntry> nextEvents = new ArrayList<>();
+        boolean nextRecoveryRequired = false;
         int index = 0;
         for (CreditEventEntry entry : result.value()) {
             if (entry == null || entry.getType() == null || entry.getCreditId() == null) {
@@ -45,24 +50,28 @@ public final class CreditEventRepository {
                 if (core != null) {
                     String key = entry != null && entry.getId() != null ? entry.getId().toString() : "event-" + index;
                     core.registerEventRecovery(entry, key, source);
-                } else recoveryRequired = true;
+                } else nextRecoveryRequired = true;
                 index++;
                 continue;
             }
             if (entry.getId() == null) entry.setId(UUID.randomUUID());
-            events.add(entry);
+            nextEvents.add(entry);
             index++;
         }
-        revision++;
         if (core != null) {
-            core.replaceEvents(events);
-            if (!core.hasPrimaryState() && !recoveryRequired && !core.saveAll()) {
-                recoveryRequired = true;
+            core.replaceEvents(nextEvents);
+            if (!core.hasPrimaryState() && !nextRecoveryRequired && !core.saveAll()) {
+                nextRecoveryRequired = true;
                 DataHealth.reportRecoveryRequired("Event-Migration konnte nicht gespeichert werden");
             }
         }
-        CreditManagerClient.LOGGER.info("Loaded " + events.size() + " credit events."
-                + (recoveryRequired ? " Recovery required." : ""));
+        events.clear();
+        events.addAll(nextEvents);
+        recoveryRequired = nextRecoveryRequired;
+        revision++;
+        CreditManagerClient.LOGGER.info("Loaded " + nextEvents.size() + " credit events."
+                + (nextRecoveryRequired ? " Recovery required." : ""));
+        return true;
     }
 
     public synchronized boolean add(CreditEventEntry entry) {
@@ -115,10 +124,17 @@ public final class CreditEventRepository {
         }
     }
 
-    /** Keeps the event view in sync after a structured recovery committed through the core repository. */
     synchronized void acceptRecoveredEvent(CreditEventEntry entry) {
         if (entry == null || entry.getId() == null || events.stream().anyMatch(value -> entry.getId().equals(value.getId()))) return;
         events.add(entry);
+        revision++;
+    }
+
+    public synchronized void acceptCommittedEvents(List<CreditEventEntry> values) {
+        if (values == null || values.isEmpty()) return;
+        for (CreditEventEntry entry : values) {
+            if (entry != null && entry.getId() != null && events.stream().noneMatch(existing -> entry.getId().equals(existing.getId()))) events.add(entry);
+        }
         revision++;
     }
 

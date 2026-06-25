@@ -1,12 +1,13 @@
 package op.creditmanager.client.storage;
 
 import java.nio.file.Path;
-import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 public final class DataHealth {
     private static String pendingWarning;
-    private static final List<String> reasons = new ArrayList<>();
+    private static final Set<String> reasons = new LinkedHashSet<>();
     private static long lastCheckedAt = System.currentTimeMillis();
 
     private DataHealth() {

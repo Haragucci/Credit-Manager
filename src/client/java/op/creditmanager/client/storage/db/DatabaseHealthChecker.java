@@ -2,11 +2,6 @@ package op.creditmanager.client.storage.db;
 
 import java.util.List;
 
-/**
- * Small facade around the persistent database health scan. Keeping this
- * separate from the UI makes checks callable after startup, after imports and
- * from automated tests without touching Minecraft screen state.
- */
 public final class DatabaseHealthChecker {
     private static final DatabaseHealthChecker INSTANCE = new DatabaseHealthChecker(DatabaseManager.getInstance());
     private final DatabaseManager database;

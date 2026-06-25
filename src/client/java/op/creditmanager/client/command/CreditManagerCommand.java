@@ -1,9 +1,10 @@
 package op.creditmanager.client.command;
 
 import com.mojang.brigadier.CommandDispatcher;
-import op.creditmanager.client.core.CreditManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
+
+import op.creditmanager.client.core.CreditManager;
 import op.creditmanager.client.gui.GuiRouter;
 
 public class CreditManagerCommand {

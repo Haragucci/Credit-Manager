@@ -7,7 +7,6 @@ import op.creditmanager.client.model.CreditEventType;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 public final class CreditStatisticsCalculator {
     private CreditStatisticsCalculator() { }
@@ -26,10 +25,13 @@ public final class CreditStatisticsCalculator {
         double createdDebts = 0.0;
         int deletedDeals = 0;
         int deletedPayments = 0;
-        Set<java.util.UUID> deletedCredits = events.stream()
-                .filter(event -> event.getType() == CreditEventType.CREDIT_DELETED && event.getTimestamp() <= toInclusive)
-                .map(CreditEventEntry::getCreditId)
-                .collect(Collectors.toSet());
+        Set<java.util.UUID> deletedCredits = new java.util.HashSet<>();
+        events.stream().filter(event -> event.getTimestamp() <= toInclusive)
+                .sorted(java.util.Comparator.comparingLong(CreditEventEntry::getTimestamp))
+                .forEach(event -> {
+                    if (event.getType() == CreditEventType.CREDIT_DELETED || event.getType() == CreditEventType.CREDIT_ARCHIVED) deletedCredits.add(event.getCreditId());
+                    else if (event.getType() == CreditEventType.CREDIT_REACTIVATED) deletedCredits.remove(event.getCreditId());
+                });
 
         for (CreditEventEntry event : events) {
             if (!involves(event, name) || event.getTimestamp() < fromInclusive || event.getTimestamp() > toInclusive) continue;
@@ -57,7 +59,7 @@ public final class CreditStatisticsCalculator {
                         count++;
                     }
                 }
-                case CREDIT_DELETED -> {
+                case CREDIT_DELETED, CREDIT_ARCHIVED -> {
                     deletedDeals++;
                     count++;
                 }

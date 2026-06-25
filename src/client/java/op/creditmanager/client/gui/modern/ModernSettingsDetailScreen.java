@@ -6,6 +6,7 @@ import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.text.Text;
 import op.creditmanager.client.config.ClientConfigManager;
 import op.creditmanager.client.config.GuiFontMode;
+import op.creditmanager.client.config.PaylogAutoLinkMode;
 import op.creditmanager.client.core.CreditManager;
 import op.creditmanager.client.gui.modern.theme.ColorUtil;
 import op.creditmanager.client.gui.modern.theme.ModernThemeMode;
@@ -81,7 +82,12 @@ public class ModernSettingsDetailScreen extends ModernBaseScreen {
         return switch (category) {
             case DETECTION -> List.of(
                     new SettingOption("Paylogs automatisch erkennen", "", ClientConfigManager.isAutomaticPaylogDetection()),
-                    new SettingOption("Overlay-/Actionbar-Nachrichten prüfen", "", ClientConfigManager.isDetectPaylogsInOverlay()));
+                    new SettingOption("Overlay-/Actionbar-Nachrichten prüfen", "", ClientConfigManager.isDetectPaylogsInOverlay()),
+                    new SettingOption("Automatische Deal-Erkennung", paylogAutoLinkModeLabel(ClientConfigManager.getPaylogAutoLinkMode())),
+                    new SettingOption("Überzahlung schließt Deal ab", "", ClientConfigManager.isCompleteDealOnPaylogOverpay()),
+                    new SettingOption("Hinweis bei passendem Deal", "", ClientConfigManager.isNotifyWhenPaylogHasMatchingDeal()),
+                    new SettingOption("Hinweis bei mehreren passenden Deals", "", ClientConfigManager.isNotifyWhenPaylogHasMultipleMatchingDeals()),
+                    new SettingOption("Hinweis ohne passenden Deal", "", ClientConfigManager.isNotifyWhenPaylogHasNoMatchingDeal()));
             case GUI -> List.of(
                     new SettingOption("Schriftart", guiFontModeLabel(ClientConfigManager.getGuiFontMode())),
                     new SettingOption("Theme", themeModeLabel(ClientConfigManager.getModernThemeMode())),
@@ -89,7 +95,8 @@ public class ModernSettingsDetailScreen extends ModernBaseScreen {
                     new SettingOption("Akzent-Farbe", ColorUtil.toHex(ClientConfigManager.getCustomAccentColor())),
                     new SettingOption("Custom-Farben zurücksetzen", "Standard"));
             case PAYLOGS -> List.of(
-                    new SettingOption("Paylog-Benachrichtigungen im Chat", "", ClientConfigManager.isShowPaylogNotifications()),
+                    new SettingOption("Paylogs anzeigen", "", ClientConfigManager.isShowAnyPaylogFlyIns()),
+                    new SettingOption("Paylog-Deal-Detection anzeigen", "", ClientConfigManager.isShowDealDetectionPaylogFlyIns()),
                     new SettingOption("Suche", "Name · Betrag · Datum · Tippfehler"));
             case STATISTICS -> List.of(
                     new SettingOption("Standard-Zeitraum", periodLabel(ClientConfigManager.getStatisticsDefaultPeriodDays())),
@@ -157,15 +164,25 @@ public class ModernSettingsDetailScreen extends ModernBaseScreen {
     private void activate(int row) {
         switch (category) {
             case DETECTION -> {
-                boolean saved = row == 0
-                        ? ClientConfigManager.setAutomaticPaylogDetection(!ClientConfigManager.isAutomaticPaylogDetection())
-                        : row == 1 && ClientConfigManager.setDetectPaylogsInOverlay(!ClientConfigManager.isDetectPaylogsInOverlay());
+                boolean saved = switch (row) {
+                    case 0 -> ClientConfigManager.setAutomaticPaylogDetection(!ClientConfigManager.isAutomaticPaylogDetection());
+                    case 1 -> ClientConfigManager.setDetectPaylogsInOverlay(!ClientConfigManager.isDetectPaylogsInOverlay());
+                    case 2 -> ClientConfigManager.setPaylogAutoLinkMode(nextPaylogAutoLinkMode(ClientConfigManager.getPaylogAutoLinkMode()));
+                    case 3 -> ClientConfigManager.setCompleteDealOnPaylogOverpay(!ClientConfigManager.isCompleteDealOnPaylogOverpay());
+                    case 4 -> ClientConfigManager.setNotifyWhenPaylogHasMatchingDeal(!ClientConfigManager.isNotifyWhenPaylogHasMatchingDeal());
+                    case 5 -> ClientConfigManager.setNotifyWhenPaylogHasMultipleMatchingDeals(!ClientConfigManager.isNotifyWhenPaylogHasMultipleMatchingDeals());
+                    case 6 -> ClientConfigManager.setNotifyWhenPaylogHasNoMatchingDeal(!ClientConfigManager.isNotifyWhenPaylogHasNoMatchingDeal());
+                    default -> false;
+                };
                 toastSettingResult(saved, "Erkennung gespeichert.");
             }
             case GUI -> activateGuiOption(row);
             case PAYLOGS -> {
                 if (row == 0) {
-                    toastSettingResult(ClientConfigManager.setShowPaylogNotifications(!ClientConfigManager.isShowPaylogNotifications()),
+                    toastSettingResult(ClientConfigManager.setShowAnyPaylogFlyIns(!ClientConfigManager.isShowAnyPaylogFlyIns()),
+                            "Paylog-Einstellung gespeichert.");
+                } else if (row == 1) {
+                    toastSettingResult(ClientConfigManager.setShowDealDetectionPaylogFlyIns(!ClientConfigManager.isShowDealDetectionPaylogFlyIns()),
                             "Paylog-Einstellung gespeichert.");
                 }
             }
@@ -215,6 +232,22 @@ public class ModernSettingsDetailScreen extends ModernBaseScreen {
 
     private String guiFontModeLabel(GuiFontMode mode) {
         return mode == GuiFontMode.MINECRAFT ? "Eigene Minecraft-Schrift" : "Mod-Schriftart";
+    }
+    private PaylogAutoLinkMode nextPaylogAutoLinkMode(PaylogAutoLinkMode mode) {
+        return switch (mode) {
+            case OFF -> PaylogAutoLinkMode.EXACT_ONLY;
+            case EXACT_ONLY -> PaylogAutoLinkMode.EXACT_OR_PARTIAL;
+            case EXACT_OR_PARTIAL -> PaylogAutoLinkMode.EXACT_PARTIAL_OR_OVERPAY_CLOSE;
+            case EXACT_PARTIAL_OR_OVERPAY_CLOSE -> PaylogAutoLinkMode.OFF;
+        };
+    }
+    private String paylogAutoLinkModeLabel(PaylogAutoLinkMode mode) {
+        return switch (mode) {
+            case OFF -> "Aus";
+            case EXACT_ONLY -> "Nur exakt";
+            case EXACT_OR_PARTIAL -> "Exakt & Teilzahlung";
+            case EXACT_PARTIAL_OR_OVERPAY_CLOSE -> "Überzahlung schließt Deal";
+        };
     }
     private String themeModeLabel(ModernThemeMode mode) { return switch (mode) { case DARK -> "Dark"; case LIGHT -> "Light"; case CUSTOM -> "Custom"; }; }
     private String periodLabel(int days) { return days == 0 ? "Alle" : days + " Tage"; }

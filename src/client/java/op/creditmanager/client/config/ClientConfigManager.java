@@ -25,6 +25,17 @@ public final class ClientConfigManager {
         return save(loaded);
     }
 
+    public static synchronized boolean isAutoLinkDetectedPaylogsToDeals() {
+        return getConfig().isAutoLinkDetectedPaylogsToDeals();
+    }
+
+    public static synchronized boolean setAutoLinkDetectedPaylogsToDeals(boolean enabled) {
+        ClientConfig loaded = writableConfig();
+        if (loaded == null) return false;
+        loaded.setAutoLinkDetectedPaylogsToDeals(enabled);
+        return save(loaded);
+    }
+
     public static synchronized boolean isDetectPaylogsInOverlay() {
         return getConfig().isDetectPaylogsInOverlay();
     }
@@ -37,13 +48,87 @@ public final class ClientConfigManager {
     }
 
     public static synchronized boolean isShowPaylogNotifications() {
-        return getConfig().isShowPaylogNotifications();
+        return isShowAnyPaylogFlyIns();
     }
 
     public static synchronized boolean setShowPaylogNotifications(boolean enabled) {
+        return setShowAnyPaylogFlyIns(enabled);
+    }
+
+    public static synchronized boolean isShowAnyPaylogFlyIns() {
+        return getConfig().isShowAnyPaylogFlyIns();
+    }
+
+    public static synchronized boolean setShowAnyPaylogFlyIns(boolean enabled) {
         ClientConfig loaded = writableConfig();
         if (loaded == null) return false;
-        loaded.setShowPaylogNotifications(enabled);
+        loaded.setShowAnyPaylogFlyIns(enabled);
+        return save(loaded);
+    }
+
+    public static synchronized boolean isShowDealDetectionPaylogFlyIns() {
+        return getConfig().isShowDealDetectionPaylogFlyIns();
+    }
+
+    public static synchronized boolean setShowDealDetectionPaylogFlyIns(boolean enabled) {
+        ClientConfig loaded = writableConfig();
+        if (loaded == null) return false;
+        loaded.setShowDealDetectionPaylogFlyIns(enabled);
+        return save(loaded);
+    }
+
+    public static synchronized PaylogAutoLinkMode getPaylogAutoLinkMode() {
+        return getConfig().getPaylogAutoLinkMode();
+    }
+
+    public static synchronized boolean setPaylogAutoLinkMode(PaylogAutoLinkMode mode) {
+        ClientConfig loaded = writableConfig();
+        if (loaded == null) return false;
+        loaded.setPaylogAutoLinkMode(mode);
+        return save(loaded);
+    }
+
+    public static synchronized boolean isCompleteDealOnPaylogOverpay() {
+        return getConfig().isCompleteDealOnPaylogOverpay();
+    }
+
+    public static synchronized boolean setCompleteDealOnPaylogOverpay(boolean enabled) {
+        ClientConfig loaded = writableConfig();
+        if (loaded == null) return false;
+        loaded.setCompleteDealOnPaylogOverpay(enabled);
+        return save(loaded);
+    }
+
+    public static synchronized boolean isNotifyWhenPaylogHasMatchingDeal() {
+        return getConfig().isNotifyWhenPaylogHasMatchingDeal();
+    }
+
+    public static synchronized boolean setNotifyWhenPaylogHasMatchingDeal(boolean enabled) {
+        ClientConfig loaded = writableConfig();
+        if (loaded == null) return false;
+        loaded.setNotifyWhenPaylogHasMatchingDeal(enabled);
+        return save(loaded);
+    }
+
+    public static synchronized boolean isNotifyWhenPaylogHasNoMatchingDeal() {
+        return getConfig().isNotifyWhenPaylogHasNoMatchingDeal();
+    }
+
+    public static synchronized boolean setNotifyWhenPaylogHasNoMatchingDeal(boolean enabled) {
+        ClientConfig loaded = writableConfig();
+        if (loaded == null) return false;
+        loaded.setNotifyWhenPaylogHasNoMatchingDeal(enabled);
+        return save(loaded);
+    }
+
+    public static synchronized boolean isNotifyWhenPaylogHasMultipleMatchingDeals() {
+        return getConfig().isNotifyWhenPaylogHasMultipleMatchingDeals();
+    }
+
+    public static synchronized boolean setNotifyWhenPaylogHasMultipleMatchingDeals(boolean enabled) {
+        ClientConfig loaded = writableConfig();
+        if (loaded == null) return false;
+        loaded.setNotifyWhenPaylogHasMultipleMatchingDeals(enabled);
         return save(loaded);
     }
 
@@ -140,7 +225,6 @@ public final class ClientConfigManager {
         getConfig();
     }
 
-    /** Explicit user action for a corrupt configuration; the original file is kept as a backup. */
     public static synchronized boolean resetCorruptConfigWithDefaults() {
         getConfig();
         if (!recoveryRequired) return false;

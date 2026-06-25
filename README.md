@@ -2,7 +2,7 @@
 
 CreditManager ist eine clientseitige Fabric-Mod für Minecraft **1.21.11**. Sie dokumentiert Forderungen, Schulden, Geld- und Item-Zahlungen sowie erkannte Paylogs lokal auf deinem Rechner.
 
-**Version:** `1.1.0-beta` · **Java:** `21` · **Minecraft:** `1.21.11`
+**Version:** `1.1.1-beta` · **Java:** `21` · **Minecraft:** `1.21.11`
 
 ## Bedienung
 
@@ -30,7 +30,9 @@ Alle Daten liegen im Minecraft-Spielordner unter `CreditManagerLogs/`.
 
 - Deals, Zahlungen, Ereignisse und Paylogs werden in der lokalen H2-Datenbank `creditmanager.mv.db` gespeichert.
 - Alte JSON-Dateien werden beim Start automatisch und verlustfrei migriert; sie werden danach archiviert, nicht gelöscht.
-- Backups liegen im Unterordner `backups/`. Für eine Wiederherstellung Minecraft zuerst vollständig beenden.
+- H2-Sicherungen werden als validierte ZIP-Archive mit Manifest im Unterordner `backups/` angelegt.
+- Kann die aktive Datenbank nicht gelesen werden oder ist sie unerwartet leer, sperrt CreditManager Schreibvorgänge und zeigt die Wiederherstellungsansicht statt einer leeren Normal-GUI.
+- Eine Wiederherstellung legt die bisherige Datenbank zuerst unter `recovery/quarantine/` ab; sie wird nicht still gelöscht oder überschrieben.
 - Item-Zahlungen sind reine Dokumentation und übertragen keine Items an einen Server.
 
 ## Vorschau
@@ -52,6 +54,10 @@ Alle Daten liegen im Minecraft-Spielordner unter `CreditManagerLogs/`.
 1. [Fabric Loader](https://fabricmc.net/use/installer/) und passende [Fabric API](https://modrinth.com/mod/fabric-api) installieren.
 2. Die CreditManager-`.jar` in den Ordner `mods` legen.
 3. Minecraft mit Fabric starten.
+
+## Entwicklung und Release
+
+Die vollständige Build-, Release- und Fabric-Smoke-Test-Checkliste steht in [docs/RELEASE_VALIDATION.md](docs/RELEASE_VALIDATION.md).
 
 ## Hinweis und Lizenz
 

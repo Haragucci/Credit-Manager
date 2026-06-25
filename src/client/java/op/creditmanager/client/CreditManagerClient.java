@@ -11,6 +11,11 @@ import op.creditmanager.client.storage.db.DatabaseManager;
 import op.creditmanager.client.storage.db.DatabaseHealthChecker;
 import op.creditmanager.client.storage.db.LegacyJsonMigrationService;
 import op.creditmanager.client.config.ClientConfigManager;
+import op.creditmanager.client.gui.modern.toast.ModernToastManager;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.util.Identifier;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
@@ -32,20 +37,32 @@ public class CreditManagerClient implements ClientModInitializer {
 
 		FileManager.initialize();
 		ClientConfigManager.reload();
-		DatabaseManager.getInstance().initialize();
-		DatabaseHealthChecker.getInstance().check();
-		LegacyJsonMigrationService.getInstance().inspectAtStartup();
+		DatabaseManager database = DatabaseManager.getInstance();
+		database.initialize();
 
 		creditRepository = new CreditRepository();
-		creditRepository.load();
 		CreditEventRepository.getInstance().bind(creditRepository);
-
 		creditManager = new CreditManager(creditRepository);
+		if (database.isHealthy()) {
+			DatabaseHealthChecker.getInstance().check();
+			LegacyJsonMigrationService.getInstance().inspectAtStartup();
+			creditRepository.load();
+			TransactionRepository.getInstance().load();
+			CreditEventRepository.getInstance().load();
+			paymentDetector = new PaymentDetector(creditManager);
+		} else {
+			TransactionRepository.getInstance().load();
+			LOGGER.error("[CreditManager] Datenbank-Recovery erforderlich; Datenzugriffe werden bis zur Wiederherstellung übersprungen.");
+		}
 
-		TransactionRepository.getInstance().load();
-		CreditEventRepository.getInstance().load();
-
-		paymentDetector = new PaymentDetector();
+		HudElementRegistry.attachElementBefore(VanillaHudElements.CHAT,
+				Identifier.of(MOD_ID, "global_flyins"), (context, tickCounter) -> {
+					MinecraftClient client = MinecraftClient.getInstance();
+					if (client.currentScreen == null) {
+						ModernToastManager.getInstance().render(context, client.textRenderer,
+								client.getWindow().getScaledWidth(), -1, -1, tickCounter.getTickProgress(false));
+					}
+				});
 
 		ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
 			if (creditManager != null) {
@@ -70,4 +87,5 @@ public class CreditManagerClient implements ClientModInitializer {
 
 		LOGGER.info("[CreditManager] Bereit.");
 	}
+
 }

@@ -30,7 +30,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
-/** Fully automatic, lossless import of the pre-database JSON format. */
 public final class LegacyJsonMigrationService {
     private static final LegacyJsonMigrationService INSTANCE = new LegacyJsonMigrationService();
     private static final Gson GSON = new Gson();
@@ -38,11 +37,6 @@ public final class LegacyJsonMigrationService {
     private LegacyJsonMigrationService() { }
     public static LegacyJsonMigrationService getInstance() { return INSTANCE; }
 
-    /**
-     * Imports legacy JSON found at startup. Valid rows are written as normal domain data;
-     * malformed source values are retained verbatim in legacy_records and the
-     * original JSON is archived only after the transaction committed.
-     */
     public synchronized void inspectAtStartup() {
         DatabaseManager database = DatabaseManager.getInstance();
         database.initialize();
@@ -67,7 +61,6 @@ public final class LegacyJsonMigrationService {
                 result.credits(), result.payments(), result.events(), result.paylogs(), result.preservedRecords());
     }
 
-    /** Manual migration and repair screens no longer gate writable state. */
     public boolean isPending() { return false; }
 
     private AutomaticPayload readPayload() {
@@ -86,11 +79,11 @@ public final class LegacyJsonMigrationService {
 
         for (Path backup : paymentBackupFiles()) readPayments(readObject(backup, preserved), payments, preserved, false, backup.getFileName().toString());
         readCredits(creditSource, credits, payments, preserved);
-        // payments.json is authoritative when a UUID also occurs in a backup.
         readPayments(paymentSource, payments, preserved, true, "payments.json");
         readEvents(eventSource, events, preserved);
         readPaylogs(paylogSource, paylogs, preserved);
         createMissingCredits(credits, payments.values(), events.values());
+        reconcileCreditPaymentState(credits, payments, preserved);
 
         return new AutomaticPayload(List.copyOf(credits.values()), List.copyOf(payments.values()), List.copyOf(events.values()),
                 List.copyOf(paylogs.values()), List.copyOf(preserved));
@@ -134,7 +127,6 @@ public final class LegacyJsonMigrationService {
         }
     }
 
-    /** Keeps a single UUID deterministic while retaining divergent source rows for audit/recovery. */
     private void mergePayment(Map<UUID, Payment> payments, Payment incoming, String originalId, String raw,
                               List<DatabaseManager.LegacyRecord> preserved, boolean incomingWins, String sourceName) {
         Payment existing = payments.get(incoming.getId());
@@ -243,6 +235,39 @@ public final class LegacyJsonMigrationService {
         for (CreditEventEntry event : events) groupedPayments.putIfAbsent(event.getCreditId(), List.of());
         for (Map.Entry<UUID, List<Payment>> missing : groupedPayments.entrySet()) {
             if (!credits.containsKey(missing.getKey())) credits.put(missing.getKey(), placeholderCredit(missing.getKey(), missing.getValue(), "Automatisch aus verwaisten Legacy-Daten erstellt"));
+        }
+    }
+
+    private void reconcileCreditPaymentState(Map<UUID, CreditEntry> credits, Map<UUID, Payment> payments,
+                                             List<DatabaseManager.LegacyRecord> preserved) {
+        for (CreditEntry credit : credits.values()) {
+            List<Payment> linked = new ArrayList<>(payments.values().stream()
+                    .filter(payment -> credit.getId().equals(payment.getCreditId()))
+                    .sorted(Comparator.comparingLong(Payment::getTimestamp)).toList());
+            double total = linked.stream().map(Payment::getAmount).filter(Objects::nonNull).mapToDouble(Double::doubleValue).sum();
+            double recorded = Math.max(0D, credit.getPaidAmount());
+            if (recorded > total + 0.0001D) {
+                double difference = recorded - total;
+                UUID id = UUID.nameUUIDFromBytes(("migration-balance:" + credit.getId()).getBytes(StandardCharsets.UTF_8));
+                if (!payments.containsKey(id)) {
+                    Payment balance = new Payment(credit.getId(), credit.getDebtor(), credit.getCreditor(), difference, null, "MIGRATION_BALANCE");
+                    balance.setId(id);
+                    balance.setTimestamp(Math.max(1L, credit.getCreatedAt()));
+                    payments.put(id, balance);
+                    linked.add(balance);
+                    total += difference;
+                    preserve(preserved, "CREDIT", credit.getId().toString(), GSON.toJson(credit),
+                            "Gespeicherter paidAmount ohne Einzelzahlung wurde als MIGRATION_BALANCE erhalten.");
+                }
+            }
+            if (total > credit.getAmount() + 0.0001D) {
+                credit.setAmount(total);
+                preserve(preserved, "CREDIT", credit.getId().toString(), GSON.toJson(credit),
+                        "Zahlungssumme war größer als der Dealbetrag; Betrag wurde verlustfrei angepasst.");
+            }
+            String previousStatus = credit.getStatus();
+            credit.replacePayments(linked);
+            if ("CANCELLED".equals(previousStatus)) credit.setStatus("CANCELLED");
         }
     }
 

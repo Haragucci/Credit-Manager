@@ -63,6 +63,25 @@ class CreditRepositoryDatabaseTest {
     }
 
     @Test
+    void stagedLoadKeepsThePreviousInMemoryStateWhenReadingTheDatabaseFails() throws Exception {
+        useTemporaryDataDirectory();
+        CreditRepository repository = new CreditRepository();
+        repository.load();
+        CreditEntry credit = new CreditEntry(UUID.randomUUID(), "staged-deal", "creditor", "debtor", 100D, null, null);
+        repository.putCredit(credit);
+        assertTrue(repository.saveAll());
+        assertTrue(repository.load());
+
+        try (Connection connection = connection(); var statement = connection.createStatement()) {
+            statement.execute("ALTER TABLE credits DROP COLUMN deal_name");
+        }
+
+        assertFalse(repository.load());
+        assertTrue(repository.findCreditById(credit.getId()).isPresent());
+        assertEquals(1, repository.getAllCredits().size());
+    }
+
+    @Test
     void failedDatabaseTransactionLeavesThePreviousStateIntact() throws Exception {
         useTemporaryDataDirectory();
         CreditRepository repository = new CreditRepository(); repository.load();
@@ -258,12 +277,16 @@ class CreditRepositoryDatabaseTest {
         duplicate.setTimestamp(9_000_000L); duplicate.setRawText("TEST_DUPLICATE");
         assertTrue(DatabaseManager.getInstance().addPaylog(duplicate));
         TransactionEntry repeated = new TransactionEntry("same", "receiver", 5D);
-        repeated.setTimestamp(9_000_001L); repeated.setRawText("TEST_DUPLICATE");
+        repeated.setTimestamp(9_000_000L); repeated.setRawText("TEST_DUPLICATE");
         assertFalse(DatabaseManager.getInstance().addPaylog(repeated));
+        TransactionEntry distinctRapid = new TransactionEntry("same", "receiver", 5D);
+        distinctRapid.setTimestamp(9_000_001L); distinctRapid.setRawText("TEST_DUPLICATE");
+        assertTrue(DatabaseManager.getInstance().addPaylog(distinctRapid));
         assertTrue(DatabaseManager.getInstance().createBackup());
         try (var files = Files.list(FileManager.getDataDirectory().resolve("backups"))) {
-            assertTrue(files.anyMatch(path -> path.getFileName().toString().matches("creditmanager_backup_.*\\.mv\\.db")));
+            assertTrue(files.anyMatch(path -> path.getFileName().toString().matches("creditmanager_backup_.*\\.zip")));
         }
+        assertFalse(DatabaseManager.getInstance().listBackups().isEmpty());
     }
 
     @Test

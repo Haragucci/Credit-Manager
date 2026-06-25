@@ -17,15 +17,11 @@ public class TimeUtil {
                 .format(DATUM_FORMAT);
     }
 
-    @Deprecated public static String formatDatum(long ms) { return formatDate(ms); }
-
     public static String formatDateTime(long zeitstempelMs) {
         return Instant.ofEpochMilli(zeitstempelMs)
                 .atZone(ZoneId.systemDefault())
                 .format(DATUM_ZEIT_FORMAT);
     }
-
-    @Deprecated public static String formatDatumZeit(long ms) { return formatDateTime(ms); }
 
     public static Long parseDueDate(String eingabe) {
         if (eingabe == null || eingabe.isBlank()) return null;
@@ -41,8 +37,6 @@ public class TimeUtil {
         if (fälligkeitMs == null) return false;
         return System.currentTimeMillis() > fälligkeitMs;
     }
-
-    @Deprecated public static boolean istÜberfällig(Long ms) { return isOverdue(ms); }
 
     public static String getDueDateDisplay(Long fälligkeitMs) {
         if (fälligkeitMs == null) return "§7Kein Fälligkeitsdatum";

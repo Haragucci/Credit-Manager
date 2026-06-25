@@ -16,6 +16,8 @@ public class Payment {
     private List<String> itemNbtEntries;
     private long timestamp;
     private String source;
+    private UUID paylogId;
+    private String note;
 
     public Payment(UUID creditId, String fromPlayer, String toPlayer,
                    Double amount, List<String> items, String source) {
@@ -68,4 +70,10 @@ public class Payment {
 
     public String getSource() { return source; }
     public void setSource(String source) { this.source = source; }
+
+    public UUID getPaylogId() { return paylogId; }
+    public void setPaylogId(UUID paylogId) { this.paylogId = paylogId; }
+
+    public String getNote() { return note; }
+    public void setNote(String note) { this.note = note; }
 }

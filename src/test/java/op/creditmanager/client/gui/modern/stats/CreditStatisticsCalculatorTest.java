@@ -26,4 +26,29 @@ class CreditStatisticsCalculatorTest {
         assertEquals(1, statistics.deletedDealCount());
         assertEquals(1, statistics.actionCount());
     }
+
+    @Test
+    void reactivatedArchivedDealContributesAgainWhileClosedAndDeletedPaymentsStayConsistent() {
+        CreditEntry credit = new CreditEntry(UUID.randomUUID(), "other-me", "me", "other", 100D, null, "");
+        CreditEventEntry created = event(CreditEventType.CREDIT_CREATED, credit, 100D, 1L);
+        CreditEventEntry payment = event(CreditEventType.PAYMENT_ADDED, credit, 40D, 2L);
+        CreditEventEntry deletedPayment = event(CreditEventType.PAYMENT_DELETED, credit, 10D, 3L);
+        CreditEventEntry closed = event(CreditEventType.CREDIT_CLOSED, credit, 100D, 4L);
+        CreditEventEntry archived = event(CreditEventType.CREDIT_ARCHIVED, credit, 100D, 5L);
+        CreditEventEntry reactivated = event(CreditEventType.CREDIT_REACTIVATED, credit, 100D, 6L);
+
+        CreditStatistics statistics = CreditStatisticsCalculator.calculate("me", List.of(), List.of(),
+                List.of(created, payment, deletedPayment, closed, archived, reactivated), 0L, Long.MAX_VALUE);
+
+        assertEquals(100D, statistics.createdClaimsInPeriod());
+        assertEquals(30D, statistics.paidClaimsInPeriod());
+        assertEquals(1, statistics.deletedPaymentCount());
+        assertEquals(1, statistics.deletedDealCount());
+    }
+
+    private CreditEventEntry event(CreditEventType type, CreditEntry credit, double amount, long timestamp) {
+        CreditEventEntry event = new CreditEventEntry(type, credit, amount, credit.getRemainingAmount(), "", "me", "", false);
+        event.setTimestamp(timestamp);
+        return event;
+    }
 }

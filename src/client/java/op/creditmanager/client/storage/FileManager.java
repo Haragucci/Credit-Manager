@@ -61,7 +61,6 @@ public class FileManager {
         return dataDirectory.resolve("client_config.json");
     }
 
-    /** H2 creates the actual <code>.mv.db</code> file next to this base path. */
     public static Path getDatabaseFile() {
         return dataDirectory.resolve("creditmanager");
     }
@@ -83,6 +82,26 @@ public class FileManager {
         return dataDirectory.resolve("backups").resolve(backupName);
     }
 
+    public static Path getBackupDirectory() {
+        return dataDirectory.resolve("backups");
+    }
+
+    public static Path getBackupManifestFile() {
+        return getBackupDirectory().resolve("manifest.json");
+    }
+
+    public static Path getRecoveryDirectory() {
+        return dataDirectory.resolve("recovery");
+    }
+
+    public static Path getQuarantineDirectory() {
+        return getRecoveryDirectory().resolve("quarantine");
+    }
+
+    public static Path getRecoveryValidationDirectory() {
+        return getRecoveryDirectory().resolve("validation");
+    }
+
     public static void tidyAfterSuccessfulSave() {
         try {
             Path backups = dataDirectory.resolve("backups");
@@ -91,7 +110,10 @@ public class FileManager {
                 files.filter(path -> path.getFileName().toString().endsWith(".tmp")).forEach(FileManager::deleteQuietly);
             }
             try (var files = Files.list(backups)) {
-                files.filter(Files::isRegularFile).sorted(Comparator.comparingLong(FileManager::modified).reversed()).skip(12).forEach(FileManager::deleteQuietly);
+                files.filter(Files::isRegularFile)
+                        .collect(java.util.stream.Collectors.groupingBy(FileManager::backupType))
+                        .values()
+                        .forEach(group -> group.stream().sorted(Comparator.comparingLong(FileManager::modified).reversed()).skip(12).forEach(FileManager::deleteQuietly));
             }
         } catch (IOException exception) {
             CreditManagerClient.LOGGER.warn("Could not tidy CreditManager data directory", exception);
@@ -99,5 +121,10 @@ public class FileManager {
     }
 
     private static long modified(Path path) { try { return Files.getLastModifiedTime(path).toMillis(); } catch (IOException ignored) { return 0L; } }
+    private static String backupType(Path path) {
+        String name = path.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+        int marker = name.indexOf("_backup_");
+        return marker > 0 ? name.substring(0, marker) : name;
+    }
     private static void deleteQuietly(Path path) { try { Files.deleteIfExists(path); } catch (IOException ignored) { } }
 }

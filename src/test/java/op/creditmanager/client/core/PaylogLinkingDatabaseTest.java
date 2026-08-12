@@ -220,8 +220,10 @@ class PaylogLinkingDatabaseTest {
         TransactionEntry paylog = paylog(10D);
         String jdbc = "jdbc:h2:file:" + FileManager.getDatabaseFile().toAbsolutePath() + ";MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;AUTO_SERVER=FALSE";
         try (var connection = DriverManager.getConnection(jdbc); var statement = connection.createStatement()) {
-            statement.executeUpdate("INSERT INTO payments (id, credit_id, from_player, to_player, amount, items_json, created_at, source, paylog_id, revision) VALUES ('" + UUID.randomUUID() + "', '" + credit.getId() + "', 'wrong', 'direction', 20, '[]', 1, 'MANUELL', '" + paylog.getId() + "', 0)");
-            statement.executeUpdate("INSERT INTO payments (id, credit_id, from_player, to_player, amount, items_json, created_at, source, paylog_id, revision) VALUES ('" + UUID.randomUUID() + "', '" + credit.getId() + "', 'debtor', 'creditor', 1, '[]', 1, 'PAYLOG_SELECTED', '" + UUID.randomUUID() + "', 0)");
+            statement.execute("SET REFERENTIAL_INTEGRITY FALSE");
+            statement.executeUpdate("INSERT INTO payments (id, credit_id, from_player, to_player, amount, payment_kind, items_json, item_nbt_entries, created_at, source, paylog_id, revision) VALUES ('" + UUID.randomUUID() + "', '" + credit.getId() + "', 'wrong', 'direction', 2000, 'MONEY', '[]', '[]', 1, 'MANUELL', '" + paylog.getId() + "', 0)");
+            statement.executeUpdate("INSERT INTO payments (id, credit_id, from_player, to_player, amount, payment_kind, items_json, item_nbt_entries, created_at, source, paylog_id, revision) VALUES ('" + UUID.randomUUID() + "', '" + credit.getId() + "', 'debtor', 'creditor', 100, 'MONEY', '[]', '[]', 1, 'PAYLOG_SELECTED', '" + UUID.randomUUID() + "', 0)");
+            statement.execute("SET REFERENTIAL_INTEGRITY TRUE");
         }
         var findings = op.creditmanager.client.storage.db.DatabaseManager.getInstance().runHealthCheck();
         assertTrue(findings.stream().anyMatch(record -> "PAYLOG_LINK_DIRECTION".equals(record.type())));
@@ -371,8 +373,9 @@ class PaylogLinkingDatabaseTest {
 
         CreditManager.PaylogLinkResult result = manager.autoLinkDetectedPaylog(paylog.getId(), PaylogAutoLinkMode.EXACT_OR_PARTIAL, false);
 
-        assertTrue(result.linked());
-        assertEquals(oldest.getId(), result.credit().getId());
+        assertEquals(CreditManager.PaylogLinkResult.Status.AMBIGUOUS, result.status());
+        assertEquals(java.util.Set.of(oldest.getId(), newer.getId()), java.util.Set.copyOf(result.candidateIds()));
+        assertTrue(manager.getPaymentsForCredit(oldest.getId()).isEmpty());
         assertTrue(manager.getPaymentsForCredit(newer.getId()).isEmpty());
     }
 

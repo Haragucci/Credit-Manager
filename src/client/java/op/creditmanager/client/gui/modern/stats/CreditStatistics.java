@@ -2,15 +2,15 @@ package op.creditmanager.client.gui.modern.stats;
 
 import java.util.List;
 
-public record CreditStatistics(double openClaims, double openDebts, int openClaimCount, int openDebtCount,
-                               double paidClaimsInPeriod, double paidDebtsInPeriod, double netChange,
-                               double largestEvent, double averageEvent, List<HistoryPoint> history,
-                               double createdClaimsInPeriod, double createdDebtsInPeriod,
+public record CreditStatistics(long openClaimsMinor, long openDebtsMinor, int openClaimCount, int openDebtCount,
+                               long paidClaimsInPeriodMinor, long paidDebtsInPeriodMinor, long netChangeMinor,
+                               long largestEventMinor, long averageEventMinor, List<HistoryPoint> history,
+                               long createdClaimsInPeriodMinor, long createdDebtsInPeriodMinor,
                                int actionCount, int deletedDealCount, int deletedPaymentCount) {
-    public double balance() { return openClaims - openDebts; }
-    public double ratio() { return openDebts == 0.0 ? (openClaims == 0.0 ? 0.0 : 1.0) : openClaims / openDebts; }
+    public long balanceMinor() { return Math.subtractExact(openClaimsMinor, openDebtsMinor); }
+    public double ratio() { return openDebtsMinor == 0L ? (openClaimsMinor == 0L ? 0.0D : 1.0D) : (double) openClaimsMinor / openDebtsMinor; }
 
-    public record HistoryPoint(long timestamp, double claims, double debts) {
-        public double balance() { return claims - debts; }
+    public record HistoryPoint(long timestamp, long claimsMinor, long debtsMinor) {
+        public long balanceMinor() { return Math.subtractExact(claimsMinor, debtsMinor); }
     }
 }

@@ -13,16 +13,16 @@ public final class CreditStatisticsCalculator {
 
     public static CreditStatistics calculate(String player, List<CreditEntry> claims, List<CreditEntry> debts,
                                              List<CreditEventEntry> events, long fromInclusive, long toInclusive) {
-        double openClaims = claims.stream().mapToDouble(CreditEntry::getRemainingAmount).sum();
-        double openDebts = debts.stream().mapToDouble(CreditEntry::getRemainingAmount).sum();
+        long openClaimsMinor = sumRemainingMinor(claims);
+        long openDebtsMinor = sumRemainingMinor(debts);
         String name = player == null ? "" : player.toLowerCase(Locale.ROOT);
-        double paidClaims = 0.0;
-        double paidDebts = 0.0;
-        double largest = 0.0;
-        double sum = 0.0;
+        long paidClaimsMinor = 0L;
+        long paidDebtsMinor = 0L;
+        long largestMinor = 0L;
+        long sumMinor = 0L;
         int count = 0;
-        double createdClaims = 0.0;
-        double createdDebts = 0.0;
+        long createdClaimsMinor = 0L;
+        long createdDebtsMinor = 0L;
         int deletedDeals = 0;
         int deletedPayments = 0;
         Set<java.util.UUID> deletedCredits = new java.util.HashSet<>();
@@ -35,27 +35,27 @@ public final class CreditStatisticsCalculator {
 
         for (CreditEventEntry event : events) {
             if (!involves(event, name) || event.getTimestamp() < fromInclusive || event.getTimestamp() > toInclusive) continue;
-            double amount = Math.abs(event.getAmount());
+            long amountMinor = Math.abs(event.getAmountMinor());
             boolean creditor = name.equals(lower(event.getCreditor()));
             boolean debtor = name.equals(lower(event.getDebtor()));
             switch (event.getType()) {
                 case CREDIT_CREATED -> {
                     if (!deletedCredits.contains(event.getCreditId())) {
-                        if (creditor) createdClaims += amount;
-                        if (debtor) createdDebts += amount;
-                        largest = Math.max(largest, amount);
-                        sum += amount;
+                        if (creditor) createdClaimsMinor = Math.addExact(createdClaimsMinor, amountMinor);
+                        if (debtor) createdDebtsMinor = Math.addExact(createdDebtsMinor, amountMinor);
+                        largestMinor = Math.max(largestMinor, amountMinor);
+                        sumMinor = Math.addExact(sumMinor, amountMinor);
                         count++;
                     }
                 }
                 case PAYMENT_ADDED, PAYMENT_DELETED -> {
                     if (!deletedCredits.contains(event.getCreditId())) {
-                        double sign = event.getType() == CreditEventType.PAYMENT_DELETED ? -1.0 : 1.0;
-                        if (creditor) paidClaims += sign * amount;
-                        if (debtor) paidDebts += sign * amount;
+                        long signedAmountMinor = event.getType() == CreditEventType.PAYMENT_DELETED ? -amountMinor : amountMinor;
+                        if (creditor) paidClaimsMinor = Math.addExact(paidClaimsMinor, signedAmountMinor);
+                        if (debtor) paidDebtsMinor = Math.addExact(paidDebtsMinor, signedAmountMinor);
                         if (event.getType() == CreditEventType.PAYMENT_DELETED) deletedPayments++;
-                        largest = Math.max(largest, amount);
-                        sum += amount;
+                        largestMinor = Math.max(largestMinor, amountMinor);
+                        sumMinor = Math.addExact(sumMinor, amountMinor);
                         count++;
                     }
                 }
@@ -66,10 +66,19 @@ public final class CreditStatisticsCalculator {
                 default -> { }
             }
         }
-        return new CreditStatistics(openClaims, openDebts, claims.size(), debts.size(), paidClaims, paidDebts,
-                (createdClaims - createdDebts) + (paidDebts - paidClaims), largest,
-                count == 0 ? 0.0 : sum / count, List.of(), createdClaims, createdDebts,
+        long createdNetMinor = Math.subtractExact(createdClaimsMinor, createdDebtsMinor);
+        long paymentNetMinor = Math.subtractExact(paidDebtsMinor, paidClaimsMinor);
+        return new CreditStatistics(openClaimsMinor, openDebtsMinor, claims.size(), debts.size(), paidClaimsMinor, paidDebtsMinor,
+                Math.addExact(createdNetMinor, paymentNetMinor), largestMinor,
+                count == 0 ? 0L : java.math.BigDecimal.valueOf(sumMinor).divide(java.math.BigDecimal.valueOf(count), 0, java.math.RoundingMode.HALF_UP).longValueExact(),
+                List.of(), createdClaimsMinor, createdDebtsMinor,
                 count, deletedDeals, deletedPayments);
+    }
+
+    private static long sumRemainingMinor(List<CreditEntry> entries) {
+        long sum = 0L;
+        for (CreditEntry entry : entries) sum = Math.addExact(sum, entry.getRemainingAmountMinor());
+        return sum;
     }
 
     private static boolean involves(CreditEventEntry event, String player) {

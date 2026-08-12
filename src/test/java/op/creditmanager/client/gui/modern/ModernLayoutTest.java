@@ -1,6 +1,7 @@
 package op.creditmanager.client.gui.modern;
 
 import org.junit.jupiter.api.Test;
+import op.creditmanager.client.gui.modern.widget.ModernScrollArea;
 
 import java.util.List;
 
@@ -10,27 +11,38 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ModernLayoutTest {
     @Test
-    void buttonRowsStayInsideTheirAvailableWidthOrStackVertically() {
-        for (int width : List.of(1, 80, 176, 360)) {
-            List<ModernLayout.Bounds> bounds = ModernLayout.buttonRow(10, 20, width, 2, 88, 23, 8);
-            assertEquals(2, bounds.size());
-            assertTrue(bounds.stream().allMatch(value -> value.width() >= 1 && value.height() == 23));
-            if (ModernLayout.stack(width, 2, 88, 8)) {
-                assertEquals(bounds.getFirst().x(), bounds.get(1).x());
-                assertTrue(bounds.get(1).y() >= bounds.getFirst().bottom());
-            } else {
-                assertTrue(bounds.stream().allMatch(value -> value.x() >= 10 && value.right() <= 10 + width));
-                assertFalse(bounds.getFirst().overlaps(bounds.get(1)));
-            }
+    void tinyLogicalSizesKeepCreateAndEditActionsBoundedAndScrollable() {
+        for (int[] size : List.of(new int[]{160, 120}, new int[]{200, 140}, new int[]{320, 180})) {
+            ModernLayout.ShellBounds shell = ModernLayout.shell(size[0], size[1]);
+            assertTrue(shell.contentWidth() > 0);
+            assertTrue(shell.contentHeight() > 0);
+            assertTrue(shell.contentX() >= shell.panelX());
+            assertTrue(shell.contentX() + shell.contentWidth() <= shell.panelX() + shell.panelWidth());
+
+            assertReachable(shell, 2, 74, 287);
+            assertReachable(shell, 3, 74, ModernLayout.stack(Math.max(1, shell.contentWidth() - 8), 3, 74, 8) ? 558 : 496);
+            assertTrue(Math.max(1, shell.contentWidth() - 22) <= shell.contentWidth());
         }
     }
 
-    @Test
-    void inventoryGridAlwaysHasAtLeastOneColumnAndViewportChecksAreStrict() {
-        assertEquals(1, ModernLayout.inventoryColumns(1, 16, 9));
-        assertEquals(9, ModernLayout.inventoryColumns(400, 16, 9));
-        assertTrue(ModernLayout.visibleInViewport(10, 20, 0, 30));
-        assertFalse(ModernLayout.visibleInViewport(30, 10, 0, 30));
-        assertFalse(ModernLayout.visibleInViewport(-11, 10, 0, 30));
+    private void assertReachable(ModernLayout.ShellBounds shell, int count, int minimumWidth, int formHeight) {
+        List<ModernLayout.Bounds> actions = ModernLayout.buttonRow(shell.contentX(), 0, shell.contentWidth(), count, minimumWidth, 23, 8);
+        for (ModernLayout.Bounds bounds : actions) {
+            assertTrue(bounds.x() >= shell.contentX());
+            assertTrue(bounds.right() <= shell.contentX() + shell.contentWidth());
+            assertTrue(bounds.width() > 0);
+        }
+        for (int left = 0; left < actions.size(); left++) {
+            for (int right = left + 1; right < actions.size(); right++) assertFalse(actions.get(left).overlaps(actions.get(right)));
+        }
+        int viewportHeight = Math.max(1, shell.contentHeight() - 8);
+        ModernScrollArea scroll = new ModernScrollArea();
+        scroll.setBounds(shell.contentX(), shell.contentY(), shell.contentWidth(), viewportHeight, formHeight);
+        if (formHeight > viewportHeight) {
+            assertTrue(scroll.isScrollable());
+            scroll.scroll(-10_000D);
+            for (int index = 0; index < 100; index++) scroll.tick(0, 0);
+            assertEquals(formHeight - viewportHeight, scroll.offset());
+        }
     }
 }

@@ -14,4 +14,9 @@ final class DatabaseConnectionFactory {
         String path = databaseBase.toAbsolutePath().normalize().toString().replace('\\', '/').replace(";", "\\;");
         return DriverManager.getConnection("jdbc:h2:file:" + path + ";MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;AUTO_SERVER=FALSE");
     }
+
+    Connection openReadOnly(Path databaseBase) throws SQLException {
+        String path = databaseBase.toAbsolutePath().normalize().toString().replace('\\', '/').replace(";", "\\;");
+        return DriverManager.getConnection("jdbc:h2:file:" + path + ";MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;AUTO_SERVER=FALSE;ACCESS_MODE_DATA=r;IFEXISTS=TRUE");
+    }
 }

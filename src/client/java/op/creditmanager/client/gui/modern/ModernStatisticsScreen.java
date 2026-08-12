@@ -21,7 +21,7 @@ import op.creditmanager.client.util.FormatUtil;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
-import java.util.OptionalDouble;
+import java.util.OptionalLong;
 
 public class ModernStatisticsScreen extends ModernBaseScreen {
     private static final String[] PERIODS = {"7 Tage", "30 Tage", "90 Tage", "Alle", "Custom"};
@@ -68,7 +68,7 @@ public class ModernStatisticsScreen extends ModernBaseScreen {
         long from = rangeStart(now);
         long to = rangeEnd(now);
         CreditStatistics stats = statisticsForCurrentView(now, from, to);
-        OptionalDouble accountBalance = BalanceReader.readCurrentBalance(MinecraftClient.getInstance());
+        OptionalLong accountBalance = BalanceReader.readCurrentBalanceMinor(MinecraftClient.getInstance());
 
         viewportY = contentY + 6;
         viewportHeight = Math.max(32, contentY + contentHeight - viewportY - 7);
@@ -88,7 +88,8 @@ public class ModernStatisticsScreen extends ModernBaseScreen {
         drawPeriodControl(context, mouseX, mouseY, theme);
         drawMetrics(context, stats, accountBalance, metricsOffset + periodY);
         ModernChartRenderer.bars(context, textRenderer, contentX, periodY + chartsY, safeContentWidth,
-                CHART_HEIGHT, stats.openClaims(), stats.openDebts());
+                CHART_HEIGHT, op.creditmanager.client.money.MoneyRules.toDisplayDouble(stats.openClaimsMinor()),
+                op.creditmanager.client.money.MoneyRules.toDisplayDouble(stats.openDebtsMinor()));
         context.disableScissor();
         contentScroll.renderScrollbar(context, mouseX, mouseY);
 
@@ -104,22 +105,23 @@ public class ModernStatisticsScreen extends ModernBaseScreen {
         }
     }
 
-    private void drawMetrics(DrawContext context, CreditStatistics stats, OptionalDouble accountBalance, int y) {
+    private void drawMetrics(DrawContext context, CreditStatistics stats, OptionalLong accountBalance, int y) {
         ModernThemePalette theme = ModernUi.theme();
-        String forecast = accountBalance.isPresent() ? FormatUtil.formatAmount(accountBalance.getAsDouble() + stats.balance())
+        long forecastMinor = accountBalance.isPresent() ? Math.addExact(accountBalance.getAsLong(), stats.balanceMinor()) : 0L;
+        String forecast = accountBalance.isPresent() ? FormatUtil.formatAmountMinor(forecastMinor)
                 : "Kontostand nicht erkennbar";
         List<Metric> metrics = List.of(
-                new Metric("Aktuell: offene Forderungen", FormatUtil.formatAmount(stats.openClaims()), theme.success),
-                new Metric("Aktuell: offene Schulden", FormatUtil.formatAmount(stats.openDebts()), theme.danger),
-                new Metric("Aktueller Saldo", (stats.balance() >= 0 ? "+" : "") + FormatUtil.formatAmount(stats.balance()),
-                        stats.balance() >= 0 ? theme.success : theme.danger),
+                new Metric("Aktuell: offene Forderungen", FormatUtil.formatAmountMinor(stats.openClaimsMinor()), theme.success),
+                new Metric("Aktuell: offene Schulden", FormatUtil.formatAmountMinor(stats.openDebtsMinor()), theme.danger),
+                new Metric("Aktueller Saldo", (stats.balanceMinor() >= 0 ? "+" : "") + FormatUtil.formatAmountMinor(stats.balanceMinor()),
+                        stats.balanceMinor() >= 0 ? theme.success : theme.danger),
                 new Metric("Kontostand nach Verrechnung", forecast, accountBalance.isPresent() ? theme.accent : theme.muted),
-                new Metric("Zeitraum: neue Forderungen", FormatUtil.formatAmount(stats.createdClaimsInPeriod()), theme.success),
-                new Metric("Zeitraum: neue Schulden", FormatUtil.formatAmount(stats.createdDebtsInPeriod()), theme.danger),
-                new Metric("Zeitraum: Zahlungen erhalten", FormatUtil.formatAmount(stats.paidClaimsInPeriod()), theme.success),
-                new Metric("Zeitraum: Zahlungen geleistet", FormatUtil.formatAmount(stats.paidDebtsInPeriod()), theme.danger),
-                new Metric("Zeitraum: Netto-Veränderung", (stats.netChange() >= 0 ? "+" : "") + FormatUtil.formatAmount(stats.netChange()),
-                        stats.netChange() >= 0 ? theme.success : theme.danger),
+                new Metric("Zeitraum: neue Forderungen", FormatUtil.formatAmountMinor(stats.createdClaimsInPeriodMinor()), theme.success),
+                new Metric("Zeitraum: neue Schulden", FormatUtil.formatAmountMinor(stats.createdDebtsInPeriodMinor()), theme.danger),
+                new Metric("Zeitraum: Zahlungen erhalten", FormatUtil.formatAmountMinor(stats.paidClaimsInPeriodMinor()), theme.success),
+                new Metric("Zeitraum: Zahlungen geleistet", FormatUtil.formatAmountMinor(stats.paidDebtsInPeriodMinor()), theme.danger),
+                new Metric("Zeitraum: Netto-Veränderung", (stats.netChangeMinor() >= 0 ? "+" : "") + FormatUtil.formatAmountMinor(stats.netChangeMinor()),
+                        stats.netChangeMinor() >= 0 ? theme.success : theme.danger),
                 new Metric("Zeitraum: Aktionen", String.valueOf(stats.actionCount()), theme.muted)
         );
         int columns = metricsTwoColumns ? 2 : 1;
@@ -193,7 +195,13 @@ public class ModernStatisticsScreen extends ModernBaseScreen {
             }
         }
         int days = periodIndex == 0 ? 7 : periodIndex == 2 ? 90 : 30;
-        return now - days * 86_400_000L;
+        return rangeStartForPreset(now, days, ZoneId.systemDefault());
+    }
+
+    static long rangeStartForPreset(long now, int days, ZoneId zone) {
+        if (days < 1) throw new IllegalArgumentException("days must be positive");
+        return java.time.Instant.ofEpochMilli(now).atZone(zone).toLocalDate().minusDays(days - 1L)
+                .atStartOfDay(zone).toInstant().toEpochMilli();
     }
 
     private long rangeEnd(long fallback) {

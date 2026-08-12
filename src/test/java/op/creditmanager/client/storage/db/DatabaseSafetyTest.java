@@ -13,9 +13,11 @@ import op.creditmanager.client.model.CreditEntry;
 import op.creditmanager.client.model.CreditEventEntry;
 import op.creditmanager.client.model.CreditEventType;
 import op.creditmanager.client.model.TransactionEntry;
+import op.creditmanager.client.money.MoneyRules;
 import op.creditmanager.client.storage.DataHealth;
 import op.creditmanager.client.storage.FileManager;
 
+import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -25,6 +27,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -84,7 +87,10 @@ class DatabaseSafetyTest {
         assertEquals(25D, afterPayment.findCreditById(first.getId()).orElseThrow().getPaidAmount());
         assertTrue(afterPayment.findCreditById(second.getId()).isPresent());
 
+        long revisionBeforeDelete = DatabaseManager.getInstance().revision();
         manager.deletePayment(payment.getId());
+        assertEquals(revisionBeforeDelete + 1L, DatabaseManager.getInstance().revision());
+        assertEquals(0L, countRows("payments"));
         CreditRepository afterDelete = new CreditRepository();
         afterDelete.load();
         assertEquals(2, afterDelete.getAllCredits().size());
@@ -331,6 +337,166 @@ class DatabaseSafetyTest {
         assertEquals(0, result.failed());
     }
 
+    @Test
+    void failedRestoreInstallMoveRollsTheExactOriginalBack() throws Exception {
+        CreditManager manager = manager();
+        manager.createCredit("creditor", "debtor", 100D, null, "restore", null);
+        assertTrue(DatabaseManager.getInstance().createBackup());
+        Path active = FileManager.getDatabaseStorageFile().toAbsolutePath().normalize();
+        byte[] original = Files.readAllBytes(active);
+        RecoveryFileOps fileOps = new RecoveryFileOps() {
+            @Override
+            void moveWithoutReplacing(Path source, Path target) throws IOException {
+                if (target.toAbsolutePath().normalize().equals(active) && source.toString().contains("restore-")) {
+                    throw new IOException("injected install move failure");
+                }
+                super.moveWithoutReplacing(source, target);
+            }
+        };
+
+        DatabaseCoordinator coordinator = new DatabaseCoordinator(DatabaseFaultInjector.NONE, fileOps);
+
+        assertFalse(coordinator.restoreLatestValidBackup());
+        assertTrue(Files.isRegularFile(active));
+        assertArrayEquals(original, Files.readAllBytes(active));
+        assertEquals(DatabaseManager.DatabaseAvailability.NEEDS_USER_RECOVERY, coordinator.availability());
+    }
+
+    @Test
+    void failedRestoreRollbackRetainsOriginalAndRequiresExplicitRecovery() throws Exception {
+        CreditManager manager = manager();
+        manager.createCredit("creditor", "debtor", 100D, null, "restore", null);
+        assertTrue(DatabaseManager.getInstance().createBackup());
+        Path active = FileManager.getDatabaseStorageFile().toAbsolutePath().normalize();
+        RecoveryFileOps fileOps = new RecoveryFileOps() {
+            private boolean installFailed;
+
+            @Override
+            void moveWithoutReplacing(Path source, Path target) throws IOException {
+                if (target.toAbsolutePath().normalize().equals(active) && source.toString().contains("restore-")) {
+                    installFailed = true;
+                    throw new IOException("injected install move failure");
+                }
+                if (installFailed && target.toAbsolutePath().normalize().equals(active)) {
+                    throw new IOException("injected rollback move failure");
+                }
+                super.moveWithoutReplacing(source, target);
+            }
+        };
+
+        DatabaseCoordinator coordinator = new DatabaseCoordinator(DatabaseFaultInjector.NONE, fileOps);
+
+        assertFalse(coordinator.restoreLatestValidBackup());
+        assertFalse(Files.exists(active));
+        assertEquals(DatabaseManager.DatabaseAvailability.NEEDS_USER_RECOVERY, coordinator.availability());
+        try (var files = Files.list(FileManager.getQuarantineDirectory())) {
+            assertTrue(files.anyMatch(path -> path.getFileName().toString().endsWith(".mv.db")));
+        }
+        try (var files = Files.list(FileManager.getBackupDirectory())) {
+            assertTrue(files.anyMatch(path -> path.getFileName().toString().endsWith(".zip")));
+        }
+    }
+
+    @Test
+    void ignoringExcludedRecoveryRowNeverPersistsTheFilteredSnapshot() throws Exception {
+        useTemporaryDataDirectory();
+        DatabaseManager.getInstance().initialize();
+        UUID paymentId = UUID.randomUUID();
+        UUID missingCreditId = UUID.randomUUID();
+        try (var connection = openConnection(); var statement = connection.createStatement()) {
+            statement.execute("SET REFERENTIAL_INTEGRITY FALSE");
+            statement.executeUpdate("INSERT INTO payments (id,credit_id,from_player,to_player,amount,payment_kind,items_json,item_nbt_entries,created_at,source,note,revision) VALUES ('" + paymentId + "','" + missingCreditId + "','debtor','creditor',1234,'MONEY','[]','[]',99,'RECOVERY_TEST','raw-note',0)");
+            statement.execute("SET REFERENTIAL_INTEGRITY TRUE");
+        }
+        CreditRepository repository = new CreditRepository();
+        assertTrue(repository.load());
+        CreditRepository.RecoveryRecord record = repository.getRecoveryRecords().stream()
+                .filter(value -> value.type() == CreditRepository.RecoveryType.PAYMENT).findFirst().orElseThrow();
+
+        assertTrue(repository.ignoreRecovery(record.token()));
+
+        assertFalse(repository.saveAll());
+        assertEquals(CreditRepository.RecoveryStatus.ACKNOWLEDGED, repository.getRecoveryRecords().stream()
+                .filter(value -> value.token().equals(record.token())).findFirst().orElseThrow().status());
+        assertEquals(1L, countRows("payments", "id='" + paymentId + "' AND credit_id='" + missingCreditId + "' AND amount=1234 AND source='RECOVERY_TEST' AND note='raw-note'"));
+        assertEquals(0L, countRows("credits"));
+    }
+
+    @Test
+    void explicitDiscardRequiresConfirmationAndCreatesValidatedAuditedSnapshot() throws Exception {
+        CreditManager manager = manager();
+        CreditEntry retained = manager.createCredit("creditor", "debtor", 100D, null, "retained", null);
+        UUID paymentId = insertOrphanPayment();
+        DatabaseManager.getInstance().runHealthCheck();
+        CreditRepository repository = new CreditRepository();
+        assertTrue(repository.load());
+        CreditRepository.RecoveryRecord record = repository.getRecoveryRecords().stream()
+                .filter(value -> value.type() == CreditRepository.RecoveryType.PAYMENT && paymentId.toString().equals(value.sourceKey()))
+                .findFirst().orElseThrow();
+
+        assertFalse(repository.discardRecovery(record.token(), false));
+        assertEquals(1L, countRows("payments", "id='" + paymentId + "'"));
+        assertFalse(Files.exists(FileManager.getDiscardRecoveryDirectory()));
+
+        assertTrue(repository.discardRecovery(record.token(), true));
+
+        assertEquals(0L, countRows("payments", "id='" + paymentId + "'"));
+        assertEquals(1L, countRows("credits", "id='" + retained.getId() + "'"));
+        assertEquals(1L, countRows("legacy_records", "record_kind='DISCARD_PAYMENT' AND original_id='" + paymentId + "'"));
+        try (var files = Files.list(FileManager.getDiscardRecoveryDirectory())) {
+            List<Path> artifacts = files.toList();
+            assertEquals(1L, artifacts.stream().filter(path -> path.getFileName().toString().endsWith(".zip")).count());
+            Path manifest = artifacts.stream().filter(path -> path.getFileName().toString().endsWith(".manifest.json")).findFirst().orElseThrow();
+            String content = Files.readString(manifest);
+            assertTrue(content.contains("\"status\":\"VALIDATED\""));
+            assertTrue(content.contains(paymentId.toString()));
+        }
+        assertTrue(DatabaseManager.getInstance().runHealthCheck().stream().noneMatch(value -> paymentId.toString().equals(value.sourceId()) && "OPEN".equals(value.status())));
+        assertTrue(repository.getRecoveryRecords().stream().noneMatch(value -> value.token().equals(record.token())));
+    }
+
+    @Test
+    void explicitCreditDiscardAuditsAndValidatesAllCascadeRows() throws Exception {
+        CreditManager manager = manager();
+        CreditEntry credit = manager.createCredit("creditor", "debtor", 100D, null, "discard-cascade", null);
+        manager.addMoneyPayment(credit.getId(), "debtor", 25D);
+        long paymentCount = countRows("payments", "credit_id='" + credit.getId() + "'");
+        long eventCount = countRows("credit_events", "credit_id='" + credit.getId() + "'");
+        try (var connection = openConnection(); var statement = connection.prepareStatement("UPDATE credits SET debtor=creditor WHERE id=?")) {
+            statement.setString(1, credit.getId().toString());
+            assertEquals(1, statement.executeUpdate());
+        }
+        DatabaseManager.getInstance().runHealthCheck();
+        CreditRepository repository = new CreditRepository();
+        assertTrue(repository.load());
+        CreditRepository.RecoveryRecord record = repository.getRecoveryRecords().stream()
+                .filter(value -> value.type() == CreditRepository.RecoveryType.CREDIT && credit.getId().toString().equals(value.sourceKey()))
+                .findFirst().orElseThrow();
+
+        assertTrue(repository.discardRecovery(record.token(), true));
+
+        assertEquals(0L, countRows("credits", "id='" + credit.getId() + "'"));
+        assertEquals(0L, countRows("payments", "credit_id='" + credit.getId() + "'"));
+        assertEquals(0L, countRows("credit_events", "credit_id='" + credit.getId() + "'"));
+        assertEquals(1L, countRows("legacy_records", "record_kind='DISCARD_CREDIT' AND original_id='" + credit.getId() + "'"));
+        assertEquals(paymentCount, countRows("legacy_records", "record_kind='DISCARD_CREDIT_PAYMENT'"));
+        assertEquals(eventCount, countRows("legacy_records", "record_kind='DISCARD_CREDIT_EVENT'"));
+        assertTrue(DatabaseManager.getInstance().runHealthCheck().stream().noneMatch(value -> credit.getId().toString().equals(value.sourceId()) && "OPEN".equals(value.status())));
+    }
+
+    @Test
+    void maximumMinusOneCentRoundTripsExactlyThroughBigintStorage() throws Exception {
+        useTemporaryDataDirectory();
+        DatabaseManager database = DatabaseManager.getInstance();
+        CreditEntry credit = new CreditEntry(UUID.randomUUID(), "maximum", "creditor", "debtor", MoneyRules.MAX_MINOR - 1L, null, null);
+
+        assertTrue(database.commitCreditMutation(new DatabaseManager.CreditMutation(credit, List.of(), List.of(), List.of())));
+
+        CreditEntry reloaded = database.loadCreditState().credits().getFirst();
+        assertEquals(MoneyRules.MAX_MINOR - 1L, reloaded.getAmountMinor());
+        assertEquals("bigint", columnType("credits", "amount"));
+    }
+
     private CreditManager manager() throws Exception {
         useTemporaryDataDirectory();
         CreditRepository repository = new CreditRepository();
@@ -398,12 +564,14 @@ class DatabaseSafetyTest {
         }
     }
 
-    private void insertOrphanPayment() throws Exception {
+    private UUID insertOrphanPayment() throws Exception {
+        UUID paymentId = UUID.randomUUID();
         try (var connection = openConnection(); var statement = connection.createStatement()) {
             statement.execute("SET REFERENTIAL_INTEGRITY FALSE");
-            statement.executeUpdate("INSERT INTO payments (id, credit_id, from_player, to_player, amount, items_json, created_at, source, revision) VALUES ('" + UUID.randomUUID() + "', '" + UUID.randomUUID() + "', 'debtor', 'creditor', 5, '[]', 1, 'MANUAL', 0)");
+            statement.executeUpdate("INSERT INTO payments (id, credit_id, from_player, to_player, amount, payment_kind, items_json, item_nbt_entries, created_at, source, revision) VALUES ('" + paymentId + "', '" + UUID.randomUUID() + "', 'debtor', 'creditor', 5, 'MONEY', '[]', '[]', 1, 'MANUAL', 0)");
             statement.execute("SET REFERENTIAL_INTEGRITY TRUE");
         }
+        return paymentId;
     }
 
     private void insertOrphanEvent() throws Exception {
@@ -422,6 +590,17 @@ class DatabaseSafetyTest {
         try (var connection = openConnection(); var statement = connection.createStatement(); var result = statement.executeQuery("SELECT COUNT(*) FROM " + table + " WHERE " + condition)) {
             result.next();
             return result.getLong(1);
+        }
+    }
+
+    private String columnType(String table, String column) throws Exception {
+        try (var connection = openConnection(); var statement = connection.prepareStatement("SELECT data_type FROM information_schema.columns WHERE table_name=? AND column_name=?")) {
+            statement.setString(1, table);
+            statement.setString(2, column);
+            try (var result = statement.executeQuery()) {
+                result.next();
+                return result.getString(1);
+            }
         }
     }
 

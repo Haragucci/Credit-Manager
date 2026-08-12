@@ -296,7 +296,8 @@ class CreditRepositoryDatabaseTest {
         database.initialize();
         try (Connection connection = connection()) {
             try (var statement = connection.createStatement()) {
-                statement.executeUpdate("INSERT INTO credits (id, deal_name, creditor, debtor, amount, paid_amount, created_at, status, archived, revision) VALUES ('" + UUID.randomUUID() + "', 'bad', 'creditor', 'debtor', -1, 0, 1, 'OPEN', FALSE, 0)");
+                assertThrows(SQLException.class, () -> statement.executeUpdate("INSERT INTO credits (id, deal_name, creditor, debtor, amount, paid_amount, created_at, status, archived, revision) VALUES ('" + UUID.randomUUID() + "', 'bad', 'creditor', 'debtor', -1, 0, 1, 'OPEN', FALSE, 0)"));
+                statement.executeUpdate("INSERT INTO credits (id, deal_name, creditor, debtor, amount, paid_amount, created_at, status, archived, revision) VALUES ('" + UUID.randomUUID() + "', 'bad', 'creditor', 'debtor', 100, 1, 1, 'PARTIAL', FALSE, 0)");
             }
             assertThrows(SQLException.class, () -> {
                 try (var statement = connection.createStatement()) {
@@ -305,10 +306,10 @@ class CreditRepositoryDatabaseTest {
             });
         }
         List<DatabaseManager.DataHealthRecord> first = database.runHealthCheck();
-        assertTrue(first.stream().anyMatch(record -> "CREDIT_AMOUNT".equals(record.type())));
+        assertTrue(first.stream().anyMatch(record -> "CREDIT_PAYMENT_TOTAL".equals(record.type())));
         List<DatabaseManager.DataHealthRecord> second = database.runHealthCheck();
         assertEquals(first.size(), second.size());
-        DatabaseManager.DataHealthRecord finding = first.stream().filter(record -> "CREDIT_AMOUNT".equals(record.type())).findFirst().orElseThrow();
+        DatabaseManager.DataHealthRecord finding = first.stream().filter(record -> "CREDIT_PAYMENT_TOTAL".equals(record.type())).findFirst().orElseThrow();
         assertTrue(database.resolveHealthRecord(finding.id(), "{}", false));
         assertTrue(database.listHealthRecords(false).stream().noneMatch(record -> finding.id().equals(record.id())));
     }

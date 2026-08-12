@@ -13,12 +13,24 @@ import op.creditmanager.client.storage.db.DatabaseManager;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public final class ModernRecoveryScreen extends ModernBaseScreen {
+    private static final ExecutorService RECOVERY_IO = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "CreditManager-Recovery");
+        thread.setDaemon(true);
+        return thread;
+    });
     private final ModernScrollArea scroll = new ModernScrollArea();
     private List<ModernLayout.Bounds> recoveryButtons = List.of();
     private int viewportY, viewportHeight;
     private boolean confirmEmptyDatabase;
+    private RecoveryViewState viewState = RecoveryViewState.loading();
+    private CompletableFuture<RecoverySnapshot> pendingLoad;
+    private long loadSequence;
+    private boolean disposed;
 
     public ModernRecoveryScreen(CreditManager manager) {
         super(manager, null, "Datenwiederherstellung", "settings");
@@ -27,6 +39,13 @@ public final class ModernRecoveryScreen extends ModernBaseScreen {
     @Override
     protected boolean handleSidebarClick(Click click) {
         return false;
+    }
+
+    @Override
+    protected void init() {
+        super.init();
+        disposed = false;
+        refreshViewState();
     }
 
     @Override
@@ -39,7 +58,7 @@ public final class ModernRecoveryScreen extends ModernBaseScreen {
         int buttonY = contentY + contentHeight - buttonHeight;
         recoveryButtons = ModernLayout.buttonRow(contentX, buttonY, contentWidth, buttonCount, 74, 23, 8);
         viewportHeight = Math.max(34, buttonY - viewportY - 8);
-        List<String> lines = lines();
+        List<String> lines = viewState.lines();
         int lineHeight = textRenderer.fontHeight + 5;
         int contentHeight = 44 + lines.size() * lineHeight + 10;
         scroll.setBounds(contentX, viewportY, contentWidth, viewportHeight, contentHeight);
@@ -78,7 +97,7 @@ public final class ModernRecoveryScreen extends ModernBaseScreen {
         super.render(context, mouseX, mouseY, delta);
     }
 
-    private List<String> lines() {
+    private RecoverySnapshot loadSnapshot() {
         List<String> lines = new ArrayList<>();
         lines.add("Datenpfad: " + FileManager.getDataDirectory());
         lines.add("Datenbank: " + FileManager.getDatabaseStorageFile());
@@ -86,7 +105,20 @@ public final class ModernRecoveryScreen extends ModernBaseScreen {
         for (String reason : DataHealth.reasons()) lines.add("• " + reason);
         for (CreditRepository.RecoveryRecord record : manager.getRecoveryRecords()) lines.add("• " + record.message());
         if (lines.size() == 3) lines.add("• Die Datenbank konnte noch nicht als schreibsicher bestätigt werden.");
-        return lines;
+        return new RecoverySnapshot(List.copyOf(lines));
+    }
+
+    private void refreshViewState() {
+        long sequence = ++loadSequence;
+        if (pendingLoad != null) pendingLoad.cancel(true);
+        viewState = RecoveryViewState.loading();
+        pendingLoad = CompletableFuture.supplyAsync(this::loadSnapshot, RECOVERY_IO);
+        pendingLoad.whenComplete((snapshot, error) -> MinecraftClient.getInstance().execute(() -> {
+            if (disposed || sequence != loadSequence || MinecraftClient.getInstance().currentScreen != this) return;
+            viewState = error == null ? RecoveryViewState.ready(snapshot.lines())
+                    : RecoveryViewState.error("Recovery-Informationen konnten nicht geladen werden.");
+            pendingLoad = null;
+        }));
     }
 
     @Override
@@ -97,19 +129,26 @@ public final class ModernRecoveryScreen extends ModernBaseScreen {
             if (manager.recheckAndRepairDatabase()) {
                 toastSuccess("Schema erfolgreich geprüft und repariert.");
                 MinecraftClient.getInstance().setScreen(new ModernMainScreen(manager));
-            } else toastWarning("Schema konnte noch nicht vollständig repariert werden.");
+            } else {
+                toastWarning("Schema konnte noch nicht vollständig repariert werden.");
+                refreshViewState();
+            }
             return true;
         }
         if (recoveryButtons.size() > 1 && ModernUi.contains(click.x(), click.y(), recoveryButtons.get(1).x(), recoveryButtons.get(1).y(), recoveryButtons.get(1).width(), recoveryButtons.get(1).height())) {
             if (manager.recheckAndRepairDatabase()) {
                 toastSuccess("Datenbankprüfung abgeschlossen.");
                 MinecraftClient.getInstance().setScreen(new ModernMainScreen(manager));
-            } else toastWarning("Datenprüfung ist weiterhin erforderlich.");
+            } else {
+                toastWarning("Datenprüfung ist weiterhin erforderlich.");
+                refreshViewState();
+            }
             return true;
         }
         if (recoveryButtons.size() > 2 && ModernUi.contains(click.x(), click.y(), recoveryButtons.get(2).x(), recoveryButtons.get(2).y(), recoveryButtons.get(2).width(), recoveryButtons.get(2).height())) {
             if (manager.createSafetyBackup()) toastSuccess("H2-Sicherung erstellt.");
             else toastError("Sicherung konnte nicht erstellt werden.");
+            refreshViewState();
             return true;
         }
         if (recoveryButtons.size() > 3 && ModernUi.contains(click.x(), click.y(), recoveryButtons.get(3).x(), recoveryButtons.get(3).y(), recoveryButtons.get(3).width(), recoveryButtons.get(3).height())) {
@@ -141,5 +180,25 @@ public final class ModernRecoveryScreen extends ModernBaseScreen {
             return true;
         }
         return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
+    }
+
+    @Override
+    protected void clearTransientState() {
+        disposed = true;
+        loadSequence++;
+        if (pendingLoad != null) pendingLoad.cancel(true);
+        pendingLoad = null;
+        viewState = RecoveryViewState.loading();
+        scroll.reset();
+        super.clearTransientState();
+    }
+
+    private record RecoverySnapshot(List<String> lines) { }
+
+    private record RecoveryViewState(Status status, List<String> lines) {
+        private static RecoveryViewState loading() { return new RecoveryViewState(Status.LOADING, List.of("Recovery-Informationen werden geladen…")); }
+        private static RecoveryViewState ready(List<String> lines) { return new RecoveryViewState(Status.READY, List.copyOf(lines)); }
+        private static RecoveryViewState error(String message) { return new RecoveryViewState(Status.ERROR, List.of(message)); }
+        private enum Status { LOADING, READY, ERROR }
     }
 }

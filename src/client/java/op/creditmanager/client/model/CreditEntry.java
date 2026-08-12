@@ -1,5 +1,8 @@
 package op.creditmanager.client.model;
 
+import op.creditmanager.client.money.CreditStatusRules;
+import op.creditmanager.client.money.MoneyRules;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -10,8 +13,8 @@ public class CreditEntry {
     private String dealName;
     private String creditor;
     private String debtor;
-    private double amount;
-    private double paidAmount;
+    private long amountMinor;
+    private long paidAmountMinor;
     private long createdAt;
     private Long dueDate;
     private String status;
@@ -25,18 +28,24 @@ public class CreditEntry {
     }
 
     public CreditEntry(UUID id, String dealName, String creditor, String debtor,
-                       double amount, Long dueDate, String note) {
+                       long amountMinor, Long dueDate, String note) {
         this.id = id;
         this.dealName = dealName;
         this.creditor = creditor;
         this.debtor = debtor;
-        this.amount = amount;
-        this.paidAmount = 0.0;
+        this.amountMinor = amountMinor;
+        this.paidAmountMinor = 0L;
         this.createdAt = System.currentTimeMillis();
         this.dueDate = dueDate;
         this.status = "OPEN";
         this.payments = new ArrayList<>();
         this.note = note;
+    }
+
+    @Deprecated
+    public CreditEntry(UUID id, String dealName, String creditor, String debtor,
+                       double amount, Long dueDate, String note) {
+        this(id, dealName, creditor, debtor, MoneyRules.fromLegacyDouble(amount, true).minorUnits(), dueDate, note);
     }
 
     public static String buildDealName(String debtor, String creditor, String label) {
@@ -51,15 +60,13 @@ public class CreditEntry {
         return base.toLowerCase();
     }
 
-    public double getRemainingAmount() {
-        return Math.max(0, amount - paidAmount);
+    public long getRemainingAmountMinor() {
+        return Math.max(0L, Math.subtractExact(amountMinor, paidAmountMinor));
     }
 
     public void addPayment(Payment payment) {
         payments.add(payment);
-        if (payment.getAmount() != null) {
-            paidAmount += payment.getAmount();
-        }
+        paidAmountMinor = Math.addExact(paidAmountMinor, payment.getAmountMinor());
         updateStatus();
     }
 
@@ -69,21 +76,13 @@ public class CreditEntry {
                 .findFirst().orElse(null);
         if (p != null) {
             payments.remove(p);
-            if (p.getAmount() != null) {
-                paidAmount = Math.max(0, paidAmount - p.getAmount());
-            }
+            paidAmountMinor = Math.max(0L, Math.subtractExact(paidAmountMinor, p.getAmountMinor()));
             if (!isManuallyFinal()) updateStatus();
         }
     }
 
     private void updateStatus() {
-        if (paidAmount >= amount) {
-            status = "PAID";
-        } else if (paidAmount > 0) {
-            status = "PARTIAL";
-        } else {
-            status = "OPEN";
-        }
+        status = CreditStatusRules.derive(amountMinor, paidAmountMinor);
     }
 
     public UUID getId() { return id; }
@@ -98,11 +97,15 @@ public class CreditEntry {
     public String getDebtor() { return debtor; }
     public void setDebtor(String debtor) { this.debtor = debtor; }
 
-    public double getAmount() { return amount; }
-    public void setAmount(double amount) { this.amount = amount; }
-
-    public double getPaidAmount() { return paidAmount; }
-    public void setPaidAmount(double paidAmount) { this.paidAmount = paidAmount; }
+    public long getAmountMinor() { return amountMinor; }
+    public void setAmountMinor(long amountMinor) { this.amountMinor = amountMinor; }
+    public long getPaidAmountMinor() { return paidAmountMinor; }
+    public void setPaidAmountMinor(long paidAmountMinor) { this.paidAmountMinor = paidAmountMinor; }
+    @Deprecated public double getAmount() { return MoneyRules.toDisplayDouble(amountMinor); }
+    @Deprecated public void setAmount(double amount) { this.amountMinor = MoneyRules.fromLegacyDouble(amount, true).minorUnits(); }
+    @Deprecated public double getPaidAmount() { return MoneyRules.toDisplayDouble(paidAmountMinor); }
+    @Deprecated public void setPaidAmount(double paidAmount) { this.paidAmountMinor = MoneyRules.fromLegacyDouble(paidAmount, false).minorUnits(); }
+    @Deprecated public double getRemainingAmount() { return MoneyRules.toDisplayDouble(getRemainingAmountMinor()); }
 
     public long getCreatedAt() { return createdAt; }
     public void setCreatedAt(long createdAt) { this.createdAt = createdAt; }
@@ -118,11 +121,9 @@ public class CreditEntry {
 
     public void replacePayments(List<Payment> payments) {
         this.payments = payments == null ? new ArrayList<>() : new ArrayList<>(payments);
-        this.paidAmount = this.payments.stream()
-                .map(Payment::getAmount)
-                .filter(value -> value != null && Double.isFinite(value) && value > 0)
-                .mapToDouble(Double::doubleValue)
-                .sum();
+        long total = 0L;
+        for (Payment payment : this.payments) total = Math.addExact(total, payment.getAmountMinor());
+        this.paidAmountMinor = total;
         if (!isManuallyFinal()) updateStatus();
     }
 
@@ -131,7 +132,7 @@ public class CreditEntry {
     }
 
     private boolean isManuallyFinal() {
-        return "CLOSED".equals(status) || "CANCELLED".equals(status);
+        return CreditStatusRules.isManualFinal(status);
     }
 
     public String getNote() { return note; }

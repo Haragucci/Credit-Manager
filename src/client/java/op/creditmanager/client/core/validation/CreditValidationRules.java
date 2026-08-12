@@ -8,8 +8,7 @@ public final class CreditValidationRules {
     public static final int MAX_NOTE_LENGTH = 4_096;
     public static final int MAX_PAYLOG_RAW_TEXT_LENGTH = 16_384;
     public static final int MAX_METADATA_LENGTH = 16_384;
-    public static final double MAX_AMOUNT = MoneyRules.MAX_AMOUNT;
-    public static final double EPSILON = MoneyRules.EPSILON;
+    public static final long MAX_AMOUNT_MINOR = MoneyRules.MAX_MINOR;
 
     private CreditValidationRules() { }
 

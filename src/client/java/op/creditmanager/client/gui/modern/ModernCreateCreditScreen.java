@@ -9,8 +9,11 @@ import net.minecraft.text.Text;
 import op.creditmanager.client.core.CreditManager;
 import op.creditmanager.client.core.validation.CreditValidationRules;
 import op.creditmanager.client.gui.CenteredTextFieldWidget;
+import op.creditmanager.client.gui.modern.widget.ModernScrollArea;
 import op.creditmanager.client.util.FormatUtil;
 import op.creditmanager.client.util.TimeUtil;
+
+import java.util.List;
 
 public class ModernCreateCreditScreen extends ModernBaseScreen {
 
@@ -20,11 +23,12 @@ public class ModernCreateCreditScreen extends ModernBaseScreen {
     private TextFieldWidget dueDateField;
     private TextFieldWidget labelField;
     private TextFieldWidget noteField;
+    private final ModernScrollArea formScroll = new ModernScrollArea();
     private int fieldX;
     private int fieldWidth;
-    private int fieldStartY;
-    private int fieldGap;
-    private int actionY;
+    private int viewportY;
+    private int viewportHeight;
+    private List<ModernLayout.Bounds> actionButtons = java.util.List.of();
 
     public ModernCreateCreditScreen(CreditManager manager, boolean debts, Screen parent) {
         super(manager, parent, debts ? "Neue Schuld" : "Neue Forderung", debts ? "debts" : "claims");
@@ -33,23 +37,30 @@ public class ModernCreateCreditScreen extends ModernBaseScreen {
 
     @Override
     protected void init() {
+        String playerDraft = playerField == null ? "" : playerField.getText();
+        String amountDraft = amountField == null ? "" : amountField.getText();
+        String dueDraft = dueDateField == null ? "" : dueDateField.getText();
+        String labelDraft = labelField == null ? "" : labelField.getText();
+        String noteDraft = noteField == null ? "" : noteField.getText();
         super.init();
         clearChildren();
-        fieldX = contentX + 8;
-        fieldWidth = Math.max(100, contentWidth - 16);
-        fieldStartY = contentY + 6;
-        fieldGap = Math.max(20, Math.min(29, (contentHeight - 59) / 4));
-        playerField = addField(fieldX, fieldStartY, debts ? "Gläubiger *" : "Schuldner *", 32);
-        amountField = addField(fieldX, fieldStartY + fieldGap, "Betrag * (z.B. 2.5k)", 20);
-        dueDateField = addField(fieldX, fieldStartY + fieldGap * 2, "Fällig am (TT.MM.JJJJ, optional)", 10);
-        labelField = addField(fieldX, fieldStartY + fieldGap * 3, "Bezeichnung (optional)", CreditValidationRules.MAX_LABEL_LENGTH);
-        noteField = addField(fieldX, fieldStartY + fieldGap * 4, "Notiz (optional)", CreditValidationRules.MAX_NOTE_LENGTH);
-        actionY = fieldStartY + fieldGap * 4 + 28;
+        fieldX = contentX + Math.min(8, Math.max(0, contentWidth / 4));
+        fieldWidth = Math.max(1, contentWidth - (fieldX - contentX) * 2);
+        playerField = addField(debts ? "Gläubiger *" : "Schuldner *", 32);
+        amountField = addField("Betrag * (z.B. 2.5k)", 20);
+        dueDateField = addField("Fällig am (TT.MM.JJJJ, optional)", 10);
+        labelField = addField("Bezeichnung (optional)", CreditValidationRules.MAX_LABEL_LENGTH);
+        noteField = addField("Notiz (optional)", CreditValidationRules.MAX_NOTE_LENGTH);
+        playerField.setText(playerDraft);
+        amountField.setText(amountDraft);
+        dueDateField.setText(dueDraft);
+        labelField.setText(labelDraft);
+        noteField.setText(noteDraft);
     }
 
-    private TextFieldWidget addField(int x, int y, String placeholder, int maxLength) {
+    private TextFieldWidget addField(String placeholder, int maxLength) {
         TextFieldWidget field = ModernUi.configureGuiTextField(
-                new CenteredTextFieldWidget(textRenderer, x + 5, y + 8, fieldWidth - 10, 19, Text.empty()));
+                new CenteredTextFieldWidget(textRenderer, fieldX + 5, contentY, Math.max(1, fieldWidth - 10), 19, Text.empty()));
         field.setMaxLength(maxLength);
         ModernUi.setGuiPlaceholder(field, placeholder);
         addDrawableChild(field);
@@ -59,39 +70,69 @@ public class ModernCreateCreditScreen extends ModernBaseScreen {
     @Override
     public void render(DrawContext context, int mouseX, int mouseY, float delta) {
         renderShell(context, mouseX, mouseY);
-        drawField(context, "Spieler", fieldX, fieldStartY);
-        drawField(context, "Betrag", fieldX, fieldStartY + fieldGap);
-        drawField(context, "Fälligkeit", fieldX, fieldStartY + fieldGap * 2);
-        drawField(context, "Bezeichnung", fieldX, fieldStartY + fieldGap * 3);
-        drawField(context, "Notiz", fieldX, fieldStartY + fieldGap * 4);
-        int buttonWidth = Math.max(42, Math.min(132, (fieldWidth - 8) / 2));
-        ModernUi.button(context, textRenderer, fieldX, actionY, buttonWidth, 23, "Speichern", debts ? ModernUi.theme().buttonDanger : ModernUi.theme().buttonPrimary,
-                ModernUi.contains(mouseX, mouseY, fieldX, actionY, buttonWidth, 23));
-        ModernUi.button(context, textRenderer, fieldX + buttonWidth + 8, actionY, buttonWidth, 23, "Abbrechen", ModernUi.theme().buttonNeutral,
-                ModernUi.contains(mouseX, mouseY, fieldX + buttonWidth + 8, actionY, buttonWidth, 23));
+        viewportY = contentY + 4;
+        viewportHeight = Math.max(24, contentHeight - 8);
+        int actionHeight = ModernLayout.stack(fieldWidth, 2, 74, 8) ? 54 : 23;
+        int formHeight = 5 * 45 + actionHeight + 8;
+        formScroll.setBounds(fieldX, viewportY, fieldWidth, viewportHeight, formHeight);
+        formScroll.tick(mouseX, mouseY);
+        int y = viewportY - formScroll.offset();
+        context.enableScissor(fieldX, viewportY, fieldX + fieldWidth, viewportY + viewportHeight);
+        drawField(context, "Spieler", playerField, y);
+        drawField(context, "Betrag", amountField, y + 45);
+        drawField(context, "Fälligkeit", dueDateField, y + 90);
+        drawField(context, "Bezeichnung", labelField, y + 135);
+        drawField(context, "Notiz", noteField, y + 180);
+        actionButtons = ModernLayout.buttonRow(fieldX, y + 225, fieldWidth, 2, 74, 23, 8);
+        ModernLayout.Bounds save = actionButtons.getFirst();
+        ModernLayout.Bounds cancel = actionButtons.get(1);
+        ModernUi.button(context, textRenderer, save.x(), save.y(), save.width(), save.height(), "Speichern", debts ? ModernUi.theme().buttonDanger : ModernUi.theme().buttonPrimary,
+                ModernUi.contains(mouseX, mouseY, save.x(), save.y(), save.width(), save.height()));
+        ModernUi.button(context, textRenderer, cancel.x(), cancel.y(), cancel.width(), cancel.height(), "Abbrechen", ModernUi.theme().buttonNeutral,
+                ModernUi.contains(mouseX, mouseY, cancel.x(), cancel.y(), cancel.width(), cancel.height()));
+        context.disableScissor();
+        formScroll.renderScrollbar(context, mouseX, mouseY);
         super.render(context, mouseX, mouseY, delta);
     }
 
-    private void drawField(DrawContext context, String label, int x, int y) {
-        ModernUi.drawGuiText(context, textRenderer, label, x, y, ModernUi.theme().muted);
-        ModernUi.card(context, x, y + 8, fieldWidth, 19, false);
+    private void drawField(DrawContext context, String label, TextFieldWidget field, int y) {
+        ModernUi.drawGuiText(context, textRenderer, label, fieldX, y, ModernUi.theme().muted);
+        ModernUi.card(context, fieldX, y + 11, fieldWidth, 22, false);
+        ModernLayout.positionTextField(field, fieldX + 5, y + 13, Math.max(1, fieldWidth - 10), viewportY, viewportHeight, true);
     }
 
     @Override
     public boolean mouseClicked(Click click, boolean doubled) {
         if (handleSidebarClick(click)) return true;
+        if (formScroll.mouseClicked(click.x(), click.y(), click.button())) return true;
         if (click.button() == 0) {
-            int buttonWidth = Math.max(42, Math.min(132, (fieldWidth - 8) / 2));
-            if (ModernUi.contains(click.x(), click.y(), fieldX, actionY, buttonWidth, 23)) {
+            if (!actionButtons.isEmpty() && inViewport(actionButtons.getFirst()) && contains(click, actionButtons.getFirst())) {
                 save();
                 return true;
             }
-            if (ModernUi.contains(click.x(), click.y(), fieldX + buttonWidth + 8, actionY, buttonWidth, 23)) {
+            if (actionButtons.size() > 1 && inViewport(actionButtons.get(1)) && contains(click, actionButtons.get(1))) {
                 closeToParent();
                 return true;
             }
         }
         return super.mouseClicked(click, doubled);
+    }
+
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
+        if (formScroll.contains(mouseX, mouseY)) {
+            formScroll.scroll(verticalAmount);
+            return true;
+        }
+        return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
+    }
+
+    private boolean contains(Click click, ModernLayout.Bounds bounds) {
+        return ModernUi.contains(click.x(), click.y(), bounds.x(), bounds.y(), bounds.width(), bounds.height());
+    }
+
+    private boolean inViewport(ModernLayout.Bounds bounds) {
+        return bounds.y() >= viewportY && bounds.bottom() <= viewportY + viewportHeight;
     }
 
     @Override
@@ -118,9 +159,9 @@ public class ModernCreateCreditScreen extends ModernBaseScreen {
             toastError("Ein Deal mit dir selbst ist nicht möglich.");
             return;
         }
-        double amount;
+        long amountMinor;
         try {
-            amount = FormatUtil.parseMoney(amountField.getText());
+            amountMinor = FormatUtil.parseMoneyMinor(amountField.getText());
         } catch (IllegalArgumentException exception) {
             toastError("Bitte einen gültigen positiven Betrag eingeben.");
             return;
@@ -135,7 +176,7 @@ public class ModernCreateCreditScreen extends ModernBaseScreen {
             }
         }
         try {
-            manager.createCredit(debts ? otherPlayer : ownPlayer, debts ? ownPlayer : otherPlayer, amount, dueDate,
+            manager.createCreditMinor(debts ? otherPlayer : ownPlayer, debts ? ownPlayer : otherPlayer, amountMinor, dueDate,
                     blankToNull(labelField.getText()), blankToNull(noteField.getText()));
             toastSuccess("Deal erstellt.");
             if (parent instanceof ModernCreditListScreen) {
@@ -160,6 +201,8 @@ public class ModernCreateCreditScreen extends ModernBaseScreen {
         clearField(dueDateField);
         clearField(labelField);
         clearField(noteField);
+        formScroll.reset();
+        actionButtons = java.util.List.of();
         super.clearTransientState();
     }
 

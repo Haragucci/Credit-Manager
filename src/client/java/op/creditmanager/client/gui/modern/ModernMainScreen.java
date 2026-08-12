@@ -12,7 +12,7 @@ import op.creditmanager.client.util.BalanceReader;
 import op.creditmanager.client.util.FormatUtil;
 
 import java.util.List;
-import java.util.OptionalDouble;
+import java.util.OptionalLong;
 
 public class ModernMainScreen extends ModernBaseScreen {
     private int claimsX;
@@ -42,10 +42,10 @@ public class ModernMainScreen extends ModernBaseScreen {
         ModernThemePalette theme = ModernUi.theme();
         List<CreditEntry> claims = manager.getOpenCreditsAsCreditor(currentPlayerName());
         List<CreditEntry> debts = manager.getOpenCreditsAsDebtor(currentPlayerName());
-        double claimTotal = claims.stream().mapToDouble(CreditEntry::getRemainingAmount).sum();
-        double debtTotal = debts.stream().mapToDouble(CreditEntry::getRemainingAmount).sum();
-        double net = claimTotal - debtTotal;
-        OptionalDouble account = BalanceReader.readCurrentBalance(MinecraftClient.getInstance());
+        long claimTotalMinor = sumRemainingMinor(claims);
+        long debtTotalMinor = sumRemainingMinor(debts);
+        long netMinor = Math.subtractExact(claimTotalMinor, debtTotalMinor);
+        OptionalLong account = BalanceReader.readCurrentBalanceMinor(MinecraftClient.getInstance());
 
         boolean compact = contentHeight < 250;
         summaryHeight = compact ? 62 : 78;
@@ -61,28 +61,29 @@ public class ModernMainScreen extends ModernBaseScreen {
         cardWidth = Math.max(70, (safeContentWidth - 10) / 2);
         claimsX = contentX;
         debtsX = contentX + cardWidth + 10;
-        drawSummaryCard(context, mouseX, mouseY, claimsX, cardsY, cardWidth, summaryHeight, "Forderungen", claims.size(), claimTotal,
+        drawSummaryCard(context, mouseX, mouseY, claimsX, cardsY, cardWidth, summaryHeight, "Forderungen", claims.size(), claimTotalMinor,
                 theme.success, compact ? "" : "Offen für dich");
-        drawSummaryCard(context, mouseX, mouseY, debtsX, cardsY, cardWidth, summaryHeight, "Schulden", debts.size(), debtTotal,
+        drawSummaryCard(context, mouseX, mouseY, debtsX, cardsY, cardWidth, summaryHeight, "Schulden", debts.size(), debtTotalMinor,
                 theme.danger, compact ? "" : "Von dir offen");
 
         int statusY = cardsY + summaryHeight + 10;
         ModernUi.card(context, contentX, statusY, safeContentWidth, statusHeight,
                 ModernUi.contains(mouseX, mouseY, contentX, statusY, safeContentWidth, statusHeight));
-        ModernUi.drawGuiText(context, textRenderer, netLabel("Saldo", net), contentX + 12, statusY + 11, theme.muted);
-        ModernUi.drawGuiText(context, textRenderer, netText(net), contentX + 12, statusY + 26,
-                net >= 0 ? theme.success : theme.danger);
+        ModernUi.drawGuiText(context, textRenderer, netLabel("Saldo", netMinor), contentX + 12, statusY + 11, theme.muted);
+        ModernUi.drawGuiText(context, textRenderer, netText(netMinor), contentX + 12, statusY + 26,
+                netMinor >= 0 ? theme.success : theme.danger);
         String accountLabel = account.isPresent() ? "Kontostand" : "Kontostand nicht erkennbar";
-        String accountValue = account.isPresent() ? FormatUtil.formatAmount(account.getAsDouble()) : "–";
+        String accountValue = account.isPresent() ? FormatUtil.formatAmountMinor(account.getAsLong()) : "–";
         int right = contentX + safeContentWidth - 12;
         ModernUi.drawGuiTextRightAligned(context, textRenderer, accountLabel, right, statusY + 11, theme.muted);
         ModernUi.drawGuiTextRightAligned(context, textRenderer, accountValue, right, statusY + 26,
                 account.isPresent() ? theme.accent : theme.muted);
         if (!compact) {
-            String forecast = account.isPresent() ? "Nach Verrechnung: " + FormatUtil.formatAmount(account.getAsDouble() + net)
+            long forecastMinor = account.isPresent() ? Math.addExact(account.getAsLong(), netMinor) : 0L;
+            String forecast = account.isPresent() ? "Nach Verrechnung: " + FormatUtil.formatAmountMinor(forecastMinor)
                     : "Nach Verrechnung wird angezeigt, sobald der Kontostand lesbar ist.";
             ModernUi.drawTruncated(context, textRenderer, forecast, contentX + 12, statusY + 51, safeContentWidth - 24,
-                    account.isPresent() ? (account.getAsDouble() + net >= 0 ? theme.success : theme.danger) : theme.muted);
+                    account.isPresent() ? (forecastMinor >= 0 ? theme.success : theme.danger) : theme.muted);
         }
         compactStatisticsY = -1;
         if (compact) {
@@ -112,24 +113,30 @@ public class ModernMainScreen extends ModernBaseScreen {
         super.render(context, mouseX, mouseY, delta);
     }
 
-    private String netLabel(String label, double value) {
-        return label + (value >= 0 ? " · positiv" : " · negativ");
+    private String netLabel(String label, long valueMinor) {
+        return label + (valueMinor >= 0 ? " · positiv" : " · negativ");
     }
 
-    private String netText(double value) {
-        return (value >= 0 ? "+" : "") + FormatUtil.formatAmount(value);
+    private String netText(long valueMinor) {
+        return (valueMinor >= 0 ? "+" : "") + FormatUtil.formatAmountMinor(valueMinor);
     }
 
     private void drawSummaryCard(DrawContext context, int mouseX, int mouseY, int x, int y, int width, int height,
-                                 String title, int count, double total, int accent, String description) {
+                                 String title, int count, long totalMinor, int accent, String description) {
         ModernThemePalette theme = ModernUi.theme();
         ModernUi.card(context, x, y, width, height, ModernUi.contains(mouseX, mouseY, x, y, width, height));
         context.fill(x + 10, y + 11, x + 13, y + height - 11, accent);
         ModernUi.drawGuiText(context, textRenderer, title, x + 22, y + 11, theme.muted);
-        ModernUi.drawTruncated(context, textRenderer, FormatUtil.formatAmount(total), x + 22, y + 27, width - 34, accent);
+        ModernUi.drawTruncated(context, textRenderer, FormatUtil.formatAmountMinor(totalMinor), x + 22, y + 27, width - 34, accent);
         ModernUi.drawTruncated(context, textRenderer, count + (count == 1 ? " offener Deal" : " offene Deals"),
                 x + 22, y + 43, width - 34, theme.text);
         if (!description.isEmpty()) ModernUi.drawTruncated(context, textRenderer, description, x + 22, y + 59, width - 34, theme.muted);
+    }
+
+    private long sumRemainingMinor(List<CreditEntry> entries) {
+        long sum = 0L;
+        for (CreditEntry entry : entries) sum = Math.addExact(sum, entry.getRemainingAmountMinor());
+        return sum;
     }
 
     @Override

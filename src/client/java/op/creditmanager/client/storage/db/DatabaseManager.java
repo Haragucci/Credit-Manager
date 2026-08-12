@@ -30,6 +30,7 @@ public final class DatabaseManager {
     public boolean hasDomainData() { return coordinator.hasDomainData(); }
     public boolean hasCompletedJsonMigration() { return coordinator.hasCompletedJsonMigration(); }
     public boolean hasCompletedAutomaticJsonMigration() { return coordinator.hasCompletedAutomaticJsonMigration(); }
+    public boolean hasPendingAutomaticJsonMigration() { return coordinator.hasPendingAutomaticJsonMigration(); }
     public boolean createBackup() { return coordinator.createBackup(); }
     public DatabaseState loadCreditState() { return coordinator.loadCreditState(); }
     public boolean replaceCreditState(Collection<CreditEntry> credits, Collection<Payment> payments, Collection<CreditEventEntry> events) { return coordinator.replaceCreditState(credits, payments, events); }
@@ -37,6 +38,7 @@ public final class DatabaseManager {
     public boolean commitCreditMutationsBatch(Collection<CreditMutation> mutations) { return coordinator.commitCreditMutationsBatch(mutations); }
     public boolean importLegacy(DatabaseState state, Collection<TransactionEntry> paylogs, String details) { return coordinator.importLegacy(state, paylogs, details); }
     public AutomaticMigrationResult importLegacyAutomatically(DatabaseState state, Collection<TransactionEntry> paylogs, Collection<LegacyRecord> preserved, String details) { return coordinator.importLegacyAutomatically(state, paylogs, preserved, details); }
+    public boolean completeAutomaticJsonMigration(String details) { return coordinator.completeAutomaticJsonMigration(details); }
     public int legacyRecordCount() { return coordinator.legacyRecordCount(); }
     public boolean addPaylog(TransactionEntry entry) { return coordinator.addPaylog(entry); }
     public boolean resetCorruptDatabaseWithBackup() { return coordinator.resetCorruptDatabaseWithBackup(); }
@@ -54,12 +56,19 @@ public final class DatabaseManager {
     public List<DataHealthRecord> runHealthCheck() { return coordinator.runHealthCheck(); }
     public List<DataHealthRecord> listHealthRecords(boolean includeResolved) { return coordinator.listHealthRecords(includeResolved); }
     public boolean resolveHealthRecord(UUID id, String repairPayload, boolean ignored) { return coordinator.resolveHealthRecord(id, repairPayload, ignored); }
+    public boolean repairCredit(CreditEntry replacement, String reason) { return coordinator.repairCredit(replacement, reason); }
+    public boolean repairPayment(Payment replacement, String reason) { return coordinator.repairPayment(replacement, reason); }
+    public boolean repairEvent(CreditEventEntry replacement, String reason) { return coordinator.repairEvent(replacement, reason); }
+    public boolean discardRecoveryRecord(DiscardRecordType type, UUID id, String reason, boolean confirmed) { return coordinator.discardRecoveryRecord(type, id, reason, confirmed); }
 
     public record DatabaseState(List<CreditEntry> credits, List<Payment> payments, List<CreditEventEntry> events) { }
     public record BatchInsertResult(int requested, int inserted, int skipped, int failed, List<String> warnings) { }
     public enum DatabaseAvailability { UNKNOWN, HEALTHY, SCHEMA_REPAIRABLE, PHYSICALLY_CORRUPT, RESTORED_FROM_BACKUP, NEEDS_USER_RECOVERY, EMPTY_BUT_BACKUP_EXISTS, WRITE_LOCKED }
     public record CreditMutation(CreditEntry credit, List<Payment> paymentUpserts, List<UUID> paymentDeletions, List<CreditEventEntry> events) { }
-    public record BackupManifestEntry(String fileName, long createdAt, int schemaVersion, long revision, int creditCount, int paymentCount, int paylogCount, int eventCount, boolean healthy, String format) {
+    public record BackupManifestEntry(String fileName, long createdAt, int schemaVersion, long revision, int creditCount, int paymentCount, int paylogCount, int eventCount, boolean healthy, String format, String sha256, long size, int archiveVersion) {
+        public BackupManifestEntry(String fileName, long createdAt, int schemaVersion, long revision, int creditCount, int paymentCount, int paylogCount, int eventCount, boolean healthy, String format) {
+            this(fileName, createdAt, schemaVersion, revision, creditCount, paymentCount, paylogCount, eventCount, healthy, format, null, 0L, 1);
+        }
         public int domainCount() { return creditCount + paymentCount + paylogCount + eventCount; }
     }
     public record LegacyRecord(String kind, String originalId, String rawPayload, String reason) { }
@@ -73,5 +82,6 @@ public final class DatabaseManager {
         public int pageCount() { return Math.max(1, (int) Math.ceil(totalCount / (double) pageSize)); }
     }
     public enum DealHistorySort { NEWEST, OLDEST, AMOUNT_DESC, AMOUNT_ASC, PLAYER_ASC, STATUS }
+    public enum DiscardRecordType { CREDIT, PAYMENT, EVENT }
     public record DataHealthRecord(UUID id, String type, String severity, String sourceTable, String sourceId, String title, String message, String rawPayload, String repairPayload, String status, long createdAt, Long resolvedAt) { }
 }

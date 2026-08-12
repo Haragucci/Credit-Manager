@@ -1,6 +1,5 @@
 package op.creditmanager.client.core.service;
 
-import op.creditmanager.client.CreditManagerClient;
 import op.creditmanager.client.core.CreditEventRepository;
 import op.creditmanager.client.core.CreditManagerCore.CreditException;
 import op.creditmanager.client.core.CreditRepository;
@@ -28,22 +27,12 @@ public final class CreditMutationService {
         if (!DatabaseManager.getInstance().commitCreditMutation(mutation)) {
             throw new CreditException("Vorgang wurde nicht gespeichert; der vorherige Datenstand bleibt unverändert.");
         }
-        if (!repository.load()) {
-            repository.applyCommittedMutation(draft, paymentUpserts, paymentDeletions, events);
-            CreditEventRepository.getInstance().bind(repository);
-            CreditEventRepository.getInstance().acceptCommittedEvents(events);
-            TransactionRepository.getInstance().load();
-            snapshots.synchronize(published == null ? draft : published, draft);
-            CreditManagerClient.LOGGER.warn("CreditManager commit succeeded, but the follow-up reload failed. The committed deal remains visible from the staged in-memory state.");
-            return;
-        }
+        repository.applyCommittedMutation(draft, paymentUpserts, paymentDeletions, events);
         CreditEventRepository.getInstance().bind(repository);
-        CreditEventRepository.getInstance().load();
-        TransactionRepository.getInstance().load();
-        CreditEntry persisted = repository.findCreditById(draft.getId())
-                .orElseThrow(() -> new CreditException("Gespeicherter Deal konnte nicht erneut geladen werden."));
+        CreditEventRepository.getInstance().acceptCommittedEvents(events);
+        TransactionRepository.getInstance().acceptCommittedMutation();
         CreditEntry target = published == null ? draft : published;
-        snapshots.synchronize(target, persisted);
+        snapshots.synchronize(target, draft);
         repository.replaceLoadedCredit(target);
     }
 }

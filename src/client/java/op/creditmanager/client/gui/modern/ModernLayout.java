@@ -12,6 +12,23 @@ public final class ModernLayout {
         return Math.max(minimum, width);
     }
 
+    public static ShellBounds shell(int width, int height) {
+        int shortestSide = Math.max(1, Math.min(width, height));
+        int outerMargin = Math.min(Math.max(1, shortestSide / 16), 24);
+        int panelWidth = Math.max(1, Math.min(760, width - outerMargin * 2));
+        int panelHeight = Math.max(1, Math.min(460, height - outerMargin * 2));
+        int panelX = (width - panelWidth) / 2;
+        int panelY = (height - panelHeight) / 2;
+        boolean compact = panelWidth < 220 || panelHeight < 170;
+        int sidebarWidth = compact ? 0 : Math.min(150, Math.max(78, panelWidth / 5));
+        int contentInset = compact ? Math.min(6, Math.max(1, panelWidth / 8)) : 18;
+        int contentX = panelX + sidebarWidth + contentInset;
+        int contentY = panelY + Math.min(48, Math.max(32, panelHeight / 3));
+        int contentWidth = Math.max(1, panelX + panelWidth - contentInset - contentX);
+        int contentHeight = Math.max(1, panelY + panelHeight - contentInset - contentY);
+        return new ShellBounds(panelX, panelY, panelWidth, panelHeight, sidebarWidth, contentX, contentY, contentWidth, contentHeight, compact);
+    }
+
     public static boolean stack(int availableWidth, int count, int minimumWidth, int gap) {
         return availableWidth < count * minimumWidth + Math.max(0, count - 1) * gap;
     }
@@ -63,4 +80,7 @@ public final class ModernLayout {
             return other != null && x < other.right() && right() > other.x && y < other.bottom() && bottom() > other.y;
         }
     }
+
+    public record ShellBounds(int panelX, int panelY, int panelWidth, int panelHeight, int sidebarWidth,
+                              int contentX, int contentY, int contentWidth, int contentHeight, boolean compact) { }
 }

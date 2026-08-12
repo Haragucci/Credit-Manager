@@ -21,8 +21,8 @@ class CreditStatisticsCalculatorTest {
         CreditStatistics statistics = CreditStatisticsCalculator.calculate("me", List.of(), List.of(),
                 List.of(created, payment, deleted), 0L, Long.MAX_VALUE);
 
-        assertEquals(0D, statistics.paidClaimsInPeriod());
-        assertEquals(0D, statistics.createdClaimsInPeriod());
+        assertEquals(0L, statistics.paidClaimsInPeriodMinor());
+        assertEquals(0L, statistics.createdClaimsInPeriodMinor());
         assertEquals(1, statistics.deletedDealCount());
         assertEquals(1, statistics.actionCount());
     }
@@ -40,8 +40,8 @@ class CreditStatisticsCalculatorTest {
         CreditStatistics statistics = CreditStatisticsCalculator.calculate("me", List.of(), List.of(),
                 List.of(created, payment, deletedPayment, closed, archived, reactivated), 0L, Long.MAX_VALUE);
 
-        assertEquals(100D, statistics.createdClaimsInPeriod());
-        assertEquals(30D, statistics.paidClaimsInPeriod());
+        assertEquals(10_000L, statistics.createdClaimsInPeriodMinor());
+        assertEquals(3_000L, statistics.paidClaimsInPeriodMinor());
         assertEquals(1, statistics.deletedPaymentCount());
         assertEquals(1, statistics.deletedDealCount());
     }

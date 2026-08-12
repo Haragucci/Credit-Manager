@@ -1,5 +1,7 @@
 package op.creditmanager.client.model;
 
+import op.creditmanager.client.money.MoneyRules;
+
 import java.util.UUID;
 
 public class CreditEventEntry {
@@ -10,12 +12,12 @@ public class CreditEventEntry {
     private String dealName;
     private String creditor;
     private String debtor;
-    private double amount;
-    private double paidAmountAfter;
-    private double remainingAmountAfter;
+    private long amountMinor;
+    private long paidAmountAfterMinor;
+    private long remainingAmountAfterMinor;
     private String note;
-    private double amountBefore;
-    private double amountAfter;
+    private long amountBeforeMinor;
+    private long amountAfterMinor;
     private String actor;
     private String source;
     private boolean itemPayment;
@@ -23,7 +25,7 @@ public class CreditEventEntry {
     public CreditEventEntry() {
     }
 
-    public CreditEventEntry(CreditEventType type, CreditEntry credit, double amount, double amountBefore,
+    public CreditEventEntry(CreditEventType type, CreditEntry credit, long amountMinor, long amountBeforeMinor,
                             String note, String actor, String source, boolean itemPayment) {
         this.id = UUID.randomUUID();
         this.timestamp = System.currentTimeMillis();
@@ -32,15 +34,22 @@ public class CreditEventEntry {
         this.dealName = credit.getDealName();
         this.creditor = credit.getCreditor();
         this.debtor = credit.getDebtor();
-        this.amount = amount;
-        this.paidAmountAfter = credit.getPaidAmount();
-        this.remainingAmountAfter = credit.getRemainingAmount();
+        this.amountMinor = amountMinor;
+        this.paidAmountAfterMinor = credit.getPaidAmountMinor();
+        this.remainingAmountAfterMinor = credit.getRemainingAmountMinor();
         this.note = note;
-        this.amountBefore = amountBefore;
-        this.amountAfter = credit.getRemainingAmount();
+        this.amountBeforeMinor = amountBeforeMinor;
+        this.amountAfterMinor = credit.getRemainingAmountMinor();
         this.actor = actor;
         this.source = source;
         this.itemPayment = itemPayment;
+    }
+
+    @Deprecated
+    public CreditEventEntry(CreditEventType type, CreditEntry credit, double amount, double amountBefore,
+                            String note, String actor, String source, boolean itemPayment) {
+        this(type, credit, MoneyRules.fromLegacyDouble(amount, false).minorUnits(),
+                MoneyRules.fromLegacyDouble(amountBefore, false).minorUnits(), note, actor, source, itemPayment);
     }
 
     public UUID getId() { return id; }
@@ -57,18 +66,28 @@ public class CreditEventEntry {
     public void setCreditor(String creditor) { this.creditor = creditor; }
     public String getDebtor() { return debtor; }
     public void setDebtor(String debtor) { this.debtor = debtor; }
-    public double getAmount() { return amount; }
-    public void setAmount(double amount) { this.amount = amount; }
-    public double getPaidAmountAfter() { return paidAmountAfter; }
-    public void setPaidAmountAfter(double paidAmountAfter) { this.paidAmountAfter = paidAmountAfter; }
-    public double getRemainingAmountAfter() { return remainingAmountAfter; }
-    public void setRemainingAmountAfter(double remainingAmountAfter) { this.remainingAmountAfter = remainingAmountAfter; }
+    public long getAmountMinor() { return amountMinor; }
+    public void setAmountMinor(long amountMinor) { this.amountMinor = amountMinor; }
+    public long getPaidAmountAfterMinor() { return paidAmountAfterMinor; }
+    public void setPaidAmountAfterMinor(long paidAmountAfterMinor) { this.paidAmountAfterMinor = paidAmountAfterMinor; }
+    public long getRemainingAmountAfterMinor() { return remainingAmountAfterMinor; }
+    public void setRemainingAmountAfterMinor(long remainingAmountAfterMinor) { this.remainingAmountAfterMinor = remainingAmountAfterMinor; }
+    @Deprecated public double getAmount() { return MoneyRules.toDisplayDouble(amountMinor); }
+    @Deprecated public void setAmount(double amount) { this.amountMinor = MoneyRules.fromLegacyDouble(amount, false).minorUnits(); }
+    @Deprecated public double getPaidAmountAfter() { return MoneyRules.toDisplayDouble(paidAmountAfterMinor); }
+    @Deprecated public void setPaidAmountAfter(double paidAmountAfter) { this.paidAmountAfterMinor = MoneyRules.fromLegacyDouble(paidAmountAfter, false).minorUnits(); }
+    @Deprecated public double getRemainingAmountAfter() { return MoneyRules.toDisplayDouble(remainingAmountAfterMinor); }
+    @Deprecated public void setRemainingAmountAfter(double remainingAmountAfter) { this.remainingAmountAfterMinor = MoneyRules.fromLegacyDouble(remainingAmountAfter, false).minorUnits(); }
     public String getNote() { return note; }
     public void setNote(String note) { this.note = note; }
-    public double getAmountBefore() { return amountBefore; }
-    public void setAmountBefore(double amountBefore) { this.amountBefore = amountBefore; }
-    public double getAmountAfter() { return amountAfter; }
-    public void setAmountAfter(double amountAfter) { this.amountAfter = amountAfter; }
+    public long getAmountBeforeMinor() { return amountBeforeMinor; }
+    public void setAmountBeforeMinor(long amountBeforeMinor) { this.amountBeforeMinor = amountBeforeMinor; }
+    public long getAmountAfterMinor() { return amountAfterMinor; }
+    public void setAmountAfterMinor(long amountAfterMinor) { this.amountAfterMinor = amountAfterMinor; }
+    @Deprecated public double getAmountBefore() { return MoneyRules.toDisplayDouble(amountBeforeMinor); }
+    @Deprecated public void setAmountBefore(double amountBefore) { this.amountBeforeMinor = MoneyRules.fromLegacyDouble(amountBefore, false).minorUnits(); }
+    @Deprecated public double getAmountAfter() { return MoneyRules.toDisplayDouble(amountAfterMinor); }
+    @Deprecated public void setAmountAfter(double amountAfter) { this.amountAfterMinor = MoneyRules.fromLegacyDouble(amountAfter, false).minorUnits(); }
     public String getActor() { return actor; }
     public void setActor(String actor) { this.actor = actor; }
     public String getSource() { return source; }

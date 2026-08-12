@@ -26,7 +26,7 @@ public final class PaylogSearch {
             if (isDateToken(token)) {
                 if (!dateMatches(entry.getTimestamp(), token)) return false;
             } else if (isAmountFilter(token)) {
-                if (!amountMatches(entry.getAmount(), token)) return false;
+                if (!amountMatches(entry.getAmountMinor(), token)) return false;
             } else if (!textMatches(entry, token)) {
                 return false;
             }
@@ -52,16 +52,16 @@ public final class PaylogSearch {
         return token.matches("[<>]=?[0-9][0-9.,]*") || token.matches("[0-9][0-9.,]*-[0-9][0-9.,]*");
     }
 
-    private static boolean amountMatches(double amount, String token) {
+    private static boolean amountMatches(long amountMinor, String token) {
         try {
-            if (token.startsWith(">=")) return amount >= FormatUtil.parseMoney(token.substring(2));
-            if (token.startsWith("<=")) return amount <= FormatUtil.parseMoney(token.substring(2));
-            if (token.startsWith(">")) return amount > FormatUtil.parseMoney(token.substring(1));
-            if (token.startsWith("<")) return amount < FormatUtil.parseMoney(token.substring(1));
+            if (token.startsWith(">=")) return amountMinor >= FormatUtil.parseMoneyMinor(token.substring(2));
+            if (token.startsWith("<=")) return amountMinor <= FormatUtil.parseMoneyMinor(token.substring(2));
+            if (token.startsWith(">")) return amountMinor > FormatUtil.parseMoneyMinor(token.substring(1));
+            if (token.startsWith("<")) return amountMinor < FormatUtil.parseMoneyMinor(token.substring(1));
             int dash = token.indexOf('-');
-            double low = FormatUtil.parseMoney(token.substring(0, dash));
-            double high = FormatUtil.parseMoney(token.substring(dash + 1));
-            return amount >= Math.min(low, high) && amount <= Math.max(low, high);
+            long low = FormatUtil.parseMoneyMinor(token.substring(0, dash));
+            long high = FormatUtil.parseMoneyMinor(token.substring(dash + 1));
+            return amountMinor >= Math.min(low, high) && amountMinor <= Math.max(low, high);
         } catch (IllegalArgumentException ignored) {
             return false;
         }
@@ -83,10 +83,10 @@ public final class PaylogSearch {
 
     private static String visibleText(TransactionEntry entry) {
         ZonedDateTime time = Instant.ofEpochMilli(entry.getTimestamp()).atZone(ZoneId.systemDefault());
-        String amount = FormatUtil.formatAmount(entry.getAmount());
+        String amount = FormatUtil.formatAmountMinor(entry.getAmountMinor());
         return String.join(" ",
                 safe(entry.getFromPlayer()), safe(entry.getToPlayer()), amount,
-                String.format(Locale.ROOT, "%.2f", entry.getAmount()),
+                op.creditmanager.client.money.MoneyRules.toMajor(entry.getAmountMinor()).toPlainString(),
                 safe(entry.getRawText()), safe(entry.getNormalizedText()), safe(entry.getHash()), safe(entry.getMetadata()),
                 GERMAN_DATE.format(time), GERMAN_DATE_TIME.format(time), ISO_DATE_TIME.format(time),
                 String.format(Locale.ROOT, "%02d:%02d", time.getHour(), time.getMinute()));

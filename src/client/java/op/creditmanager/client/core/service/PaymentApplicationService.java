@@ -23,38 +23,39 @@ public final class PaymentApplicationService {
         this.events = events;
     }
 
-    public Payment addMoneyPayment(UUID dealId, double amount) throws CreditException {
+    public Payment addMoneyPayment(UUID dealId, long amountMinor) throws CreditException {
         CreditEntry entry = operations.getSafeCredit(dealId);
         operations.requireWritable();
         operations.validateActive(entry);
-        operations.validateAmount(amount);
+        operations.validateAmountMinor(amountMinor);
         CreditEntry draft = operations.copyCredit(entry);
-        double remainingBefore = draft.getRemainingAmount();
-        Payment payment = new Payment(dealId, entry.getDebtor(), entry.getCreditor(), Math.min(amount, remainingBefore), null, "MANUELL");
+        long remainingBefore = draft.getRemainingAmountMinor();
+        Payment payment = new Payment(dealId, entry.getDebtor(), entry.getCreditor(), Math.min(amountMinor, remainingBefore), null, "MANUELL");
         draft.addPayment(payment);
         operations.commitMutation(draft, List.of(payment), List.of(), operations.paymentEvents(draft, payment, remainingBefore), entry);
         return payment;
     }
 
-    public Payment addMoneyPayment(UUID dealId, String fromPlayer, double amount) throws CreditException {
+    public Payment addMoneyPayment(UUID dealId, String fromPlayer, long amountMinor) throws CreditException {
         CreditEntry entry = operations.getSafeCredit(dealId);
         operations.validatePaymentSource(fromPlayer, entry);
-        return addMoneyPayment(dealId, amount);
+        return addMoneyPayment(dealId, amountMinor);
     }
 
-    public Payment addItemPayment(UUID dealId, List<String> items, double value, String nbt) throws CreditException {
-        return addItemPayment(dealId, items, value, nbt == null || nbt.isBlank() ? List.of() : List.of(nbt));
+    public Payment addItemPayment(UUID dealId, List<String> items, long valueMinor, String nbt) throws CreditException {
+        return addItemPayment(dealId, items, valueMinor, nbt == null || nbt.isBlank() ? List.of() : List.of(nbt));
     }
 
-    public Payment addItemPayment(UUID dealId, List<String> items, double value, List<String> nbtEntries) throws CreditException {
+    public Payment addItemPayment(UUID dealId, List<String> items, long valueMinor, List<String> nbtEntries) throws CreditException {
         CreditEntry entry = operations.getSafeCredit(dealId);
         operations.requireWritable();
         operations.validateActive(entry);
-        operations.validateAmount(value);
+        operations.validateAmountMinor(valueMinor);
         if (items == null || items.isEmpty()) throw new CreditException("Mindestens ein Item muss ausgewählt werden.");
         CreditEntry draft = operations.copyCredit(entry);
-        double remainingBefore = draft.getRemainingAmount();
-        Payment payment = new Payment(dealId, entry.getDebtor(), entry.getCreditor(), Math.min(value, remainingBefore), new ArrayList<>(items), "MANUELL");
+        long remainingBefore = draft.getRemainingAmountMinor();
+        Payment payment = new Payment(dealId, entry.getDebtor(), entry.getCreditor(), Math.min(valueMinor, remainingBefore), new ArrayList<>(items), "MANUELL");
+        payment.setPaymentKind(op.creditmanager.client.model.PaymentKind.ITEM);
         payment.setItemNbtEntries(nbtEntries);
         payment.setItemNbt(nbtEntries == null || nbtEntries.isEmpty() ? null : nbtEntries.get(0));
         draft.addPayment(payment);
@@ -62,14 +63,14 @@ public final class PaymentApplicationService {
         return payment;
     }
 
-    public Payment addItemPayment(UUID dealId, String fromPlayer, List<String> items, double value, String nbt) throws CreditException {
-        return addItemPayment(dealId, fromPlayer, items, value, nbt == null || nbt.isBlank() ? List.of() : List.of(nbt));
+    public Payment addItemPayment(UUID dealId, String fromPlayer, List<String> items, long valueMinor, String nbt) throws CreditException {
+        return addItemPayment(dealId, fromPlayer, items, valueMinor, nbt == null || nbt.isBlank() ? List.of() : List.of(nbt));
     }
 
-    public Payment addItemPayment(UUID dealId, String fromPlayer, List<String> items, double value, List<String> nbtEntries) throws CreditException {
+    public Payment addItemPayment(UUID dealId, String fromPlayer, List<String> items, long valueMinor, List<String> nbtEntries) throws CreditException {
         CreditEntry entry = operations.getSafeCredit(dealId);
         operations.validatePaymentSource(fromPlayer, entry);
-        return addItemPayment(dealId, items, value, nbtEntries);
+        return addItemPayment(dealId, items, valueMinor, nbtEntries);
     }
 
     public void deletePayment(UUID paymentId) throws CreditException {
@@ -78,13 +79,13 @@ public final class PaymentApplicationService {
         CreditEntry entry = operations.getSafeCredit(payment.getCreditId());
         operations.requireWritable();
         CreditEntry draft = operations.copyCredit(entry);
-        double remainingBefore = draft.getRemainingAmount();
+        long remainingBefore = draft.getRemainingAmountMinor();
         draft.removePayment(paymentId);
         if (CreditManagerCore.STATUS_OPEN.equals(draft.getStatus()) || CreditManagerCore.STATUS_PARTIAL.equals(draft.getStatus())) {
             draft.setArchived(false);
             draft.setCompletedAt(null);
         }
-        CreditEventEntry event = events.create(CreditEventType.PAYMENT_DELETED, draft, payment.getAmount() == null ? 0D : payment.getAmount(),
+        CreditEventEntry event = events.create(CreditEventType.PAYMENT_DELETED, draft, payment.getAmountMinor(),
                 remainingBefore, "Zahlung gelöscht", payment.getFromPlayer(), payment.getSource(), !payment.getItems().isEmpty());
         operations.commitMutation(draft, List.of(), List.of(paymentId), List.of(event), entry);
     }

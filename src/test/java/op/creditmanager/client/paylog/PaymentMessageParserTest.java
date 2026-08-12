@@ -13,22 +13,22 @@ class PaymentMessageParserTest {
         DetectedPayment outgoing = parser.parse("OPSUCHT » Du hast Spieler 1.234,50$ gegeben.", "Ich").orElseThrow();
         assertEquals("ich", outgoing.fromPlayer());
         assertEquals("spieler", outgoing.toPlayer());
-        assertEquals(1234.5D, outgoing.amount());
+        assertEquals(123_450L, outgoing.amountMinor());
 
         DetectedPayment incoming = parser.parse("§aOPSUCHT » Spieler hat dir 12.50$ gegeben.", "Ich").orElseThrow();
         assertEquals("spieler", incoming.fromPlayer());
         assertEquals("ich", incoming.toPlayer());
-        assertEquals(12.5D, incoming.amount());
+        assertEquals(1_250L, incoming.amountMinor());
 
         DetectedPayment million = parser.parse("OPSUCHT » Spieler hat dir 1.000.000$ gegeben.", "Ich").orElseThrow();
-        assertEquals(1_000_000D, million.amount());
+        assertEquals(100_000_000L, million.amountMinor());
 
         DetectedPayment tenPointOneMillion = parser.parse("OPSUCHT » Spieler hat dir 10.100.000$ gegeben.", "Ich").orElseThrow();
-        assertEquals(10_100_000D, tenPointOneMillion.amount());
+        assertEquals(1_010_000_000L, tenPointOneMillion.amountMinor());
 
         DetectedPayment formattedName = parser.parse("§aOPSUCHT » §bSpieler_42 hat dir 10.000$ gegeben.", "Ich").orElseThrow();
         assertEquals("spieler_42", formattedName.fromPlayer());
-        assertEquals(10_000D, formattedName.amount());
+        assertEquals(1_000_000L, formattedName.amountMinor());
     }
 
     @Test

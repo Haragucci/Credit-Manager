@@ -18,18 +18,18 @@ public final class CreditApplicationService {
         this.operations = operations;
     }
 
-    public CreditEntry createCredit(String creditor, String debtor, double amount, Long dueDate, String label, String note) throws CreditException {
+    public CreditEntry createCredit(String creditor, String debtor, long amountMinor, Long dueDate, String label, String note) throws CreditException {
         operations.requireWritable();
         operations.validateNames(creditor, debtor);
-        operations.validateAmount(amount);
+        operations.validateAmountMinor(amountMinor);
         operations.validateDealInput(label, note, dueDate);
         String dealName = CreditEntry.buildDealName(debtor, creditor, label);
         boolean exists = repository.getAllCredits().stream().anyMatch(entry -> dealName.equalsIgnoreCase(entry.getDealName())
                 && !CreditManagerCore.STATUS_CANCELLED.equals(entry.getStatus()));
         if (exists) throw new CreditException("Ein aktiver Deal mit diesem Namen existiert bereits.");
-        CreditEntry entry = new CreditEntry(UUID.randomUUID(), dealName, operations.lower(creditor), operations.lower(debtor), amount, dueDate, note);
+        CreditEntry entry = new CreditEntry(UUID.randomUUID(), dealName, operations.lower(creditor), operations.lower(debtor), amountMinor, dueDate, note);
         operations.commitMutation(entry, List.of(), List.of(), List.of(operations.event(CreditEventType.CREDIT_CREATED, entry,
-                entry.getAmount(), entry.getAmount(), entry.getNote(), creditor, "CREATE", false)), null);
+                entry.getAmountMinor(), entry.getAmountMinor(), entry.getNote(), creditor, "CREATE", false)), null);
         return entry;
     }
 
@@ -38,9 +38,9 @@ public final class CreditApplicationService {
         operations.requireWritable();
         if (entry.isArchived()) return entry;
         CreditEntry draft = operations.copyCredit(entry);
-        double remainingBefore = draft.getRemainingAmount();
+        long remainingBefore = draft.getRemainingAmountMinor();
         draft.setArchived(true);
-        operations.commitMutation(draft, List.of(), List.of(), List.of(operations.event(CreditEventType.CREDIT_ARCHIVED, draft, draft.getAmount(), remainingBefore,
+        operations.commitMutation(draft, List.of(), List.of(), List.of(operations.event(CreditEventType.CREDIT_ARCHIVED, draft, draft.getAmountMinor(), remainingBefore,
                 "Deal archiviert", null, "ARCHIVE", false)), entry);
         return entry;
     }
@@ -50,10 +50,10 @@ public final class CreditApplicationService {
         operations.requireWritable();
         operations.validateActive(entry);
         CreditEntry draft = operations.copyCredit(entry);
-        double remainingBefore = draft.getRemainingAmount();
+        long remainingBefore = draft.getRemainingAmountMinor();
         draft.setStatus(CreditManagerCore.STATUS_CLOSED);
         draft.setCompletedAt(System.currentTimeMillis());
-        operations.commitMutation(draft, List.of(), List.of(), List.of(operations.event(CreditEventType.CREDIT_CLOSED, draft, draft.getAmount(), remainingBefore,
+        operations.commitMutation(draft, List.of(), List.of(), List.of(operations.event(CreditEventType.CREDIT_CLOSED, draft, draft.getAmountMinor(), remainingBefore,
                 "Deal manuell abgeschlossen", null, "CLOSE", false)), entry);
         return entry;
     }
@@ -63,23 +63,23 @@ public final class CreditApplicationService {
         operations.requireWritable();
         if (!entry.isArchived() && !CreditManagerCore.STATUS_CANCELLED.equals(entry.getStatus()) && !CreditManagerCore.STATUS_CLOSED.equals(entry.getStatus())) return entry;
         CreditEntry draft = operations.copyCredit(entry);
-        double remainingBefore = draft.getRemainingAmount();
+        long remainingBefore = draft.getRemainingAmountMinor();
         draft.setArchived(false);
         draft.setCompletedAt(null);
         draft.setStatus(CreditManagerCore.STATUS_OPEN);
         draft.refreshPaymentState();
-        operations.commitMutation(draft, List.of(), List.of(), List.of(operations.event(CreditEventType.CREDIT_REACTIVATED, draft, draft.getAmount(), remainingBefore,
+        operations.commitMutation(draft, List.of(), List.of(), List.of(operations.event(CreditEventType.CREDIT_REACTIVATED, draft, draft.getAmountMinor(), remainingBefore,
                 "Deal reaktiviert", null, "REACTIVATE", false)), entry);
         return entry;
     }
 
-    public CreditEntry updateCredit(UUID dealId, String creditor, String debtor, double amount, Long dueDate, String label, String note) throws CreditException {
+    public CreditEntry updateCredit(UUID dealId, String creditor, String debtor, long amountMinor, Long dueDate, String label, String note) throws CreditException {
         CreditEntry entry = operations.getSafeCredit(dealId);
         operations.requireWritable();
         operations.validateNames(creditor, debtor);
-        operations.validateAmount(amount);
+        operations.validateAmountMinor(amountMinor);
         operations.validateDealInput(label, note, dueDate);
-        if (amount + 0.0001D < entry.getPaidAmount()) throw new CreditException("Der Gesamtbetrag darf nicht kleiner als bereits bezahlt sein.");
+        if (amountMinor < entry.getPaidAmountMinor()) throw new CreditException("Der Gesamtbetrag darf nicht kleiner als bereits bezahlt sein.");
         boolean counterpartyChanged = !operations.lower(creditor).equals(entry.getCreditor()) || !operations.lower(debtor).equals(entry.getDebtor());
         if (counterpartyChanged && !entry.getPayments().isEmpty()) throw new CreditException("Die Gegenpartei kann nach vorhandenen Zahlungen nicht geändert werden.");
         String name = CreditEntry.buildDealName(debtor, creditor, label);
@@ -87,15 +87,15 @@ public final class CreditApplicationService {
                 && name.equalsIgnoreCase(other.getDealName()) && !CreditManagerCore.STATUS_CANCELLED.equals(other.getStatus()));
         if (exists) throw new CreditException("Ein aktiver Deal mit diesem Namen existiert bereits.");
         CreditEntry draft = operations.copyCredit(entry);
-        double previousAmount = draft.getAmount();
+        long previousAmount = draft.getAmountMinor();
         draft.setCreditor(operations.lower(creditor));
         draft.setDebtor(operations.lower(debtor));
         draft.setDealName(name);
-        draft.setAmount(amount);
+        draft.setAmountMinor(amountMinor);
         draft.setDueDate(dueDate);
         draft.setNote(note == null || note.isBlank() ? null : note.trim());
         draft.refreshPaymentState();
-        operations.commitMutation(draft, List.of(), List.of(), List.of(operations.event(CreditEventType.CREDIT_UPDATED, draft, amount, previousAmount,
+        operations.commitMutation(draft, List.of(), List.of(), List.of(operations.event(CreditEventType.CREDIT_UPDATED, draft, amountMinor, previousAmount,
                 "Deal bearbeitet", null, "EDIT", false)), entry);
         return entry;
     }

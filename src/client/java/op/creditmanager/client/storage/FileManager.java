@@ -6,7 +6,10 @@ import net.fabricmc.loader.api.FabricLoader;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.StandardCopyOption;
 import java.util.Comparator;
+import java.util.UUID;
 
 public class FileManager {
 
@@ -102,6 +105,10 @@ public class FileManager {
         return getRecoveryDirectory().resolve("validation");
     }
 
+    public static Path getDiscardRecoveryDirectory() {
+        return getRecoveryDirectory().resolve("discard-snapshots");
+    }
+
     public static void tidyAfterSuccessfulSave() {
         try {
             Path backups = dataDirectory.resolve("backups");
@@ -111,9 +118,13 @@ public class FileManager {
             }
             try (var files = Files.list(backups)) {
                 files.filter(Files::isRegularFile)
+                        .filter(path -> {
+                            String name = path.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+                            return !name.endsWith(".zip") && !name.endsWith(".mv.db") && !name.equals("manifest.json");
+                        })
                         .collect(java.util.stream.Collectors.groupingBy(FileManager::backupType))
                         .values()
-                        .forEach(group -> group.stream().sorted(Comparator.comparingLong(FileManager::modified).reversed()).skip(12).forEach(FileManager::deleteQuietly));
+                        .forEach(group -> group.stream().sorted(Comparator.comparingLong(FileManager::modified).reversed()).skip(12).forEach(FileManager::archiveRetiredBackup));
             }
         } catch (IOException exception) {
             CreditManagerClient.LOGGER.warn("Could not tidy CreditManager data directory", exception);
@@ -127,4 +138,17 @@ public class FileManager {
         return marker > 0 ? name.substring(0, marker) : name;
     }
     private static void deleteQuietly(Path path) { try { Files.deleteIfExists(path); } catch (IOException ignored) { } }
+    private static void archiveRetiredBackup(Path path) {
+        Path target = getRecoveryDirectory().resolve("retired-file-backups").resolve(path.getFileName() + "." + UUID.randomUUID());
+        try {
+            Files.createDirectories(target.getParent());
+            try {
+                Files.move(path, target, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException exception) {
+                Files.move(path, target);
+            }
+        } catch (IOException exception) {
+            CreditManagerClient.LOGGER.warn("Could not archive retired CreditManager file backup: {}", path, exception);
+        }
+    }
 }

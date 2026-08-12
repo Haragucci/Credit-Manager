@@ -14,19 +14,19 @@ public interface CreditOperations {
     CreditEntry getSafeCredit(UUID id) throws CreditException;
     void requireWritable() throws CreditException;
     void validateActive(CreditEntry entry) throws CreditException;
-    void validateAmount(double amount) throws CreditException;
+    void validateAmountMinor(long amountMinor) throws CreditException;
     void validateNames(String creditor, String debtor) throws CreditException;
     void validateDealInput(String label, String note, Long dueDate) throws CreditException;
     void validatePaymentSource(String fromPlayer, CreditEntry entry) throws CreditException;
     CreditEntry copyCredit(CreditEntry source);
     void commitMutation(CreditEntry draft, List<Payment> paymentUpserts, List<UUID> paymentDeletions,
                         List<CreditEventEntry> events, CreditEntry published) throws CreditException;
-    List<CreditEventEntry> paymentEvents(CreditEntry entry, Payment payment, double remainingBefore);
+    List<CreditEventEntry> paymentEvents(CreditEntry entry, Payment payment, long remainingBeforeMinor);
     TransactionEntry getPaylog(UUID paylogId) throws CreditException;
     List<CreditEntry> matchingActiveDeals(TransactionEntry paylog);
     boolean samePlayer(String left, String right);
     String normalizeNote(String note) throws CreditException;
     String lower(String value);
-    CreditEventEntry event(CreditEventType type, CreditEntry entry, double amount, double amountBefore,
+    CreditEventEntry event(CreditEventType type, CreditEntry entry, long amountMinor, long amountBeforeMinor,
                            String note, String actor, String source, boolean itemPayment);
 }

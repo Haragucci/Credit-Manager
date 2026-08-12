@@ -115,7 +115,7 @@ public class ModernCreditListScreen extends ModernBaseScreen {
         ModernUi.drawTruncated(context, textRenderer, players, x + 30, y + 7, Math.max(40, width - 170), ModernUi.theme().text);
         ModernUi.drawTruncated(context, textRenderer, entry.getDealName(), x + 30, y + 22,
                 Math.max(40, width - 170), ModernUi.theme().muted);
-        String amount = FormatUtil.formatAmount(entry.getRemainingAmount());
+        String amount = FormatUtil.formatAmountMinor(entry.getRemainingAmountMinor());
         ModernUi.drawGuiTextRightAligned(context, textRenderer, amount, x + width - 12, y + 9,
                 debts ? ModernUi.theme().danger : ModernUi.theme().success);
         String status = statusLabel(entry.getStatus());

@@ -10,6 +10,7 @@ import op.creditmanager.client.core.CreditManager;
 import op.creditmanager.client.gui.CenteredTextFieldWidget;
 import op.creditmanager.client.gui.modern.query.ModernQueryDebouncer;
 import op.creditmanager.client.gui.modern.query.ModernQueryExecutor;
+import op.creditmanager.client.gui.modern.query.LatestQueryController;
 import op.creditmanager.client.gui.modern.widget.ModernScrollArea;
 import op.creditmanager.client.model.CreditEntry;
 import op.creditmanager.client.storage.db.DatabaseManager;
@@ -24,6 +25,7 @@ public final class ModernDealHistoryScreen extends ModernBaseScreen {
     private static final DatabaseManager.DealHistorySort[] SORTS = DatabaseManager.DealHistorySort.values();
     private final ModernScrollArea scroll = new ModernScrollArea();
     private final ModernQueryDebouncer debouncer = new ModernQueryDebouncer(300L);
+    private final LatestQueryController<String, DatabaseManager.QueryPage<CreditEntry>> queries = new LatestQueryController<>();
     private TextFieldWidget searchField;
     private DatabaseManager.QueryPage<CreditEntry> page = new DatabaseManager.QueryPage<>(List.of(), 0, 0, PAGE_SIZE);
     private List<CreditEntry> rendered = List.of();
@@ -32,17 +34,16 @@ public final class ModernDealHistoryScreen extends ModernBaseScreen {
     private List<ModernLayout.Bounds> toolbarButtons = List.of();
     private List<ModernLayout.Bounds> pagingButtons = List.of();
     private List<ModernLayout.Bounds> errorButtons = List.of();
-    private boolean showArchived, forceSearch, disposed;
+    private boolean showArchived, forceSearch;
     private int sortIndex;
     private String rawSearchKey = "", requestedKey = "", appliedKey = "", queryError;
-    private PendingQuery pending;
-    private long requestSequence;
+    private LatestQueryController.Ticket<String, DatabaseManager.QueryPage<CreditEntry>> pending;
     private int errorCardY;
 
     public ModernDealHistoryScreen(CreditManager manager, Screen parent) { super(manager, parent, "Deal-History", "history"); }
 
     @Override protected void init() {
-        super.init(); disposed = false; clearChildren();
+        super.init(); queries.reopen(); clearChildren();
         searchField = ModernUi.configureGuiTextField(new CenteredTextFieldWidget(textRenderer, contentX + 8, contentY + 4, Math.max(60, contentWidth - 16), 28, Text.empty()));
         searchField.setMaxLength(128); ModernUi.setGuiPlaceholder(searchField, "Name, Spieler, Betrag, Status, Datum, ID oder Notiz..."); addDrawableChild(searchField);
         forceSearch = true;
@@ -50,7 +51,6 @@ public final class ModernDealHistoryScreen extends ModernBaseScreen {
 
     @Override public void tick() {
         super.tick();
-        if (disposed) return;
         if (!DatabaseManager.getInstance().isHealthy()) {
             queryError = "Die History kann erst nach der Datenbankprüfung geladen werden.";
             forceSearch = false;
@@ -58,6 +58,8 @@ public final class ModernDealHistoryScreen extends ModernBaseScreen {
         }
         String searchKey = currentPlayerName() + '|' + (searchField == null ? "" : searchField.getText().trim()) + '|' + manager.getRevision();
         if (!searchKey.equals(rawSearchKey)) {
+            queries.invalidate();
+            pending = null;
             rawSearchKey = searchKey;
             pageOffset = 0;
             scroll.reset();
@@ -76,19 +78,18 @@ public final class ModernDealHistoryScreen extends ModernBaseScreen {
     }
 
     private void schedule(String key) {
-        long sequence = ++requestSequence;
         requestedKey = key;
         String player = currentPlayerName();
         String query = searchField == null ? "" : searchField.getText().trim();
         int offset = pageOffset;
         boolean archives = showArchived;
         DatabaseManager.DealHistorySort sort = SORTS[sortIndex];
-        pending = new PendingQuery(sequence, key, CompletableFuture.supplyAsync(
+        pending = queries.replace(key, CompletableFuture.supplyAsync(
                 () -> DatabaseManager.getInstance().queryDealHistoryPage(player, query, archives, sort, PAGE_SIZE, offset), ModernQueryExecutor.get()));
     }
 
-    private void applyFinished(PendingQuery result) {
-        if (disposed || result.sequence() != requestSequence || !result.key().equals(viewKey())) return;
+    private void applyFinished(LatestQueryController.Ticket<String, DatabaseManager.QueryPage<CreditEntry>> result) {
+        if (!queries.isCurrent(result, viewKey())) return;
         try { page = result.future().join(); appliedKey = result.key(); scroll.reset(); }
         catch (RuntimeException error) { queryError = "Deal-History konnte nicht geladen werden."; CreditManagerClient.LOGGER.error("Deal-history background query failed", error); toastError(queryError); }
     }
@@ -170,7 +171,7 @@ public final class ModernDealHistoryScreen extends ModernBaseScreen {
         int color = entry.isArchived() ? ModernUi.theme().muted : CreditManager.STATUS_PAID.equals(entry.getStatus()) ? ModernUi.theme().success : ModernUi.theme().warning;
         ModernUi.drawTruncated(context, textRenderer, entry.getDebtor() + " → " + entry.getCreditor(), x + 9, y + 8, Math.max(1, width - 150), ModernUi.theme().text);
         ModernUi.drawTruncated(context, textRenderer, entry.getDealName(), x + 9, y + 23, Math.max(1, width - 150), ModernUi.theme().muted);
-        ModernUi.drawGuiTextRightAligned(context, textRenderer, FormatUtil.formatAmount(entry.getAmount()), x + width - 10, y + 8, color);
+        ModernUi.drawGuiTextRightAligned(context, textRenderer, FormatUtil.formatAmountMinor(entry.getAmountMinor()), x + width - 10, y + 8, color);
         ModernUi.drawGuiTextRightAligned(context, textRenderer, entry.isArchived() ? "Archiviert" : statusLabel(entry.getStatus()), x + width - 10, y + 23, color);
     }
 
@@ -194,6 +195,5 @@ public final class ModernDealHistoryScreen extends ModernBaseScreen {
     @Override public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) { if (scroll.contains(mouseX, mouseY)) { scroll.scroll(verticalAmount); return true; } return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount); }
     private String viewKey() { return rawSearchKey + '|' + showArchived + '|' + sortIndex + '|' + pageOffset; }
     private String statusLabel(String status) { return switch (status) { case CreditManager.STATUS_PAID -> "Bezahlt"; case CreditManager.STATUS_CLOSED -> "Abgeschlossen"; case CreditManager.STATUS_CANCELLED -> "Storniert"; default -> "Teilweise bezahlt"; }; }
-    @Override protected void clearTransientState() { disposed = true; requestSequence++; scroll.reset(); page = new DatabaseManager.QueryPage<>(List.of(), 0, 0, PAGE_SIZE); rawSearchKey = ""; requestedKey = ""; appliedKey = ""; pending = null; queryError = null; errorButtons = List.of(); pageOffset = 0; super.clearTransientState(); }
-    private record PendingQuery(long sequence, String key, CompletableFuture<DatabaseManager.QueryPage<CreditEntry>> future) { }
+    @Override protected void clearTransientState() { queries.close(); scroll.reset(); page = new DatabaseManager.QueryPage<>(List.of(), 0, 0, PAGE_SIZE); rawSearchKey = ""; requestedKey = ""; appliedKey = ""; pending = null; queryError = null; errorButtons = List.of(); pageOffset = 0; super.clearTransientState(); }
 }

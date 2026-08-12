@@ -2,7 +2,7 @@
 
 CreditManager ist eine clientseitige Fabric-Mod für Minecraft **1.21.11**. Sie dokumentiert Forderungen, Schulden, Geld- und Item-Zahlungen sowie erkannte Paylogs lokal auf deinem Rechner.
 
-**Version:** `1.1.1-beta` · **Java:** `21` · **Minecraft:** `1.21.11`
+**Version:** `1.1.3-beta` · **Java:** `21` · **Minecraft:** `1.21.11`
 
 ## Bedienung
 

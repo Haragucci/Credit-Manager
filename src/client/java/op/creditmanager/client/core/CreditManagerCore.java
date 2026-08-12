@@ -60,20 +60,39 @@ public class CreditManagerCore implements CreditOperations {
 
     public CreditEntry createCredit(String creditor, String debtor, double amount,
                                     Long dueDate, String label, String note) throws CreditException {
-        return credits.createCredit(creditor, debtor, amount, dueDate, label, note);
+        return createCreditMinor(creditor, debtor, legacyMinor(amount), dueDate, label, note);
+    }
+
+    public CreditEntry createCreditMinor(String creditor, String debtor, long amountMinor,
+                                         Long dueDate, String label, String note) throws CreditException {
+        return credits.createCredit(creditor, debtor, amountMinor, dueDate, label, note);
     }
 
     public Payment addMoneyPayment(UUID dealId, double amount) throws CreditException {
-        return payments.addMoneyPayment(dealId, amount);
+        return addMoneyPaymentMinor(dealId, legacyMinor(amount));
+    }
+
+    public Payment addMoneyPaymentMinor(UUID dealId, long amountMinor) throws CreditException {
+        return payments.addMoneyPayment(dealId, amountMinor);
     }
 
     public Payment addMoneyPayment(UUID dealId, String fromPlayer, double amount) throws CreditException {
-        return payments.addMoneyPayment(dealId, fromPlayer, amount);
+        return addMoneyPaymentMinor(dealId, fromPlayer, legacyMinor(amount));
+    }
+
+    public Payment addMoneyPaymentMinor(UUID dealId, String fromPlayer, long amountMinor) throws CreditException {
+        return payments.addMoneyPayment(dealId, fromPlayer, amountMinor);
     }
 
     public synchronized PaylogLinkResult addPaylogPayment(UUID dealId, UUID paylogId, double requestedAmount,
                                                            long timestamp, String note) throws CreditException {
-        return paylogLinks.addPaylogPayment(dealId, paylogId, requestedAmount, timestamp, note);
+        return addPaylogPaymentMinor(dealId, paylogId,
+                legacyMinor(requestedAmount), timestamp, note);
+    }
+
+    public synchronized PaylogLinkResult addPaylogPaymentMinor(UUID dealId, UUID paylogId, long requestedAmountMinor,
+                                                                long timestamp, String note) throws CreditException {
+        return paylogLinks.addPaylogPayment(dealId, paylogId, requestedAmountMinor, timestamp, note);
     }
 
     public synchronized PaylogLinkResult linkPaylogToDeal(UUID paylogId, UUID dealId) throws CreditException {
@@ -95,21 +114,39 @@ public class CreditManagerCore implements CreditOperations {
     }
 
     public Payment addItemPayment(UUID dealId, List<String> items, double value, String nbt) throws CreditException {
-        return payments.addItemPayment(dealId, items, value, nbt);
+        return addItemPaymentMinor(dealId, items, legacyMinor(value), nbt);
+    }
+
+    public Payment addItemPaymentMinor(UUID dealId, List<String> items, long valueMinor, String nbt) throws CreditException {
+        return payments.addItemPayment(dealId, items, valueMinor, nbt);
     }
 
     public Payment addItemPayment(UUID dealId, List<String> items, double value,
                                   List<String> nbtEntries) throws CreditException {
-        return payments.addItemPayment(dealId, items, value, nbtEntries);
+        return addItemPaymentMinor(dealId, items, legacyMinor(value), nbtEntries);
+    }
+
+    public Payment addItemPaymentMinor(UUID dealId, List<String> items, long valueMinor,
+                                       List<String> nbtEntries) throws CreditException {
+        return payments.addItemPayment(dealId, items, valueMinor, nbtEntries);
     }
 
     public Payment addItemPayment(UUID dealId, String fromPlayer, List<String> items, double value, String nbt) throws CreditException {
-        return payments.addItemPayment(dealId, fromPlayer, items, value, nbt);
+        return addItemPaymentMinor(dealId, fromPlayer, items, legacyMinor(value), nbt);
+    }
+
+    public Payment addItemPaymentMinor(UUID dealId, String fromPlayer, List<String> items, long valueMinor, String nbt) throws CreditException {
+        return payments.addItemPayment(dealId, fromPlayer, items, valueMinor, nbt);
     }
 
     public Payment addItemPayment(UUID dealId, String fromPlayer, List<String> items, double value,
                                   List<String> nbtEntries) throws CreditException {
-        return payments.addItemPayment(dealId, fromPlayer, items, value, nbtEntries);
+        return addItemPaymentMinor(dealId, fromPlayer, items, legacyMinor(value), nbtEntries);
+    }
+
+    public Payment addItemPaymentMinor(UUID dealId, String fromPlayer, List<String> items, long valueMinor,
+                                       List<String> nbtEntries) throws CreditException {
+        return payments.addItemPayment(dealId, fromPlayer, items, valueMinor, nbtEntries);
     }
 
     public CreditEntry deleteCredit(UUID dealId) throws CreditException {
@@ -133,7 +170,12 @@ public class CreditManagerCore implements CreditOperations {
     }
 
     public CreditEntry updateCredit(UUID dealId, String creditor, String debtor, double amount, Long dueDate, String label, String note) throws CreditException {
-        return credits.updateCredit(dealId, creditor, debtor, amount, dueDate, label, note);
+        return updateCreditMinor(dealId, creditor, debtor, legacyMinor(amount), dueDate, label, note);
+    }
+
+    public CreditEntry updateCreditMinor(UUID dealId, String creditor, String debtor, long amountMinor, Long dueDate,
+                                         String label, String note) throws CreditException {
+        return credits.updateCredit(dealId, creditor, debtor, amountMinor, dueDate, label, note);
     }
 
     public List<CreditEntry> getOpenCreditsAsDebtor(String player) { return queries.openAsDebtor(player); }
@@ -174,6 +216,7 @@ public class CreditManagerCore implements CreditOperations {
         return recovery.repairEvent(token, creditId, type, amount, timestamp);
     }
     public boolean ignoreRecovery(UUID token) { return recovery.ignore(token); }
+    public boolean discardRecovery(UUID token, boolean confirmed) { return recovery.discard(token, confirmed); }
     public boolean createRecoveryBackup(UUID token) { return recovery.createRecoveryBackup(token); }
     public boolean createSafetyBackup() { return recovery.createSafetyBackup(); }
     public boolean restoreLatestSafetyBackup() { return recovery.restoreLatestSafetyBackup(); }
@@ -204,25 +247,25 @@ public class CreditManagerCore implements CreditOperations {
         mutations.commit(draft, paymentUpserts, paymentDeletions, events, published);
     }
 
-    public List<CreditEventEntry> paymentEvents(CreditEntry entry, Payment payment, double remainingBefore) {
+    public List<CreditEventEntry> paymentEvents(CreditEntry entry, Payment payment, long remainingBeforeMinor) {
         List<CreditEventEntry> events = new ArrayList<>();
-        double amount = payment.getAmount() == null ? 0D : payment.getAmount();
-        boolean itemPayment = !payment.getItems().isEmpty();
-        events.add(event(CreditEventType.PAYMENT_ADDED, entry, amount, remainingBefore, "Zahlung hinzugefügt",
+        long amountMinor = payment.getAmountMinor();
+        boolean itemPayment = payment.getPaymentKind() == op.creditmanager.client.model.PaymentKind.ITEM;
+        events.add(event(CreditEventType.PAYMENT_ADDED, entry, amountMinor, remainingBeforeMinor, "Zahlung hinzugefügt",
                 payment.getFromPlayer(), payment.getSource(), itemPayment));
         if (STATUS_PAID.equals(entry.getStatus())) {
-            events.add(event(CreditEventType.CREDIT_PAID, entry, amount, remainingBefore, "Deal vollständig bezahlt",
+            events.add(event(CreditEventType.CREDIT_PAID, entry, amountMinor, remainingBeforeMinor, "Deal vollständig bezahlt",
                     payment.getFromPlayer(), payment.getSource(), itemPayment));
         } else if (STATUS_PARTIAL.equals(entry.getStatus())) {
-            events.add(event(CreditEventType.CREDIT_PARTIAL, entry, amount, remainingBefore, "Teilzahlung",
+            events.add(event(CreditEventType.CREDIT_PARTIAL, entry, amountMinor, remainingBeforeMinor, "Teilzahlung",
                     payment.getFromPlayer(), payment.getSource(), itemPayment));
         }
         return List.copyOf(events);
     }
 
-    public CreditEventEntry event(CreditEventType type, CreditEntry entry, double amount, double amountBefore,
+    public CreditEventEntry event(CreditEventType type, CreditEntry entry, long amountMinor, long amountBeforeMinor,
                                    String note, String actor, String source, boolean itemPayment) {
-        return events.create(type, entry, amount, amountBefore, note, actor, source, itemPayment);
+        return events.create(type, entry, amountMinor, amountBeforeMinor, note, actor, source, itemPayment);
     }
 
     public CreditEntry copyCredit(CreditEntry source) {
@@ -259,8 +302,8 @@ public class CreditManagerCore implements CreditOperations {
         return left != null && right != null && left.equalsIgnoreCase(right);
     }
 
-    public void validateAmount(double amount) throws CreditException {
-        if (!MoneyRules.isPositive(amount)) {
+    public void validateAmountMinor(long amountMinor) throws CreditException {
+        if (!MoneyRules.isPositive(amountMinor)) {
             throw new CreditException("Betrag liegt außerhalb des erlaubten Bereichs.");
         }
     }
@@ -300,15 +343,26 @@ public class CreditManagerCore implements CreditOperations {
     }
 
     public record PaylogLinkResult(Status status, TransactionEntry paylog, CreditEntry credit, Payment payment,
-                                   double remainingPaylogAmount, boolean automatic) {
-        public enum Status { LINKED, NO_MATCHING_DEAL, NO_SINGLE_DEAL_FITS, AUTO_LINK_DISABLED, ALREADY_CONSUMED }
-        public static PaylogLinkResult linked(TransactionEntry paylog, CreditEntry credit, Payment payment, double remaining, boolean automatic) {
-            return new PaylogLinkResult(Status.LINKED, paylog, credit, payment, Math.max(0D, remaining), automatic);
+                                   long remainingPaylogMinor, boolean automatic, List<UUID> candidateIds) {
+        public enum Status { LINKED, AMBIGUOUS, NO_MATCHING_DEAL, NO_SINGLE_DEAL_FITS, AUTO_LINK_DISABLED, ALREADY_CONSUMED }
+        public PaylogLinkResult {
+            candidateIds = candidateIds == null ? List.of() : List.copyOf(candidateIds);
         }
-        public static PaylogLinkResult noMatchingDeal(TransactionEntry paylog) { return new PaylogLinkResult(Status.NO_MATCHING_DEAL, paylog, null, null, paylog.getRemainingAmount(), true); }
-        public static PaylogLinkResult noSingleDealFits(TransactionEntry paylog) { return new PaylogLinkResult(Status.NO_SINGLE_DEAL_FITS, paylog, null, null, paylog.getRemainingAmount(), true); }
-        public static PaylogLinkResult autoLinkDisabled(TransactionEntry paylog, CreditEntry credit) { return new PaylogLinkResult(Status.AUTO_LINK_DISABLED, paylog, credit, null, paylog.getRemainingAmount(), false); }
-        public static PaylogLinkResult alreadyConsumed(TransactionEntry paylog) { return new PaylogLinkResult(Status.ALREADY_CONSUMED, paylog, null, null, 0D, false); }
+        public static PaylogLinkResult linked(TransactionEntry paylog, CreditEntry credit, Payment payment, long remainingMinor, boolean automatic) { return new PaylogLinkResult(Status.LINKED, paylog, credit, payment, Math.max(0L, remainingMinor), automatic, List.of(credit.getId())); }
+        public static PaylogLinkResult ambiguous(TransactionEntry paylog, List<CreditEntry> candidates) { return new PaylogLinkResult(Status.AMBIGUOUS, paylog, null, null, paylog.getRemainingAmountMinor(), true, candidates.stream().map(CreditEntry::getId).toList()); }
+        public static PaylogLinkResult noMatchingDeal(TransactionEntry paylog) { return new PaylogLinkResult(Status.NO_MATCHING_DEAL, paylog, null, null, paylog.getRemainingAmountMinor(), true, List.of()); }
+        public static PaylogLinkResult noSingleDealFits(TransactionEntry paylog) { return new PaylogLinkResult(Status.NO_SINGLE_DEAL_FITS, paylog, null, null, paylog.getRemainingAmountMinor(), true, List.of()); }
+        public static PaylogLinkResult autoLinkDisabled(TransactionEntry paylog, List<CreditEntry> credits) { return new PaylogLinkResult(Status.AUTO_LINK_DISABLED, paylog, credits.size() == 1 ? credits.getFirst() : null, null, paylog.getRemainingAmountMinor(), false, credits.stream().map(CreditEntry::getId).toList()); }
+        public static PaylogLinkResult alreadyConsumed(TransactionEntry paylog) { return new PaylogLinkResult(Status.ALREADY_CONSUMED, paylog, null, null, 0L, false, List.of()); }
         public boolean linked() { return status == Status.LINKED; }
+        @Deprecated public double remainingPaylogAmount() { return MoneyRules.toDisplayDouble(remainingPaylogMinor); }
+    }
+
+    private long legacyMinor(double amount) throws CreditException {
+        try {
+            return MoneyRules.fromLegacyDouble(amount, true).minorUnits();
+        } catch (IllegalArgumentException exception) {
+            throw new CreditException("Betrag liegt außerhalb des erlaubten Bereichs.");
+        }
     }
 }

@@ -57,7 +57,7 @@ public final class ModernItemDetailScreen extends ModernBaseScreen {
         ModernUi.drawGuiText(context, textRenderer, "Anzahl: " + stack.getCount(), detailsX, cardY + 65, theme.accent);
 
         int rowY = cardY + 100;
-        String amount = payment.getAmount() == null || payment.getAmount() <= 0.0 ? "Item-Tausch" : FormatUtil.formatAmount(payment.getAmount());
+        String amount = payment.getAmountMinor() <= 0L ? "Item-Tausch" : FormatUtil.formatAmountMinor(payment.getAmountMinor());
         drawRow(context, "Wert", amount, rowY, theme);
         CreditEntry credit = manager.findCredit(payment.getCreditId().toString()).orElse(null);
         String from = credit == null ? payment.getFromPlayer() : credit.getDebtor();

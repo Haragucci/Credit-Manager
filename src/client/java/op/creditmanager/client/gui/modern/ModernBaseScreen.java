@@ -53,19 +53,17 @@ public abstract class ModernBaseScreen extends Screen {
 
     @Override
     protected void init() {
-        int shortestSide = Math.max(1, Math.min(width, height));
-        int outerMargin = Math.min(Math.max(1, shortestSide / 16), 24);
-        panelWidth = Math.max(1, Math.min(760, width - outerMargin * 2));
-        panelHeight = Math.max(1, Math.min(460, height - outerMargin * 2));
-        panelX = (width - panelWidth) / 2;
-        panelY = (height - panelHeight) / 2;
-        compactLayout = panelWidth < 220 || panelHeight < 170;
-        sidebarWidth = compactLayout ? 0 : Math.min(150, Math.max(78, panelWidth / 5));
-        int contentInset = compactLayout ? Math.min(6, Math.max(1, panelWidth / 8)) : 18;
-        contentX = panelX + sidebarWidth + contentInset;
-        contentY = panelY + Math.min(48, Math.max(32, panelHeight / 3));
-        contentWidth = Math.max(1, panelX + panelWidth - contentInset - contentX);
-        contentHeight = Math.max(1, panelY + panelHeight - contentInset - contentY);
+        ModernLayout.ShellBounds layout = ModernLayout.shell(width, height);
+        panelWidth = layout.panelWidth();
+        panelHeight = layout.panelHeight();
+        panelX = layout.panelX();
+        panelY = layout.panelY();
+        compactLayout = layout.compact();
+        sidebarWidth = layout.sidebarWidth();
+        contentX = layout.contentX();
+        contentY = layout.contentY();
+        contentWidth = layout.contentWidth();
+        contentHeight = layout.contentHeight();
     }
 
     protected void renderShell(DrawContext context, int mouseX, int mouseY) {

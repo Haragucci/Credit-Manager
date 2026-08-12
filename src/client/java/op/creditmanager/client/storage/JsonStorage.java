@@ -15,6 +15,7 @@ import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class JsonStorage {
+    private static final long MAX_JSON_BYTES = 67_108_864L;
 
     public record LoadResult<T>(T value, boolean missing, boolean recoveryRequired) { }
 
@@ -31,9 +32,15 @@ public class JsonStorage {
             if (!Files.exists(path)) {
                 return new LoadResult<>(defaultValue, true, false);
             }
+            if (Files.size(path) > MAX_JSON_BYTES) throw new IOException("JSON file exceeds the supported size limit");
             String json = Files.readString(path, StandardCharsets.UTF_8);
             T result = GSON.fromJson(json, type);
-            return new LoadResult<>(result != null ? result : defaultValue, false, false);
+            if (result == null) {
+                CreditManagerClient.LOGGER.error("Corrupted JSON root in file: {}", path);
+                DataHealth.reportRecoveryRequired(path, createBackup(path));
+                return new LoadResult<>(defaultValue, false, true);
+            }
+            return new LoadResult<>(result, false, false);
         } catch (IOException e) {
             CreditManagerClient.LOGGER.error("Failed to load file: " + path, e);
             DataHealth.reportRecoveryRequired(path, createBackup(path));

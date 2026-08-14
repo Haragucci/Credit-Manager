@@ -6,6 +6,7 @@ import op.creditmanager.client.CreditManagerClient;
 import op.creditmanager.client.core.validation.CreditValidationRules;
 import op.creditmanager.client.money.CreditStatusRules;
 import op.creditmanager.client.money.MoneyRules;
+import op.creditmanager.client.money.MoneyAggregate;
 import op.creditmanager.client.model.CreditEntry;
 import op.creditmanager.client.model.CreditEventEntry;
 import op.creditmanager.client.model.CreditEventType;
@@ -20,7 +21,10 @@ import op.creditmanager.client.storage.db.dao.DatabaseMetadataDao;
 import op.creditmanager.client.storage.db.dao.PaylogSearchTokenDao;
 import op.creditmanager.client.storage.db.schema.DatabaseSchemaManager;
 import op.creditmanager.client.storage.db.DatabaseManager.AutomaticMigrationResult;
+import op.creditmanager.client.storage.db.DatabaseManager.AvailableBackup;
+import op.creditmanager.client.storage.db.DatabaseManager.BackupArtifactType;
 import op.creditmanager.client.storage.db.DatabaseManager.BackupManifestEntry;
+import op.creditmanager.client.storage.db.DatabaseManager.BackupSource;
 import op.creditmanager.client.storage.db.DatabaseManager.BatchInsertResult;
 import op.creditmanager.client.storage.db.DatabaseManager.CreditMutation;
 import op.creditmanager.client.storage.db.DatabaseManager.DataHealthRecord;
@@ -29,7 +33,10 @@ import op.creditmanager.client.storage.db.DatabaseManager.DatabaseState;
 import op.creditmanager.client.storage.db.DatabaseManager.DealHistorySort;
 import op.creditmanager.client.storage.db.DatabaseManager.DiscardRecordType;
 import op.creditmanager.client.storage.db.DatabaseManager.LegacyRecord;
+import op.creditmanager.client.storage.db.DatabaseManager.ManualBackupResult;
+import op.creditmanager.client.storage.db.DatabaseManager.MutationCommitReceipt;
 import op.creditmanager.client.storage.db.DatabaseManager.QueryPage;
+import op.creditmanager.client.storage.db.DatabaseManager.StatisticsEventSlice;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -71,6 +78,10 @@ final class DatabaseCoordinator {
     public static final int PAGE_SIZE = 500;
     private static final int ID_BATCH_SIZE = 500;
     private static final int MAX_ACTIVE_BACKUPS = 32;
+    private static final int MAX_RETIRED_BACKUPS = 64;
+    private static final long MAX_RETIRED_BACKUP_BYTES = 8_589_934_592L;
+    private static final String BACKUP_PROTECTION_DEGRADED_REASON = "Automatische Backup-Checkpoints sind wiederholt fehlgeschlagen; der Backup-Schutz ist degradiert.";
+    private static final String BACKUP_PROTECTION_CRITICAL_REASON = "Kein ausreichend aktueller validierter Recovery Point ist verfügbar; normale Änderungen sind vorübergehend gesperrt.";
     private static final Gson GSON = new Gson();
     private static final Type STRING_LIST = new TypeToken<List<String>>() { }.getType();
     private static final Type BACKUP_MANIFEST_LIST = new TypeToken<List<BackupManifestEntry>>() { }.getType();
@@ -78,6 +89,8 @@ final class DatabaseCoordinator {
     private volatile boolean healthy = true;
     private volatile boolean writeLocked;
     private volatile boolean recovering;
+    private volatile BackupCheckpointService.ProtectionState backupProtectionState = BackupCheckpointService.ProtectionState.HEALTHY;
+    private boolean explicitFreshBootstrap;
     private volatile Path initializedAt;
     private volatile DatabaseAvailability availability = DatabaseAvailability.UNKNOWN;
     private final ReentrantReadWriteLock lifecycleLock = new ReentrantReadWriteLock(true);
@@ -86,11 +99,13 @@ final class DatabaseCoordinator {
     private final RecoveryFileOps recoveryFileOps;
     private final DatabaseConnectionFactory connections = new DatabaseConnectionFactory();
     private final DatabaseMetadataDao metadataDao = new DatabaseMetadataDao();
+    private final FreshDatabasePolicy freshDatabasePolicy = new FreshDatabasePolicy();
     private final PaylogSearchTokenDao paylogSearchTokens = new PaylogSearchTokenDao();
     private final DatabaseWriteGate writeGate = new DatabaseWriteGate();
     private final DatabaseHealthInspectionService healthInspectionService = new DatabaseHealthInspectionService(this);
     private final DatabaseSchemaManager schemaManager = new DatabaseSchemaManager(metadataDao, paylogSearchTokens, healthInspectionService::storeHealth);
     private final DatabaseMigrationService migrationService;
+    private final StorageIdentityGuard storageIdentityGuard;
     private final DatabaseQueryService queryService = new DatabaseQueryService(this);
     private final CreditStateReplacementService creditStateReplacementService = new CreditStateReplacementService(this);
     private final DatabaseLogicalRepairService logicalRepairService = new DatabaseLogicalRepairService(this);
@@ -101,6 +116,7 @@ final class DatabaseCoordinator {
         this.faultInjector = faultInjector == null ? DatabaseFaultInjector.NONE : faultInjector;
         this.recoveryFileOps = recoveryFileOps == null ? new RecoveryFileOps() : recoveryFileOps;
         this.migrationService = new DatabaseMigrationService(connections, schemaManager, this.recoveryFileOps);
+        this.storageIdentityGuard = new StorageIdentityGuard(metadataDao, this.recoveryFileOps);
     }
     public synchronized DatabaseAvailability availability() { return availability; }
     public synchronized boolean requiresUserRecovery() { return availability == DatabaseAvailability.PHYSICALLY_CORRUPT || availability == DatabaseAvailability.NEEDS_USER_RECOVERY; }
@@ -116,13 +132,26 @@ final class DatabaseCoordinator {
             healthy = true;
             writeLocked = false;
             availability = DatabaseAvailability.UNKNOWN;
+            if (!FileManager.databaseAccessAllowed()) {
+                DatabaseAvailability blocked = switch (FileManager.storageAccessState()) {
+                    case SECONDARY_INSTANCE -> DatabaseAvailability.SECONDARY_INSTANCE;
+                    case STORAGE_LOCATION_UNRESOLVED -> DatabaseAvailability.STORAGE_LOCATION_UNRESOLVED;
+                    default -> DatabaseAvailability.WRITE_LOCKED;
+                };
+                String reason = blocked == DatabaseAvailability.SECONDARY_INSTANCE
+                        ? "CreditManager läuft bereits in einer anderen Minecraft-Instanz. Diese Instanz greift zum Schutz der Daten nicht auf die Datenbank zu."
+                        : "Der persistente CreditManager-Datenpfad konnte nicht sicher bestimmt oder geöffnet werden.";
+                markUnavailable(blocked, reason, requestedPath);
+                return;
+            }
             try {
             connections.loadDriver();
+            if (!migrateLegacyOverlayStorage()) return;
             migrationService.recoverInterruptedMigration();
             boolean existingDatabase = Files.isRegularFile(FileManager.getDatabaseStorageFile());
             int installed = 0;
             if (existingDatabase) {
-                try (Connection connection = connections.openReadOnly(requestedPath)) {
+                try (Connection connection = connections.openExistingReadOnly(requestedPath)) {
                     faultInjector.hit(DatabaseFaultInjector.FailurePoint.STARTUP_AFTER_OPEN_BEFORE_SCHEMA_VALIDATION);
                     schemaManager.validateMetadataTables(connection);
                     if (!schemaManager.hasAnyCoreTable(connection)) {
@@ -136,24 +165,46 @@ final class DatabaseCoordinator {
                     availability = DatabaseAvailability.WRITE_LOCKED;
                     CreditManagerClient.LOGGER.error("CreditManager database schema {} is newer than supported {}. Writes are locked.", installed, SCHEMA_VERSION);
                 } else if (installed < SCHEMA_VERSION) {
-                    migrationService.migrateV7ToV8(requestedPath, installed);
+                    migrationService.migrateLegacyToV8(requestedPath, installed);
                 }
             }
             if (!writeLocked) {
-                try (Connection connection = connection()) {
+                StorageIdentityGuard.StorageIdentity freshIdentity = null;
+                if (!existingDatabase) {
+                    long generation = 1L;
+                    if (explicitFreshBootstrap) {
+                        generation = archiveIdentityForExplicitFreshBootstrap();
+                    } else {
+                        FreshDatabasePolicy.Decision decision = freshDatabasePolicy.inspect(FileManager.getDataDirectory(),
+                                FileManager.getLegacyDataDirectory(), FileManager.getBackupMirrorDirectory(),
+                                FileManager.hasPrimaryStorageLease());
+                        if (!decision.allowsBootstrap()) {
+                            markUnavailable(DatabaseAvailability.MISSING_DATABASE,
+                                    "Die frühere Datenbank fehlt, während vorhandene Storage-Artefakte auf bestehende Nutzerdaten hinweisen. Es wurde keine neue Datenbank erstellt.", requestedPath);
+                            return;
+                        }
+                    }
+                    freshIdentity = storageIdentityGuard.newIdentity(storageInstanceKey(), generation);
+                }
+                try (Connection connection = existingDatabase
+                        ? connections.openExistingReadWrite(requestedPath) : connections.createFresh(requestedPath)) {
                     faultInjector.hit(DatabaseFaultInjector.FailurePoint.STARTUP_AFTER_OPEN_BEFORE_SCHEMA_VALIDATION);
                     connection.setAutoCommit(false);
                     try {
                         if (!existingDatabase) schemaManager.createFreshSchema(connection);
+                        schemaManager.ensureAdditiveSchemaObjects(connection);
                         schemaManager.validateRequiredSchema(connection);
                         schemaManager.backfill(connection);
                         schemaManager.validateRequiredSchema(connection);
+                        if (freshIdentity != null) storageIdentityGuard.writeDatabaseIdentity(connection, freshIdentity);
                         connection.commit();
                     } catch (Exception error) {
                         connection.rollback();
                         throw error;
                     }
                 }
+                if (freshIdentity != null) storageIdentityGuard.writeSidecar(FileManager.getStorageIdentityFile(), freshIdentity);
+                ensureStorageIdentity(requestedPath);
             }
             initialized = true;
             initializedAt = requestedPath;
@@ -166,6 +217,10 @@ final class DatabaseCoordinator {
             } else if (healthy) {
                 availability = DatabaseAvailability.HEALTHY;
             }
+            } catch (StorageIdentityGuard.StorageIdentityException exception) {
+            markUnavailable(DatabaseAvailability.STORAGE_IDENTITY_MISMATCH,
+                    "Storage-Identität von Datenbank und Sidecar stimmt nicht überein. Kein Datenbestand wurde überschrieben.", requestedPath);
+            CreditManagerClient.LOGGER.error("CreditManager storage identity validation failed; writes are locked.", exception);
             } catch (DatabaseSchemaManager.SchemaValidationException exception) {
             healthy = false;
             writeLocked = true;
@@ -175,6 +230,12 @@ final class DatabaseCoordinator {
             initialized = true;
             initializedAt = requestedPath;
             } catch (Exception exception) {
+            if (isMissingDatabase(exception)) {
+                markUnavailable(DatabaseAvailability.MISSING_DATABASE,
+                        "Die aktive CreditManager-Datenbank fehlt. Es wurde keine neue leere Datenbank erzeugt.", requestedPath);
+                CreditManagerClient.LOGGER.error("CreditManager database disappeared; automatic creation was blocked.", exception);
+                return;
+            }
             if (isPhysicalH2Corruption(exception)) {
                 handlePhysicalCorruption(exception, requestedPath);
                 return;
@@ -190,6 +251,196 @@ final class DatabaseCoordinator {
         } finally {
             lifecycleLock.writeLock().unlock();
         }
+    }
+
+    private void markUnavailable(DatabaseAvailability state, String reason, Path requestedPath) {
+        healthy = false;
+        writeLocked = true;
+        availability = state;
+        initialized = true;
+        initializedAt = requestedPath;
+        DataHealth.reportRecoveryRequired(reason);
+    }
+
+    private String storageInstanceKey() {
+        return FileManager.storageLocation() == null ? "unknown" : FileManager.storageLocation().instanceKey();
+    }
+
+    private BackupMirrorService mirrorService() {
+        return new BackupMirrorService(FileManager.getBackupMirrorDirectory(), recoveryFileOps);
+    }
+
+    private boolean migrateLegacyOverlayStorage() throws Exception {
+        Path legacyRoot = FileManager.getLegacyDataDirectory();
+        Path canonicalRoot = FileManager.getDataDirectory().toAbsolutePath().normalize();
+        if (legacyRoot == null) return true;
+        legacyRoot = legacyRoot.toAbsolutePath().normalize();
+        if (legacyRoot.equals(canonicalRoot) || !Files.isDirectory(legacyRoot)) return true;
+        Path legacyStorage = legacyRoot.resolve("creditmanager.mv.db");
+        Path canonicalStorage = FileManager.getDatabaseStorageFile();
+        if (Files.isRegularFile(legacyStorage) && Files.isRegularFile(canonicalStorage)) {
+            if (!sameDatabaseHistory(legacyStorage, canonicalStorage)) {
+                markUnavailable(DatabaseAvailability.STORAGE_CONFLICT,
+                        "Legacy-Overlay und persistenter Speicher enthalten unterschiedliche Datenstände. Es wurde nichts überschrieben.",
+                        FileManager.getDatabaseFile().toAbsolutePath());
+                return false;
+            }
+        } else if (Files.isRegularFile(legacyStorage)) {
+            Path migrationRoot = FileManager.getRecoveryDirectory().resolve("legacy-overlay-migration-" + System.currentTimeMillis() + '-' + UUID.randomUUID());
+            recoveryFileOps.createDirectories(migrationRoot);
+            Path archive = migrationRoot.resolve("legacy-overlay-backup.zip");
+            Path legacyBase = legacyRoot.resolve("creditmanager");
+            try (Connection connection = connections.openExistingReadOnly(legacyBase); Statement statement = connection.createStatement()) {
+                schemaManager.validateMetadataTables(connection);
+                if (!schemaManager.hasAnyCoreTable(connection)) throw new IOException("Legacy overlay database has no CreditManager schema");
+                statement.execute("BACKUP TO '" + escapeSqlLiteral(archive.toAbsolutePath().normalize().toString()) + "'");
+            }
+            BackupValidation validation = validateBackup(archive);
+            if (!validation.valid() || !DatabaseSchemaSupportPolicy.supports(validation.schemaVersion()) || !restoreBackupArchive(archive)) {
+                markUnavailable(DatabaseAvailability.NEEDS_USER_RECOVERY,
+                        "Legacy-Overlay-Daten konnten nicht vollständig validiert und installiert werden. Die Quelle blieb unverändert.",
+                        FileManager.getDatabaseFile().toAbsolutePath());
+                return false;
+            }
+        }
+        try {
+            copyLegacyNonDatabaseArtifacts(legacyRoot, canonicalRoot);
+        } catch (IOException exception) {
+            markUnavailable(DatabaseAvailability.STORAGE_CONFLICT,
+                    "Legacy-Overlay-Artefakte konnten nicht vollständig in den persistenten Speicher übernommen werden. Die Quelle blieb unverändert.",
+                    FileManager.getDatabaseFile().toAbsolutePath());
+            CreditManagerClient.LOGGER.error("CreditManager legacy overlay artifact migration failed", exception);
+            return false;
+        }
+        return true;
+    }
+
+    private boolean sameDatabaseHistory(Path leftStorage, Path rightStorage) {
+        try {
+            if (Objects.equals(sha256File(leftStorage), sha256File(rightStorage))) return true;
+            DatabaseFingerprint left = databaseFingerprint(leftStorage);
+            DatabaseFingerprint right = databaseFingerprint(rightStorage);
+            return left.storageUuid() != null && left.storageUuid().equals(right.storageUuid())
+                    && left.schemaVersion() == right.schemaVersion() && left.revision() == right.revision()
+                    && java.util.Arrays.equals(left.domainCounts(), right.domainCounts());
+        } catch (Exception exception) {
+            CreditManagerClient.LOGGER.warn("Could not compare canonical and legacy CreditManager databases safely", exception);
+            return false;
+        }
+    }
+
+    private DatabaseFingerprint databaseFingerprint(Path storage) throws Exception {
+        String fileName = storage.getFileName().toString();
+        Path base = storage.resolveSibling(fileName.substring(0, fileName.length() - ".mv.db".length()));
+        try (Connection connection = connections.openExistingReadOnly(base); Statement statement = connection.createStatement()) {
+            schemaManager.validateMetadataTables(connection);
+            int version = schemaManager.installedSchemaVersion(connection);
+            String uuid = metadataDao.read(connection, "storage_uuid");
+            long revision = metadataDao.revision(connection);
+            long[] counts = new long[4];
+            String[] tables = {"credits", "payments", "credit_events", "paylogs"};
+            for (int index = 0; index < tables.length; index++) {
+                try (ResultSet result = statement.executeQuery("SELECT COUNT(*) FROM " + tables[index])) {
+                    result.next();
+                    counts[index] = result.getLong(1);
+                }
+            }
+            return new DatabaseFingerprint(uuid, version, revision, counts);
+        }
+    }
+
+    private void copyLegacyNonDatabaseArtifacts(Path sourceRoot, Path targetRoot) throws IOException {
+        try (var paths = Files.walk(sourceRoot)) {
+            for (Path source : paths.toList()) {
+                if (Files.isSymbolicLink(source)) throw new IOException("Symbolic links are not allowed in legacy storage migration");
+                if (source.equals(sourceRoot) || Files.isDirectory(source)) continue;
+                String name = source.getFileName().toString().toLowerCase(Locale.ROOT);
+                if (name.equals("creditmanager.mv.db") || name.equals("creditmanager.trace.db")
+                        || name.equals("creditmanager.lock.db") || name.equals(".creditmanager.lock") || name.endsWith(".tmp")) continue;
+                Path relative = sourceRoot.relativize(source);
+                Path target = targetRoot.resolve(relative).normalize();
+                if (!target.startsWith(targetRoot)) throw new IOException("Unsafe legacy storage path");
+                if (Files.exists(target)) continue;
+                recoveryFileOps.createDirectories(target.getParent());
+                Path temporary = target.resolveSibling(target.getFileName() + ".legacy-migration.tmp");
+                recoveryFileOps.copy(source, temporary, StandardCopyOption.COPY_ATTRIBUTES);
+                try {
+                    recoveryFileOps.moveWithoutReplacing(temporary, target);
+                } catch (IOException exception) {
+                    recoveryFileOps.deleteIfExists(temporary);
+                    throw exception;
+                }
+            }
+        }
+    }
+
+    private void ensureStorageIdentity(Path databaseBase) throws Exception {
+        StorageIdentityGuard.StorageIdentity sidecarToWrite = null;
+        try (Connection connection = connections.openExistingReadWrite(databaseBase)) {
+            StorageIdentityGuard.Inspection inspection = storageIdentityGuard.inspect(connection, FileManager.getStorageIdentityFile());
+            switch (inspection.status()) {
+                case MATCH -> { return; }
+                case MISMATCH, DATABASE_IDENTITY_MISSING -> throw new StorageIdentityGuard.StorageIdentityException("Storage identity mismatch");
+                case SIDECAR_MISSING -> sidecarToWrite = inspection.databaseIdentity();
+                case MISSING_BOTH -> {
+                    if (hasDomainData(connection)) createAndValidateIdentitySafetyBackup(connection);
+                    StorageIdentityGuard.StorageIdentity identity = storageIdentityGuard.newIdentity(storageInstanceKey(), 1L);
+                    connection.setAutoCommit(false);
+                    try {
+                        storageIdentityGuard.writeDatabaseIdentity(connection, identity);
+                        connection.commit();
+                    } catch (Exception exception) {
+                        connection.rollback();
+                        throw exception;
+                    }
+                    sidecarToWrite = identity;
+                }
+            }
+        }
+        if (sidecarToWrite != null) storageIdentityGuard.writeSidecar(FileManager.getStorageIdentityFile(), sidecarToWrite);
+        try (Connection validation = connections.openExistingReadOnly(databaseBase)) {
+            if (storageIdentityGuard.inspect(validation, FileManager.getStorageIdentityFile()).status()
+                    != StorageIdentityGuard.IdentityStatus.MATCH) {
+                throw new StorageIdentityGuard.StorageIdentityException("Storage identity could not be confirmed after migration");
+            }
+        }
+    }
+
+    private void createAndValidateIdentitySafetyBackup(Connection connection) throws Exception {
+        Path directory = FileManager.getRecoveryDirectory().resolve("identity-migration");
+        recoveryFileOps.createDirectories(directory);
+        Path target = directory.resolve("creditmanager_pre_identity_" + System.currentTimeMillis() + '-' + UUID.randomUUID() + ".zip");
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("BACKUP TO '" + escapeSqlLiteral(target.toAbsolutePath().normalize().toString()) + "'");
+        }
+        BackupValidation validation = validateBackup(target);
+        if (!validation.valid() || validation.schemaVersion() != SCHEMA_VERSION) {
+            throw new IOException("Storage identity safety backup validation failed");
+        }
+    }
+
+    private boolean isMissingDatabase(Throwable error) {
+        for (Throwable current = error; current != null; current = current.getCause()) {
+            if (current instanceof SQLException sqlException
+                    && (sqlException.getErrorCode() == 90146 || "90013".equals(sqlException.getSQLState()))) return true;
+            String message = safe(current.getMessage()).toLowerCase(Locale.ROOT);
+            if (message.contains("existing database file is missing") || message.contains("database not found") && message.contains("ifexists")) return true;
+        }
+        return false;
+    }
+
+    private long archiveIdentityForExplicitFreshBootstrap() throws IOException {
+        Path sidecar = FileManager.getStorageIdentityFile();
+        if (!Files.isRegularFile(sidecar)) return 1L;
+        long generation = 1L;
+        try {
+            generation = Math.addExact(storageIdentityGuard.readSidecar(sidecar).map(StorageIdentityGuard.StorageIdentity::generation).orElse(0L), 1L);
+        } catch (RuntimeException ignored) {
+        }
+        Path archive = FileManager.getRecoveryDirectory().resolve("storage-identities")
+                .resolve("storage_identity_before_fresh_" + System.currentTimeMillis() + '-' + UUID.randomUUID() + ".json");
+        recoveryFileOps.moveWithoutReplacing(sidecar, archive);
+        return Math.max(1L, generation);
     }
 
     private boolean isPhysicalRecoveryState() {
@@ -231,20 +482,53 @@ final class DatabaseCoordinator {
     }
 
     public synchronized boolean createEmptyDatabaseAfterPhysicalRecovery() {
-        if (availability != DatabaseAvailability.NEEDS_USER_RECOVERY || Files.exists(FileManager.getDatabaseStorageFile())) return false;
-        initialized = false;
-        initializedAt = null;
-        healthy = true;
-        writeLocked = false;
-        availability = DatabaseAvailability.UNKNOWN;
-        initialize();
-        return isHealthy();
+        if (availability != DatabaseAvailability.NEEDS_USER_RECOVERY || !FileManager.databaseAccessAllowed()
+                || Files.exists(FileManager.getDatabaseStorageFile())) return false;
+        explicitFreshBootstrap = true;
+        try {
+            initialized = false;
+            initializedAt = null;
+            healthy = true;
+            writeLocked = false;
+            availability = DatabaseAvailability.UNKNOWN;
+            initialize();
+            return isHealthy();
+        } finally {
+            explicitFreshBootstrap = false;
+        }
     }
 
     public synchronized boolean isHealthy() { return healthy && !writeLocked; }
     public synchronized boolean isWriteLocked() { return writeLocked; }
+    synchronized void updateBackupProtection(BackupCheckpointService.ProtectionState state) {
+        backupProtectionState = state == null ? BackupCheckpointService.ProtectionState.DEGRADED : state;
+        if (!healthy || writeLocked) return;
+        if (backupProtectionState == BackupCheckpointService.ProtectionState.CRITICAL) {
+            availability = DatabaseAvailability.BACKUP_PROTECTION_CRITICAL;
+            DataHealth.clearReason(BACKUP_PROTECTION_DEGRADED_REASON);
+            DataHealth.reportWarning(BACKUP_PROTECTION_CRITICAL_REASON,
+                    "Deine letzten Änderungen wurden gespeichert. Neue Änderungen sind vorübergehend gesperrt, weil aktuell kein ausreichend aktuelles Sicherheitsbackup erstellt werden kann.");
+        } else if (backupProtectionState == BackupCheckpointService.ProtectionState.HEALTHY) {
+            if (availability == DatabaseAvailability.BACKUP_PROTECTION_DEGRADED
+                    || availability == DatabaseAvailability.BACKUP_PROTECTION_CRITICAL) availability = DatabaseAvailability.HEALTHY;
+            DataHealth.clearReason(BACKUP_PROTECTION_DEGRADED_REASON);
+            DataHealth.clearReason(BACKUP_PROTECTION_CRITICAL_REASON);
+        } else if (availability == DatabaseAvailability.HEALTHY
+                || availability == DatabaseAvailability.RESTORED_FROM_BACKUP
+                || availability == DatabaseAvailability.BACKUP_PROTECTION_CRITICAL) {
+            availability = DatabaseAvailability.BACKUP_PROTECTION_DEGRADED;
+            DataHealth.clearReason(BACKUP_PROTECTION_CRITICAL_REASON);
+            DataHealth.reportWarning(BACKUP_PROTECTION_DEGRADED_REASON,
+                    "Änderungen sind gespeichert. Der Backup-Schutz ist vorübergehend degradiert; automatische Wiederholungen laufen.");
+        }
+    }
+
+    synchronized void updateBackupProtection(boolean degraded) {
+        updateBackupProtection(degraded ? BackupCheckpointService.ProtectionState.DEGRADED
+                : BackupCheckpointService.ProtectionState.HEALTHY);
+    }
     public synchronized boolean isSafeForWrites() {
-        if (!isHealthy()) return false;
+        if (!isHealthy() || !backupProtectionState.writesAllowed()) return false;
         try (Connection connection = connection()) {
             return !hasOpenHealthErrors(connection);
         } catch (SQLException exception) {
@@ -257,6 +541,12 @@ final class DatabaseCoordinator {
     }
 
     public synchronized boolean recheckAndRepair() {
+        if (availability == DatabaseAvailability.SECONDARY_INSTANCE) {
+            if (!FileManager.retryStorageLease()) return false;
+            initialized = false;
+            initializedAt = null;
+            availability = DatabaseAvailability.UNKNOWN;
+        }
         if (isPhysicalRecoveryState()) return restoreLatestValidBackup();
         initialized = false;
         initializedAt = null;
@@ -299,33 +589,84 @@ final class DatabaseCoordinator {
     }
 
     public synchronized boolean createBackup() {
+        return createBackupArtifact(BackupArtifactType.RESTORABLE_HEALTHY).successful();
+    }
+
+    public synchronized ManualBackupResult createHealthyBackupNow() {
+        BackupCreation result = createBackupArtifact(BackupArtifactType.RESTORABLE_HEALTHY);
+        String message = !result.successful() ? "Gesundes Backup konnte nicht erstellt oder validiert werden."
+                : result.mirrorSuccess() ? "Gesundes Backup wurde lokal und im unabhängigen Mirror gesichert."
+                : "Gesundes Backup wurde lokal gesichert; der unabhängige Mirror ist derzeit nicht aktuell.";
+        return new ManualBackupResult(result.successful(), result.mirrorSuccess(), result.revision(),
+                result.localArtifact(), result.mirrorArtifact(), message);
+    }
+
+    synchronized BackupCheckpointService.CheckpointResult createBackupCheckpoint() {
+        BackupCreation result = createBackupArtifact(BackupArtifactType.RESTORABLE_HEALTHY);
+        return BackupCheckpointService.CheckpointResult.of(result.successful(), result.mirrorSuccess(), mirrorService().enabled(),
+                result.revision(), result.createdAt());
+    }
+
+    public synchronized boolean createRecoverySnapshot() {
+        return createBackupArtifact(BackupArtifactType.RECOVERY_SNAPSHOT).successful();
+    }
+
+    private BackupCreation createBackupArtifact(BackupArtifactType artifactType) {
         initialize();
-        if (isPhysicalRecoveryState()) return false;
+        if (isPhysicalRecoveryState() || !FileManager.databaseAccessAllowed()) return BackupCreation.failed();
         Path source = FileManager.getDatabaseStorageFile();
-        if (!Files.exists(source)) return false;
-        Path target = FileManager.getBackupDirectory().resolve("creditmanager_backup_" + System.currentTimeMillis() + ".zip");
+        if (!Files.exists(source)) return BackupCreation.failed();
+        long createdAt = System.currentTimeMillis();
+        String prefix = artifactType == BackupArtifactType.RECOVERY_SNAPSHOT
+                ? "creditmanager_recovery_snapshot_" : "creditmanager_backup_";
+        Path target = FileManager.getBackupDirectory().resolve(prefix + createdAt + '-' + UUID.randomUUID() + ".zip");
         try (Connection connection = connection(); Statement statement = connection.createStatement()) {
-            Files.createDirectories(target.getParent());
+            recoveryFileOps.createDirectories(target.getParent());
             statement.execute("BACKUP TO '" + escapeSqlLiteral(target.toAbsolutePath().normalize().toString()) + "'");
-            BackupValidation validation = validateBackup(target);
-            if (!validation.valid()) {
-                Files.deleteIfExists(target);
-                return false;
+            BackupValidation validation = artifactType == BackupArtifactType.RECOVERY_SNAPSHOT
+                    ? validateRecoverySnapshot(target) : validateBackup(target);
+            if (!validation.valid() || validation.schemaVersion() != SCHEMA_VERSION) {
+                recoveryFileOps.deleteIfExists(target);
+                return BackupCreation.failed();
             }
-            appendBackupManifest(new BackupManifestEntry(target.getFileName().toString(), System.currentTimeMillis(), SCHEMA_VERSION,
-                    revision(connection), validation.creditCount(), validation.paymentCount(), validation.paylogCount(), validation.eventCount(),
-                    !hasOpenHealthErrors(connection), "h2-backup"));
-            return true;
+            String activeStorageUuid = metadataDao.read(connection, "storage_uuid");
+            boolean healthyArtifact = artifactType == BackupArtifactType.RESTORABLE_HEALTHY && !hasOpenHealthErrors(connection)
+                    && activeStorageUuid != null && activeStorageUuid.equals(validation.storageUuid());
+            long backupRevision = validation.revision();
+            BackupManifestEntry localEntry = appendBackupManifest(new BackupManifestEntry(target.getFileName().toString(), createdAt, SCHEMA_VERSION,
+                    backupRevision, validation.creditCount(), validation.paymentCount(), validation.paylogCount(), validation.eventCount(),
+                    healthyArtifact, artifactType == BackupArtifactType.RECOVERY_SNAPSHOT ? "h2-recovery-snapshot" : "h2-backup",
+                    null, 0L, 3, artifactType, healthyArtifact));
+            if (artifactType == BackupArtifactType.RECOVERY_SNAPSHOT) {
+                return new BackupCreation(true, backupRevision, createdAt, target, false, null);
+            }
+            if (!healthyArtifact) return BackupCreation.failed();
+            BackupMirrorService.MirrorBackupEntry mirrorEntry = new BackupMirrorService.MirrorBackupEntry(
+                    localEntry.fileName(), localEntry.createdAt(), localEntry.revision(), localEntry.schemaVersion(),
+                    validation.storageUuid(), validation.generation(), localEntry.sha256(), localEntry.size(),
+                    localEntry.creditCount(), localEntry.paymentCount(), localEntry.paylogCount(), localEntry.eventCount(),
+                    localEntry.artifactType(), localEntry.healthy());
+            BackupMirrorService.MirrorWriteResult mirror = mirrorService().mirror(target, mirrorEntry);
+            if (!mirror.success()) CreditManagerClient.LOGGER.warn("CreditManager backup mirror update failed: {}", mirror.message());
+            return new BackupCreation(true, backupRevision, createdAt, target, mirror.success(), mirror.artifact());
         } catch (Exception exception) {
             if (isPhysicalH2Corruption(exception)) {
                 handlePhysicalCorruption(exception, FileManager.getDatabaseFile().toAbsolutePath());
             }
-            CreditManagerClient.LOGGER.warn("Could not create CreditManager database backup", exception);
-            return false;
+            CreditManagerClient.LOGGER.warn("Could not create CreditManager database {}", artifactType.name().toLowerCase(Locale.ROOT), exception);
+            return BackupCreation.failed();
         }
     }
 
     public synchronized DatabaseState loadCreditState() {
+        return loadCreditState(true);
+    }
+
+    public synchronized DatabaseState loadRuntimeCreditState() {
+        return loadCreditState(false);
+    }
+
+    private DatabaseState loadCreditState(boolean includeEvents) {
         initialize();
         if (isPhysicalRecoveryState()) throw new IllegalStateException("CreditManager-Datenbank ist physisch beschädigt und wurde für die Wiederherstellung gesperrt.");
         try (Connection connection = connection()) {
@@ -339,9 +680,26 @@ final class DatabaseCoordinator {
                 creditPayments.sort(Comparator.comparingLong(Payment::getTimestamp));
             }
             for (CreditEntry credit : credits) {
-                credit.replacePayments(paymentsByCredit.getOrDefault(credit.getId(), List.of()));
+                List<Payment> creditPayments = paymentsByCredit.getOrDefault(credit.getId(), List.of());
+                java.math.BigInteger total = MoneyAggregate.sum(creditPayments, Payment::getAmountMinor);
+                boolean valid = creditPayments.stream().allMatch(payment -> MoneyRules.isPositive(payment.getAmountMinor()))
+                        && total.signum() >= 0 && total.compareTo(java.math.BigInteger.valueOf(Long.MAX_VALUE)) <= 0
+                        && total.compareTo(java.math.BigInteger.valueOf(credit.getAmountMinor())) <= 0
+                        && total.equals(java.math.BigInteger.valueOf(credit.getPaidAmountMinor()));
+                if (valid) {
+                    credit.replacePayments(creditPayments);
+                } else {
+                    credit.setPayments(creditPayments);
+                    healthInspectionService.storeHealth(connection, "CREDIT_PAYMENT_TOTAL", "ERROR", "credits",
+                            credit.getId().toString(), "Zahlungssumme außerhalb des sicheren Bereichs",
+                            "Die persistierte Zahlungssumme ist übergelaufen oder passt nicht zum Deal. Die Rohdaten bleiben sichtbar und unverändert.",
+                            null, null);
+                    writeLocked = true;
+                    availability = DatabaseAvailability.WRITE_LOCKED;
+                    DataHealth.reportRecoveryRequired("Persistierte Zahlungssumme ist inkonsistent; Rohdaten wurden ohne Normalisierung geladen.");
+                }
             }
-            return new DatabaseState(credits, payments, loadEvents(connection));
+            return new DatabaseState(credits, payments, includeEvents ? loadEvents(connection) : List.of());
         } catch (SQLException exception) {
             if (isPhysicalH2Corruption(exception)) handlePhysicalCorruption(exception, FileManager.getDatabaseFile().toAbsolutePath());
             healthy = false;
@@ -351,6 +709,10 @@ final class DatabaseCoordinator {
 
     public synchronized boolean replaceCreditState(Collection<CreditEntry> credits, Collection<Payment> payments, Collection<CreditEventEntry> events) {
         return creditStateReplacementService.replace(credits, payments, events);
+    }
+
+    public synchronized boolean replaceCreditDataPreservingEvents(Collection<CreditEntry> credits, Collection<Payment> payments) {
+        return creditStateReplacementService.replacePreservingEvents(credits, payments);
     }
 
     public synchronized boolean hasPendingAutomaticJsonMigration() {
@@ -364,12 +726,64 @@ final class DatabaseCoordinator {
     }
 
     public synchronized boolean commitCreditMutation(CreditMutation mutation) {
-        if (!isValidMutation(mutation)) return false;
-        return inTransaction(DatabaseWriteMode.NORMAL, connection -> {
+        MutationCommitReceipt receipt = commitCreditMutationWithReceipt(mutation);
+        if (receipt.committed() && !receipt.verified()) {
+            markRuntimeStateDegraded("Ein bestätigter Datenbank-Commit konnte nicht vollständig zurückgelesen werden.");
+        }
+        return receipt.committed();
+    }
+
+    public synchronized MutationCommitReceipt commitCreditMutationWithReceipt(CreditMutation mutation) {
+        if (!isValidMutation(mutation)) return MutationCommitReceipt.notCommitted();
+        long[] committedRevision = {-1L};
+        boolean committed = inTransaction(DatabaseWriteMode.NORMAL, connection -> {
             long rowRevision = nextRevision(connection);
             applyCreditMutation(connection, mutation, rowRevision);
             bumpRevision(connection);
+            committedRevision[0] = rowRevision;
         });
+        if (!committed) return MutationCommitReceipt.notCommitted();
+        try (Connection verification = connection()) {
+            if (revision(verification) < committedRevision[0] || !mutationPersisted(verification, mutation, committedRevision[0])) {
+                CreditManagerClient.LOGGER.warn("Committed CreditManager mutation could not be confirmed by the verification read; caller must reload authoritative state");
+                return MutationCommitReceipt.committedUnverified(committedRevision[0]);
+            }
+            return MutationCommitReceipt.committed(committedRevision[0]);
+        } catch (SQLException exception) {
+            CreditManagerClient.LOGGER.error("Committed CreditManager mutation could not be verified; caller must reload authoritative state", exception);
+            return MutationCommitReceipt.committedUnverified(committedRevision[0]);
+        }
+    }
+
+    private boolean mutationPersisted(Connection connection, CreditMutation mutation, long rowRevision) throws SQLException {
+        if (!rowHasRevision(connection, "credits", mutation.credit().getId(), rowRevision)) return false;
+        for (Payment payment : mutation.paymentUpserts() == null ? List.<Payment>of() : mutation.paymentUpserts()) {
+            if (!rowHasRevision(connection, "payments", payment.getId(), rowRevision)) return false;
+        }
+        for (UUID deletion : mutation.paymentDeletions() == null ? List.<UUID>of() : mutation.paymentDeletions()) {
+            if (rowExists(connection, "payments", deletion.toString())) return false;
+        }
+        for (CreditEventEntry event : mutation.events() == null ? List.<CreditEventEntry>of() : mutation.events()) {
+            if (!rowHasRevision(connection, "credit_events", event.getId(), rowRevision)) return false;
+        }
+        return true;
+    }
+
+    private boolean rowHasRevision(Connection connection, String table, UUID id, long expectedRevision) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT revision FROM " + table + " WHERE id=?")) {
+            statement.setString(1, id.toString());
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() && result.getLong(1) == expectedRevision;
+            }
+        }
+    }
+
+    public synchronized void markRuntimeStateDegraded(String reason) {
+        writeLocked = true;
+        availability = DatabaseAvailability.WRITE_LOCKED;
+        DataHealth.reportRecoveryRequired(reason == null || reason.isBlank()
+                ? "Persistierte Daten konnten nicht mit dem Laufzeitstatus synchronisiert werden."
+                : reason);
     }
 
     public synchronized boolean commitCreditMutationsBatch(Collection<CreditMutation> mutations) {
@@ -633,6 +1047,8 @@ final class DatabaseCoordinator {
     }
 
     public synchronized boolean resetCorruptDatabaseWithBackup() {
+        initialize();
+        if (!FileManager.databaseAccessAllowed()) return false;
         boolean restored = restoreLatestValidBackupInternal();
         if (!restored) {
             healthy = false;
@@ -655,6 +1071,18 @@ final class DatabaseCoordinator {
     }
 
     public synchronized boolean restoreLatestValidBackup() {
+        FileManager.initialize();
+        if (!FileManager.databaseAccessAllowed()) return false;
+        if (availability == DatabaseAvailability.STORAGE_CONFLICT) return false;
+        try {
+            connections.loadDriver();
+        } catch (ClassNotFoundException exception) {
+            healthy = false;
+            writeLocked = true;
+            availability = DatabaseAvailability.WRITE_LOCKED;
+            CreditManagerClient.LOGGER.error("H2 driver is unavailable for CreditManager restore", exception);
+            return false;
+        }
         boolean restored = restoreLatestValidBackupInternal();
         if (!restored) return false;
         initialized = false;
@@ -672,13 +1100,33 @@ final class DatabaseCoordinator {
     }
 
     public synchronized List<BackupManifestEntry> listBackups() {
-        return discoverBackups();
+        if (!FileManager.databaseAccessAllowed()) return List.of();
+        return listAvailableBackups().stream().map(AvailableBackup::entry).toList();
+    }
+
+    public synchronized List<AvailableBackup> listAvailableBackups() {
+        if (!FileManager.databaseAccessAllowed()) return List.of();
+        Map<String, AvailableBackup> available = new LinkedHashMap<>();
+        for (BackupCandidate candidate : discoverBackupCandidates()) {
+            BackupManifestEntry entry = candidate.entry();
+            String key = safe(entry.sha256()) + ':' + entry.revision();
+            AvailableBackup prior = available.get(key);
+            BackupSource source = prior == null ? candidate.source()
+                    : prior.source() == candidate.source() ? candidate.source() : BackupSource.LOCAL_AND_MIRROR;
+            BackupManifestEntry selected = prior == null || entry.createdAt() > prior.entry().createdAt() ? entry : prior.entry();
+            available.put(key, new AvailableBackup(selected, source));
+        }
+        return available.values().stream()
+                .sorted(Comparator.comparingLong((AvailableBackup value) -> value.entry().revision()).reversed()
+                        .thenComparing(Comparator.comparingLong((AvailableBackup value) -> value.entry().createdAt()).reversed()))
+                .toList();
     }
 
     private boolean activeDatabaseIsUnexpectedlyEmpty() {
         try (Connection connection = connection()) {
             if (hasDomainData(connection)) return false;
-            return discoverBackups().stream().anyMatch(entry -> entry.healthy() && entry.domainCount() > 0);
+            return discoverBackupCandidates().stream()
+                    .anyMatch(candidate -> candidate.entry().automaticRestoreEligible() && candidate.entry().domainCount() > 0);
         } catch (Exception exception) {
             throw new IllegalStateException("Empty-database safety check could not be completed", exception);
         }
@@ -689,14 +1137,20 @@ final class DatabaseCoordinator {
         recovering = true;
         lifecycleLock.writeLock().lock();
         try {
-            for (BackupManifestEntry entry : discoverBackups().stream()
-                    .filter(BackupManifestEntry::healthy)
-                    .sorted(Comparator.comparingLong(BackupManifestEntry::createdAt).reversed()).toList()) {
-                Path archive = safeBackupPath(entry.fileName());
-                if (archive == null) continue;
+            List<BackupCandidate> candidates = discoverBackupCandidates().stream()
+                    .filter(candidate -> candidate.entry().automaticRestoreEligible())
+                    .sorted(Comparator.comparingLong((BackupCandidate candidate) -> candidate.entry().revision()).reversed()
+                            .thenComparing(Comparator.comparingLong((BackupCandidate candidate) -> candidate.entry().createdAt()).reversed()))
+                    .toList();
+            BackupIdentitySelection identity = selectBackupIdentity(candidates);
+            if (!identity.safe()) return false;
+            for (BackupCandidate candidate : candidates) {
+                BackupManifestEntry entry = candidate.entry();
+                Path archive = candidate.path();
                 boolean zip = archive.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".zip");
                 BackupValidation validation = zip ? validateBackup(archive) : validateLegacyBackupCandidate(archive);
-                if (!validation.valid() || validation.domainCount() < entry.domainCount()) continue;
+                if (!validation.valid() || validation.domainCount() < entry.domainCount()
+                        || !identity.matches(validation.storageUuid(), validation.generation())) continue;
                 if (!(zip ? restoreBackupArchive(archive) : restoreLegacyDatabaseFile(archive))) continue;
                 DataHealth.reportRecoveryRequired("Valide Datenbanksicherung wurde wiederhergestellt; die vorherige Datenbank liegt in der Quarantäne.");
                 return true;
@@ -713,7 +1167,7 @@ final class DatabaseCoordinator {
         try {
             Path extracted = extractBackup(archive, staging);
             Path databaseFile = findDatabaseFile(extracted);
-            if (databaseFile == null || !validateDatabaseFile(databaseFile).valid()) return false;
+            if (databaseFile == null || !prepareRestoreCandidate(databaseFile)) return false;
             return installValidatedDatabase(databaseFile, "BACKUP_RESTORE");
         } catch (Exception exception) {
             CreditManagerClient.LOGGER.warn("Could not restore CreditManager backup {}", archive, exception);
@@ -729,7 +1183,7 @@ final class DatabaseCoordinator {
             Files.createDirectories(staging);
             Path copy = staging.resolve("creditmanager.mv.db");
             recoveryFileOps.copy(legacy, copy, StandardCopyOption.COPY_ATTRIBUTES);
-            if (!validateDatabaseFile(copy).valid()) return false;
+            if (!prepareRestoreCandidate(copy)) return false;
             return installValidatedDatabase(copy, "LEGACY_BACKUP_RESTORE");
         } catch (Exception exception) {
             CreditManagerClient.LOGGER.warn("Could not restore legacy CreditManager database backup {}", legacy, exception);
@@ -802,12 +1256,46 @@ final class DatabaseCoordinator {
         try {
             Path extracted = extractBackup(archive, staging);
             Path databaseFile = findDatabaseFile(extracted);
-            return databaseFile == null ? BackupValidation.invalid() : validateDatabaseFile(databaseFile);
+            return databaseFile == null ? BackupValidation.invalid() : validateDatabaseFile(databaseFile, true, false);
         } catch (Exception exception) {
             return BackupValidation.invalid();
         } finally {
             deleteTemporaryTree(staging);
         }
+    }
+
+    private BackupIdentitySelection selectBackupIdentity(List<BackupCandidate> candidates) {
+        try {
+            Optional<StorageIdentityGuard.StorageIdentity> expected = storageIdentityGuard.readSidecar(FileManager.getStorageIdentityFile());
+            if (expected.isPresent()) {
+                StorageIdentityGuard.StorageIdentity identity = expected.get();
+                return BackupIdentitySelection.safe(identity.storageUuid(), identity.generation());
+            }
+        } catch (IOException | RuntimeException exception) {
+            markBackupIdentityConflict("Die Storage-Identität ist ungültig; Backups wurden nicht automatisch ausgewählt.");
+            return BackupIdentitySelection.unsafe();
+        }
+        Set<BackupIdentity> identities = new HashSet<>();
+        for (BackupCandidate candidate : candidates) {
+            if (!blank(candidate.storageUuid()) && candidate.generation() > 0L) {
+                identities.add(new BackupIdentity(candidate.storageUuid(), candidate.generation()));
+            }
+        }
+        if (identities.size() != 1) {
+            if (identities.size() > 1) {
+                markBackupIdentityConflict("Mehrere unabhängige Storage-Generationen wurden in den Backups gefunden. Es wurde nichts automatisch wiederhergestellt.");
+            }
+            return BackupIdentitySelection.unsafe();
+        }
+        BackupIdentity identity = identities.iterator().next();
+        return BackupIdentitySelection.safe(identity.storageUuid(), identity.generation());
+    }
+
+    private void markBackupIdentityConflict(String reason) {
+        healthy = false;
+        writeLocked = true;
+        availability = DatabaseAvailability.STORAGE_CONFLICT;
+        DataHealth.reportRecoveryRequired(reason);
     }
 
     private Path extractBackup(Path archive, Path staging) throws IOException {
@@ -900,7 +1388,10 @@ final class DatabaseCoordinator {
                 writeQuarantineManifest(original, reason, null, "MOVED_FOR_RESTORE");
             }
             moveWithoutReplacing(stagedDatabase, active);
-            if (!validateDatabaseFile(active).valid()) throw new IOException("Installed backup failed post-install validation");
+            BackupValidation installed = validateDatabaseFile(active);
+            if (!installed.valid() || installed.schemaVersion() != SCHEMA_VERSION) {
+                throw new IOException("Installed backup failed post-install validation");
+            }
             return true;
         } catch (Exception installFailure) {
             Path failedInstall = FileManager.getRecoveryDirectory().resolve("failed-install-" + System.currentTimeMillis() + '-' + UUID.randomUUID() + ".mv.db");
@@ -924,11 +1415,34 @@ final class DatabaseCoordinator {
         }
     }
 
+    private boolean prepareRestoreCandidate(Path databaseFile) {
+        BackupValidation initial = validateDatabaseFile(databaseFile);
+        if (!initial.valid() || !DatabaseSchemaSupportPolicy.supports(initial.schemaVersion())) return false;
+        try {
+            if (DatabaseSchemaSupportPolicy.requiresMigration(initial.schemaVersion())) {
+                migrationService.migrateRestoreCandidate(databaseFile, initial.schemaVersion());
+            }
+            BackupValidation current = validateDatabaseFile(databaseFile);
+            return current.valid() && current.schemaVersion() == SCHEMA_VERSION
+                    && current.creditCount() == initial.creditCount()
+                    && current.paymentCount() == initial.paymentCount()
+                    && current.paylogCount() == initial.paylogCount()
+                    && current.eventCount() == initial.eventCount();
+        } catch (Exception exception) {
+            CreditManagerClient.LOGGER.warn("Could not migrate and validate CreditManager restore candidate {}", databaseFile, exception);
+            return false;
+        }
+    }
+
     private BackupValidation validateDatabaseFile(Path databaseFile) {
         return validateDatabaseFile(databaseFile, true);
     }
 
     private BackupValidation validateDatabaseFile(Path databaseFile, boolean requireLogicalHealth) {
+        return validateDatabaseFile(databaseFile, requireLogicalHealth, true);
+    }
+
+    private BackupValidation validateDatabaseFile(Path databaseFile, boolean requireLogicalHealth, boolean repairDerivedState) {
         String name = databaseFile.getFileName().toString();
         if (!name.endsWith(".mv.db")) return BackupValidation.invalid();
         Path base = databaseFile.resolveSibling(name.substring(0, name.length() - ".mv.db".length()));
@@ -936,9 +1450,13 @@ final class DatabaseCoordinator {
             schemaManager.ensureMetadataTable(connection);
             int installed = schemaManager.installedSchemaVersion(connection);
             if (installed == SCHEMA_VERSION) {
+                if (repairDerivedState) {
+                    schemaManager.ensureAdditiveSchemaObjects(connection);
+                    schemaManager.rebuildEventCounts(connection);
+                }
                 schemaManager.validateRequiredSchema(connection);
                 if (requireLogicalHealth) validateBackupDomain(connection);
-            } else if (installed == 7) {
+            } else if (DatabaseSchemaSupportPolicy.requiresMigration(installed)) {
                 if (requireLogicalHealth) validateLegacyBackupDomain(connection);
             } else {
                 return BackupValidation.invalid();
@@ -947,9 +1465,29 @@ final class DatabaseCoordinator {
             int payments = countRows(statement, "payments");
             int paylogs = countRows(statement, "paylogs");
             int events = countRows(statement, "credit_events");
-            return new BackupValidation(true, credits, payments, paylogs, events, installed, revision(connection));
+            if (!repairDerivedState && countEventSummary(statement) != events) return BackupValidation.invalid();
+            String generation = metadataDao.read(connection, "storage_generation");
+            long storageGeneration = generation == null ? 0L : Long.parseLong(generation);
+            return new BackupValidation(true, credits, payments, paylogs, events, installed, revision(connection),
+                    metadataDao.read(connection, "storage_uuid"), storageGeneration);
         } catch (Exception exception) {
             return BackupValidation.invalid();
+        }
+    }
+
+    private long countEventSummary(Statement statement) throws SQLException {
+        try (ResultSet result = statement.executeQuery("SELECT COALESCE(SUM(event_count),0) FROM credit_event_counts")) {
+            result.next();
+            return result.getLong(1);
+        }
+    }
+
+    private boolean backupMatchesExpectedIdentity(BackupValidation validation) {
+        try {
+            Optional<StorageIdentityGuard.StorageIdentity> expected = storageIdentityGuard.readSidecar(FileManager.getStorageIdentityFile());
+            return expected.isPresent() && expected.get().storageUuid().equals(validation.storageUuid());
+        } catch (IOException | RuntimeException exception) {
+            return false;
         }
     }
 
@@ -957,6 +1495,8 @@ final class DatabaseCoordinator {
         requireZero(connection, "SELECT COUNT(*) FROM credits c LEFT JOIN (SELECT credit_id,SUM(amount) total FROM payments GROUP BY credit_id) p ON p.credit_id=c.id WHERE c.amount<=0 OR c.paid_amount<0 OR c.paid_amount>c.amount OR c.paid_amount<>COALESCE(p.total,0) OR (c.status NOT IN ('CLOSED','CANCELLED') AND c.status<>CASE WHEN c.paid_amount=0 THEN 'OPEN' WHEN c.paid_amount=c.amount THEN 'PAID' ELSE 'PARTIAL' END) OR ((c.status IN ('PAID','CLOSED','CANCELLED'))<>(c.completed_at IS NOT NULL))", "invalid credit aggregate");
         requireZero(connection, "SELECT COUNT(*) FROM payments p LEFT JOIN credits c ON c.id=p.credit_id LEFT JOIN paylogs l ON l.id=p.paylog_id WHERE p.amount<=0 OR c.id IS NULL OR p.payment_kind NOT IN ('MONEY','ITEM') OR (p.paylog_id IS NOT NULL AND (l.id IS NULL OR LOWER(COALESCE(p.from_player,''))<>LOWER(COALESCE(l.payer,'')) OR LOWER(COALESCE(p.to_player,''))<>LOWER(COALESCE(l.receiver,'')) OR p.amount>l.amount OR UPPER(COALESCE(p.source,'')) NOT LIKE 'PAYLOG_%'))", "invalid payment graph");
         requireZero(connection, "SELECT COUNT(*) FROM credit_events e LEFT JOIN credits c ON c.id=e.credit_id WHERE c.id IS NULL OR e.amount<0 OR e.paid_after<0 OR e.remaining_after<0 OR e.amount_before<0 OR e.amount_after<0", "invalid event graph");
+        requireZero(connection, "SELECT COUNT(*) FROM credit_event_counts c LEFT JOIN (SELECT credit_id,COUNT(*) event_count FROM credit_events GROUP BY credit_id) e ON e.credit_id=c.credit_id WHERE e.credit_id IS NULL OR e.event_count<>c.event_count", "invalid event count summary");
+        requireZero(connection, "SELECT COUNT(*) FROM (SELECT credit_id,COUNT(*) event_count FROM credit_events GROUP BY credit_id) e LEFT JOIN credit_event_counts c ON c.credit_id=e.credit_id WHERE c.credit_id IS NULL OR c.event_count<>e.event_count", "missing event count summary");
         requireZero(connection, "SELECT COUNT(*) FROM paylogs l LEFT JOIN (SELECT paylog_id,SUM(amount) total,COUNT(*) count_value FROM payments WHERE paylog_id IS NOT NULL GROUP BY paylog_id) p ON p.paylog_id=l.id WHERE l.amount<=0 OR l.linked_amount<>COALESCE(p.total,0) OR l.link_count<>COALESCE(p.count_value,0) OR COALESCE(p.total,0)>l.amount", "invalid paylog aggregate");
         try (PreparedStatement statement = connection.prepareStatement("SELECT id,payment_kind,items_json,item_nbt_entries FROM payments"); ResultSet result = statement.executeQuery()) {
             while (result.next()) {
@@ -1005,17 +1545,20 @@ final class DatabaseCoordinator {
         }
     }
 
-    private void appendBackupManifest(BackupManifestEntry entry) throws IOException {
+    private BackupManifestEntry appendBackupManifest(BackupManifestEntry entry) throws IOException {
         List<BackupManifestEntry> entries = new ArrayList<>(readBackupManifest());
         entries.removeIf(value -> value.fileName().equals(entry.fileName()));
         Path archive = safeBackupPath(entry.fileName());
-        entries.add(new BackupManifestEntry(entry.fileName(), entry.createdAt(), entry.schemaVersion(), entry.revision(),
+        BackupManifestEntry published = new BackupManifestEntry(entry.fileName(), entry.createdAt(), entry.schemaVersion(), entry.revision(),
                 entry.creditCount(), entry.paymentCount(), entry.paylogCount(), entry.eventCount(), entry.healthy(), entry.format(),
-                archive == null ? null : sha256File(archive), archive == null ? 0L : fileSize(archive), 2));
+                archive == null ? null : sha256File(archive), archive == null ? 0L : fileSize(archive), 3,
+                entry.artifactType(), entry.automaticRestoreEligible());
+        entries.add(published);
         entries.sort(Comparator.comparingLong(BackupManifestEntry::createdAt).reversed());
         List<BackupManifestEntry> retained = retainedBackups(entries);
         archiveExcessBackups(entries, retained);
         writeBackupManifest(retained);
+        return published;
     }
 
     private void writeBackupManifest(List<BackupManifestEntry> entries) throws IOException {
@@ -1116,6 +1659,62 @@ final class DatabaseCoordinator {
         return readQuery(() -> queryService.queryDealHistory(player, query, limit, offset));
     }
 
+    public QueryPage<CreditEventEntry> queryCreditEventPage(String player, UUID creditId, int limit, int offset) {
+        initialize();
+        return readQuery(() -> executeQueryWithSchemaRetry("Historien-Ereignisse konnten nicht aus der Datenbank geladen werden.", () -> {
+            int boundedLimit = Math.max(1, Math.min(PAGE_SIZE, limit));
+            int boundedOffset = Math.max(0, offset);
+            String normalizedPlayer = safe(player).trim().toLowerCase(Locale.ROOT);
+            List<Object> parameters = new ArrayList<>();
+            StringBuilder where = new StringBuilder(" WHERE 1=1");
+            if (!normalizedPlayer.isBlank()) {
+                where.append(" AND (LOWER(creditor)=? OR LOWER(debtor)=?)");
+                parameters.add(normalizedPlayer);
+                parameters.add(normalizedPlayer);
+            }
+            if (creditId != null) {
+                where.append(" AND credit_id=?");
+                parameters.add(creditId.toString());
+            }
+            String eventSource = creditId != null ? "credit_events USE INDEX (idx_events_credit_created)"
+                    : normalizedPlayer.isBlank() ? "credit_events USE INDEX (idx_events_created_id)" : "credit_events";
+            String eventOrder = creditId == null ? "created_at DESC,id DESC" : "credit_id,created_at DESC,id DESC";
+            try (Connection connection = connection()) {
+                beginConsistentRead(connection);
+                long totalCount;
+                if (normalizedPlayer.isBlank()) {
+                    String summarySql = creditId == null
+                            ? "SELECT COALESCE(SUM(event_count),0) FROM credit_event_counts"
+                            : "SELECT event_count FROM credit_event_counts WHERE credit_id=?";
+                    try (PreparedStatement count = connection.prepareStatement(summarySql)) {
+                        if (creditId != null) count.setString(1, creditId.toString());
+                        try (ResultSet result = count.executeQuery()) {
+                            totalCount = result.next() ? result.getLong(1) : 0L;
+                        }
+                    }
+                } else {
+                    try (PreparedStatement count = connection.prepareStatement("SELECT COUNT(*) FROM " + eventSource + where)) {
+                        for (int index = 0; index < parameters.size(); index++) count.setObject(index + 1, parameters.get(index));
+                        try (ResultSet result = count.executeQuery()) {
+                            result.next();
+                            totalCount = result.getLong(1);
+                        }
+                    }
+                }
+                List<CreditEventEntry> entries = new ArrayList<>(boundedLimit);
+                try (PreparedStatement page = connection.prepareStatement("SELECT * FROM " + eventSource + where + " ORDER BY " + eventOrder + " LIMIT ? OFFSET ?")) {
+                    for (int index = 0; index < parameters.size(); index++) page.setObject(index + 1, parameters.get(index));
+                    page.setInt(parameters.size() + 1, boundedLimit);
+                    page.setInt(parameters.size() + 2, boundedOffset);
+                    try (ResultSet result = page.executeQuery()) {
+                        while (result.next()) entries.add(readEvent(result));
+                    }
+                }
+                return new QueryPage<>(List.copyOf(entries), totalCount, boundedOffset, boundedLimit);
+            }
+        }));
+    }
+
     public synchronized List<DataHealthRecord> runHealthCheck() { return healthInspectionService.runHealthCheck(); }
     public synchronized List<DataHealthRecord> listHealthRecords(boolean includeResolved) { return healthInspectionService.listHealthRecords(includeResolved); }
     int lastHealthInspectionQueryCount() { return healthInspectionService.lastInspectionQueryCount(); }
@@ -1129,6 +1728,39 @@ final class DatabaseCoordinator {
         return snapshot != null && logicalRepairService.discard(type, id, reason, snapshot);
     }
 
+    public StatisticsEventSlice queryStatisticsEvents(String player, long fromInclusive, long toInclusive) {
+        initialize();
+        return readQuery(() -> executeQueryWithSchemaRetry("Statistik-Ereignisse konnten nicht aus der Datenbank geladen werden.", () -> {
+            String normalizedPlayer = safe(player).toLowerCase(Locale.ROOT);
+            if (normalizedPlayer.isBlank() || toInclusive < fromInclusive) return new StatisticsEventSlice(List.of(), Set.of());
+            try (Connection connection = connection()) {
+                beginConsistentRead(connection);
+                List<CreditEventEntry> matching = new ArrayList<>();
+                String rangeSql = "SELECT * FROM credit_events WHERE created_at>=? AND created_at<=? AND (LOWER(creditor)=? OR LOWER(debtor)=?) ORDER BY created_at,id";
+                try (PreparedStatement statement = connection.prepareStatement(rangeSql)) {
+                    statement.setLong(1, Math.max(0L, fromInclusive));
+                    statement.setLong(2, toInclusive);
+                    statement.setString(3, normalizedPlayer);
+                    statement.setString(4, normalizedPlayer);
+                    try (ResultSet result = statement.executeQuery()) {
+                        while (result.next()) matching.add(readEvent(result));
+                    }
+                }
+                Set<UUID> inactive = new HashSet<>();
+                String stateSql = "SELECT credit_id,event_type FROM (SELECT credit_id,event_type,ROW_NUMBER() OVER(PARTITION BY credit_id ORDER BY created_at DESC,id DESC) row_number FROM credit_events WHERE created_at<=? AND (LOWER(creditor)=? OR LOWER(debtor)=?) AND event_type IN ('CREDIT_DELETED','CREDIT_ARCHIVED','CREDIT_REACTIVATED')) latest WHERE row_number=1 AND event_type IN ('CREDIT_DELETED','CREDIT_ARCHIVED')";
+                try (PreparedStatement statement = connection.prepareStatement(stateSql)) {
+                    statement.setLong(1, toInclusive);
+                    statement.setString(2, normalizedPlayer);
+                    statement.setString(3, normalizedPlayer);
+                    try (ResultSet result = statement.executeQuery()) {
+                        while (result.next()) inactive.add(UUID.fromString(result.getString("credit_id")));
+                    }
+                }
+                return new StatisticsEventSlice(List.copyOf(matching), Set.copyOf(inactive));
+            }
+        }));
+    }
+
     private Path createDiscardSafetySnapshot(DiscardRecordType type, UUID id) {
         initialize();
         if (isPhysicalRecoveryState() || !Files.isRegularFile(FileManager.getDatabaseStorageFile())) return null;
@@ -1140,7 +1772,7 @@ final class DatabaseCoordinator {
             statement.execute("BACKUP TO '" + escapeSqlLiteral(target.toAbsolutePath().normalize().toString()) + "'");
             BackupValidation validation = validateRecoverySnapshot(target);
             if (!validation.valid() || validation.schemaVersion() != SCHEMA_VERSION) {
-                Files.deleteIfExists(target);
+                recoveryFileOps.deleteIfExists(target);
                 return null;
             }
             Map<String, Object> manifest = new LinkedHashMap<>();
@@ -1297,8 +1929,51 @@ final class DatabaseCoordinator {
     }
 
     void upsertEvent(Connection connection, CreditEventEntry event, long rowRevision) throws SQLException {
+        String previousCreditId = eventCreditId(connection, event.getId());
         try (PreparedStatement statement = connection.prepareStatement("MERGE INTO credit_events (id, credit_id, event_type, amount, paid_after, remaining_after, created_at, deal_name, creditor, debtor, note, amount_before, amount_after, actor, source, item_payment, revision) KEY(id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)") ) {
             statement.setString(1, event.getId().toString()); statement.setString(2, event.getCreditId().toString()); statement.setString(3, event.getType().name()); statement.setLong(4, event.getAmountMinor()); statement.setLong(5, event.getPaidAmountAfterMinor()); statement.setLong(6, event.getRemainingAmountAfterMinor()); statement.setLong(7, event.getTimestamp()); statement.setString(8, event.getDealName()); statement.setString(9, event.getCreditor()); statement.setString(10, event.getDebtor()); statement.setString(11, event.getNote()); statement.setLong(12, event.getAmountBeforeMinor()); statement.setLong(13, event.getAmountAfterMinor()); statement.setString(14, event.getActor()); statement.setString(15, event.getSource()); statement.setBoolean(16, event.isItemPayment()); statement.setLong(17, rowRevision); statement.executeUpdate();
+        }
+        String currentCreditId = event.getCreditId().toString();
+        if (previousCreditId == null) adjustEventCount(connection, currentCreditId, 1L);
+        else if (!previousCreditId.equals(currentCreditId)) {
+            adjustEventCount(connection, previousCreditId, -1L);
+            adjustEventCount(connection, currentCreditId, 1L);
+        }
+    }
+
+    void rebuildEventCounts(Connection connection) throws SQLException {
+        schemaManager.rebuildEventCounts(connection);
+    }
+
+    private String eventCreditId(Connection connection, UUID eventId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT credit_id FROM credit_events WHERE id=?")) {
+            statement.setString(1, eventId.toString());
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() ? result.getString(1) : null;
+            }
+        }
+    }
+
+    private void adjustEventCount(Connection connection, String creditId, long delta) throws SQLException {
+        if (delta > 0L) {
+            try (PreparedStatement update = connection.prepareStatement("UPDATE credit_event_counts SET event_count=event_count+1 WHERE credit_id=?")) {
+                update.setString(1, creditId);
+                if (update.executeUpdate() == 0) {
+                    try (PreparedStatement insert = connection.prepareStatement("INSERT INTO credit_event_counts (credit_id,event_count) VALUES (?,1)")) {
+                        insert.setString(1, creditId);
+                        insert.executeUpdate();
+                    }
+                }
+            }
+            return;
+        }
+        try (PreparedStatement update = connection.prepareStatement("UPDATE credit_event_counts SET event_count=CASE WHEN event_count>0 THEN event_count-1 ELSE 0 END WHERE credit_id=?")) {
+            update.setString(1, creditId);
+            update.executeUpdate();
+        }
+        try (PreparedStatement delete = connection.prepareStatement("DELETE FROM credit_event_counts WHERE credit_id=? AND event_count=0")) {
+            delete.setString(1, creditId);
+            delete.executeUpdate();
         }
     }
 
@@ -1375,8 +2050,7 @@ final class DatabaseCoordinator {
         try (PreparedStatement statement = connection.prepareStatement("SELECT * FROM credit_events"); ResultSet result = statement.executeQuery()) {
             List<CreditEventEntry> entries = new ArrayList<>();
             while (result.next()) {
-                CreditEventEntry event = new CreditEventEntry();
-                event.setId(UUID.fromString(result.getString("id"))); event.setCreditId(UUID.fromString(result.getString("credit_id"))); event.setType(CreditEventType.valueOf(result.getString("event_type"))); event.setAmountMinor(result.getLong("amount")); event.setPaidAmountAfterMinor(result.getLong("paid_after")); event.setRemainingAmountAfterMinor(result.getLong("remaining_after")); event.setTimestamp(result.getLong("created_at")); event.setDealName(result.getString("deal_name")); event.setCreditor(result.getString("creditor")); event.setDebtor(result.getString("debtor")); event.setNote(result.getString("note")); event.setAmountBeforeMinor(result.getLong("amount_before")); event.setAmountAfterMinor(result.getLong("amount_after")); event.setActor(result.getString("actor")); event.setSource(result.getString("source")); event.setItemPayment(result.getBoolean("item_payment")); entries.add(event);
+                entries.add(readEvent(result));
             }
             return entries;
         }
@@ -1514,6 +2188,27 @@ final class DatabaseCoordinator {
         return inTransaction(DatabaseWriteMode.NORMAL, work);
     }
 
+    private CreditEventEntry readEvent(ResultSet result) throws SQLException {
+        CreditEventEntry event = new CreditEventEntry();
+        event.setId(UUID.fromString(result.getString("id")));
+        event.setCreditId(UUID.fromString(result.getString("credit_id")));
+        event.setType(CreditEventType.valueOf(result.getString("event_type")));
+        event.setAmountMinor(result.getLong("amount"));
+        event.setPaidAmountAfterMinor(result.getLong("paid_after"));
+        event.setRemainingAmountAfterMinor(result.getLong("remaining_after"));
+        event.setTimestamp(result.getLong("created_at"));
+        event.setDealName(result.getString("deal_name"));
+        event.setCreditor(result.getString("creditor"));
+        event.setDebtor(result.getString("debtor"));
+        event.setNote(result.getString("note"));
+        event.setAmountBeforeMinor(result.getLong("amount_before"));
+        event.setAmountAfterMinor(result.getLong("amount_after"));
+        event.setActor(result.getString("actor"));
+        event.setSource(result.getString("source"));
+        event.setItemPayment(result.getBoolean("item_payment"));
+        return event;
+    }
+
     boolean inTransaction(DatabaseWriteMode mode, DatabaseWork work) {
         initialize();
         lifecycleLock.readLock().lock();
@@ -1522,7 +2217,8 @@ final class DatabaseCoordinator {
             boolean migrationIncomplete = mode == DatabaseWriteMode.NORMAL && !"COMPLETED".equals(metadata(connection, "json_migration_status"))
                     && hasLegacyJsonFiles();
             boolean openHealthError = hasOpenHealthErrors(connection);
-            if (!writeGate.allows(mode, !isPhysicalRecoveryState(), writeLocked, openHealthError, migrationIncomplete)) return false;
+            if (!writeGate.allows(mode, !isPhysicalRecoveryState(), writeLocked, openHealthError,
+                    migrationIncomplete, backupProtectionState == BackupCheckpointService.ProtectionState.CRITICAL)) return false;
             connection.setAutoCommit(false);
             try { work.run(connection); connection.commit(); return true; }
             catch (DuplicatePaylogException ignored) { connection.rollback(); return false; }
@@ -1537,9 +2233,15 @@ final class DatabaseCoordinator {
             }
         } catch (SQLException exception) {
             if (isPhysicalH2Corruption(exception)) handlePhysicalCorruption(exception, FileManager.getDatabaseFile().toAbsolutePath());
-            healthy = false;
-            writeLocked = true;
-            if (!isPhysicalRecoveryState()) availability = DatabaseAvailability.WRITE_LOCKED;
+            if (isMissingDatabase(exception)) {
+                markUnavailable(DatabaseAvailability.MISSING_DATABASE,
+                        "Die aktive CreditManager-Datenbank fehlt. Es wurde keine neue leere Datenbank erzeugt.",
+                        FileManager.getDatabaseFile().toAbsolutePath());
+            } else {
+                healthy = false;
+                writeLocked = true;
+                if (!isPhysicalRecoveryState()) availability = DatabaseAvailability.WRITE_LOCKED;
+            }
             CreditManagerClient.LOGGER.warn("Could not open local database transaction", exception);
             return false;
         } finally {
@@ -1561,17 +2263,27 @@ final class DatabaseCoordinator {
                         return name.endsWith(".zip") || name.endsWith(".mv.db");
                     }).toList()) {
                 String name = candidate.getFileName().toString();
-                BackupValidation validation = name.toLowerCase(Locale.ROOT).endsWith(".zip") ? validateBackup(candidate) : validateLegacyBackupCandidate(candidate);
-                if (!validation.valid()) continue;
                 BackupManifestEntry old = indexed.get(name);
+                boolean recoverySnapshotName = name.toLowerCase(Locale.ROOT).startsWith("creditmanager_recovery_snapshot_");
+                BackupArtifactType artifactType = recoverySnapshotName || old != null && old.artifactType() == BackupArtifactType.RECOVERY_SNAPSHOT
+                        ? BackupArtifactType.RECOVERY_SNAPSHOT : BackupArtifactType.RESTORABLE_HEALTHY;
+                BackupValidation validation = name.toLowerCase(Locale.ROOT).endsWith(".zip")
+                        ? artifactType == BackupArtifactType.RECOVERY_SNAPSHOT ? validateRecoverySnapshot(candidate) : validateBackup(candidate)
+                        : validateLegacyBackupCandidate(candidate);
+                if (!validation.valid()) continue;
                 String checksum = sha256File(candidate);
                 long size = fileSize(candidate);
                 boolean trustedMetadata = old != null && !blank(old.sha256()) && old.sha256().equals(checksum) && old.size() == size;
                 long createdAt = !trustedMetadata || old.createdAt() <= 0L ? modifiedAt(candidate) : old.createdAt();
-                String format = name.toLowerCase(Locale.ROOT).endsWith(".zip") ? "h2-backup-zip" : "legacy-h2";
+                String format = artifactType == BackupArtifactType.RECOVERY_SNAPSHOT ? "h2-recovery-snapshot"
+                        : name.toLowerCase(Locale.ROOT).endsWith(".zip") ? "h2-backup-zip" : "legacy-h2";
+                boolean healthyArtifact = artifactType == BackupArtifactType.RESTORABLE_HEALTHY
+                        && !blank(validation.storageUuid()) && validation.generation() > 0L
+                        && (!trustedMetadata || old.healthy());
+                boolean restoreEligible = healthyArtifact && (!trustedMetadata || old.automaticRestoreEligible());
                 discovered.add(new BackupManifestEntry(name, createdAt, validation.schemaVersion(), validation.revision(),
                         validation.creditCount(), validation.paymentCount(), validation.paylogCount(), validation.eventCount(),
-                        !trustedMetadata || old.healthy(), format, checksum, size, 2));
+                        healthyArtifact, format, checksum, size, 3, artifactType, restoreEligible));
             }
         } catch (IOException exception) {
             throw new IllegalStateException("CreditManager backup catalog could not be discovered", exception);
@@ -1587,12 +2299,70 @@ final class DatabaseCoordinator {
         return List.copyOf(retained);
     }
 
+    private List<BackupCandidate> discoverBackupCandidates() {
+        List<BackupCandidate> candidates = new ArrayList<>();
+        for (BackupManifestEntry entry : discoverBackups()) {
+            Path path = safeBackupPath(entry.fileName());
+            if (path == null || !Files.isRegularFile(path)) continue;
+            BackupValidation validation = entry.artifactType() == BackupArtifactType.RECOVERY_SNAPSHOT
+                    ? validateRecoverySnapshot(path)
+                    : path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".zip")
+                    ? validateBackup(path) : validateLegacyBackupCandidate(path);
+            candidates.add(new BackupCandidate(entry, path, BackupSource.LOCAL,
+                    validation.storageUuid(), validation.generation()));
+        }
+        candidates.addAll(discoverMirrorBackups());
+        return List.copyOf(candidates);
+    }
+
+    private List<BackupCandidate> discoverMirrorBackups() {
+        BackupMirrorService mirror = mirrorService();
+        if (!mirror.enabled()) return List.of();
+        Map<String, BackupMirrorService.MirrorBackupEntry> indexed = new LinkedHashMap<>();
+        for (BackupMirrorService.MirrorBackupEntry entry : mirror.readManifest().entries()) indexed.putIfAbsent(entry.filename(), entry);
+        List<BackupCandidate> discovered = new ArrayList<>();
+        List<BackupMirrorService.MirrorBackupEntry> rebuilt = new ArrayList<>();
+        for (Path candidate : mirror.candidateFiles()) {
+            BackupValidation validation = validateBackup(candidate);
+            if (!validation.valid() || validation.schemaVersion() != SCHEMA_VERSION || blank(validation.storageUuid())
+                    || validation.generation() <= 0L) continue;
+            String name = candidate.getFileName().toString();
+            String checksum = sha256File(candidate);
+            long size = fileSize(candidate);
+            BackupMirrorService.MirrorBackupEntry old = indexed.get(name);
+            boolean trusted = old != null && checksum.equals(old.sha256()) && size == old.size()
+                    && validation.storageUuid().equals(old.storageUuid()) && validation.generation() == old.generation();
+            long createdAt = trusted && old.createdAt() > 0L ? old.createdAt() : modifiedAt(candidate);
+            BackupManifestEntry entry = new BackupManifestEntry(name, createdAt, validation.schemaVersion(), validation.revision(),
+                    validation.creditCount(), validation.paymentCount(), validation.paylogCount(), validation.eventCount(),
+                    true, "h2-backup-mirror", checksum, size, 3, BackupArtifactType.RESTORABLE_HEALTHY, true);
+            BackupMirrorService.MirrorBackupEntry mirrorEntry = new BackupMirrorService.MirrorBackupEntry(name, createdAt,
+                    validation.revision(), validation.schemaVersion(), validation.storageUuid(), validation.generation(),
+                    checksum, size, validation.creditCount(), validation.paymentCount(), validation.paylogCount(),
+                    validation.eventCount(), BackupArtifactType.RESTORABLE_HEALTHY, true);
+            rebuilt.add(mirrorEntry);
+            discovered.add(new BackupCandidate(entry, candidate, BackupSource.MIRROR,
+                    mirrorEntry.storageUuid(), mirrorEntry.generation()));
+        }
+        try {
+            mirror.rebuildManifest(rebuilt);
+        } catch (IOException exception) {
+            CreditManagerClient.LOGGER.warn("Could not rebuild CreditManager mirror manifest", exception);
+        }
+        discovered.sort(Comparator.comparingLong((BackupCandidate value) -> value.entry().revision()).reversed()
+                .thenComparing(Comparator.comparingLong((BackupCandidate value) -> value.entry().createdAt()).reversed()));
+        return List.copyOf(discovered);
+    }
+
     private List<BackupManifestEntry> retainedBackups(List<BackupManifestEntry> discovered) {
         if (discovered.size() <= MAX_ACTIVE_BACKUPS) return List.copyOf(discovered);
-        List<BackupManifestEntry> retained = new ArrayList<>(discovered.subList(0, MAX_ACTIVE_BACKUPS));
-        if (retained.stream().noneMatch(BackupManifestEntry::healthy)) {
-            discovered.stream().skip(MAX_ACTIVE_BACKUPS).filter(BackupManifestEntry::healthy).findFirst()
-                    .ifPresent(healthyEntry -> retained.set(retained.size() - 1, healthyEntry));
+        List<BackupManifestEntry> retained = new ArrayList<>();
+        discovered.stream().filter(BackupManifestEntry::automaticRestoreEligible).findFirst().ifPresent(retained::add);
+        discovered.stream().filter(entry -> entry.artifactType() == BackupArtifactType.RECOVERY_SNAPSHOT)
+                .findFirst().filter(entry -> !retained.contains(entry)).ifPresent(retained::add);
+        for (BackupManifestEntry entry : discovered) {
+            if (retained.size() >= MAX_ACTIVE_BACKUPS) break;
+            if (!retained.contains(entry)) retained.add(entry);
         }
         retained.sort(Comparator.comparingLong(BackupManifestEntry::createdAt).reversed());
         return List.copyOf(retained);
@@ -1611,6 +2381,56 @@ final class DatabaseCoordinator {
             } catch (IOException exception) {
                 CreditManagerClient.LOGGER.warn("Could not archive CreditManager backup outside active retention: {}", source, exception);
             }
+        }
+        pruneRetiredBackups(archiveDirectory);
+    }
+
+    private void pruneRetiredBackups(Path archiveDirectory) {
+        if (!Files.isDirectory(archiveDirectory)) return;
+        try (var files = Files.list(archiveDirectory)) {
+            List<Path> candidates = files.filter(Files::isRegularFile)
+                    .filter(path -> {
+                        String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
+                        return name.endsWith(".zip") || name.endsWith(".mv.db");
+                    })
+                    .sorted(Comparator.comparingLong(this::modifiedAt).reversed())
+                    .toList();
+            Path protectedHealthy = null;
+            Path protectedSnapshot = null;
+            for (Path candidate : candidates) {
+                String name = candidate.getFileName().toString().toLowerCase(Locale.ROOT);
+                boolean snapshot = name.contains("recovery_snapshot");
+                BackupValidation validation = name.endsWith(".zip")
+                        ? snapshot ? validateRecoverySnapshot(candidate) : validateBackup(candidate)
+                        : validateLegacyBackupCandidate(candidate);
+                if (validation.valid() && snapshot && protectedSnapshot == null) protectedSnapshot = candidate;
+                if (validation.valid() && !snapshot && protectedHealthy == null) {
+                    protectedHealthy = candidate;
+                }
+                if (protectedHealthy != null && protectedSnapshot != null) break;
+            }
+            List<Path> retentionOrder = new ArrayList<>();
+            if (protectedHealthy != null) retentionOrder.add(protectedHealthy);
+            if (protectedSnapshot != null && !protectedSnapshot.equals(protectedHealthy)) retentionOrder.add(protectedSnapshot);
+            for (Path candidate : candidates) {
+                if (!candidate.equals(protectedHealthy) && !candidate.equals(protectedSnapshot)) retentionOrder.add(candidate);
+            }
+            int retainedCount = 0;
+            long retainedBytes = 0L;
+            for (Path candidate : retentionOrder) {
+                long size = fileSize(candidate);
+                boolean protectedArtifact = candidate.equals(protectedHealthy) || candidate.equals(protectedSnapshot);
+                boolean withinLimits = retainedCount < MAX_RETIRED_BACKUPS
+                        && (retainedCount == 0 || retainedBytes <= MAX_RETIRED_BACKUP_BYTES - Math.min(size, MAX_RETIRED_BACKUP_BYTES));
+                if (protectedArtifact || withinLimits) {
+                    retainedCount++;
+                    retainedBytes = size > Long.MAX_VALUE - retainedBytes ? Long.MAX_VALUE : retainedBytes + size;
+                } else {
+                    recoveryFileOps.deleteIfExists(candidate);
+                }
+            }
+        } catch (IOException exception) {
+            CreditManagerClient.LOGGER.warn("Could not enforce retired CreditManager backup retention", exception);
         }
     }
 
@@ -1665,9 +2485,17 @@ final class DatabaseCoordinator {
 
     Connection connection() throws SQLException {
         if (isPhysicalRecoveryState()) throw new SQLException("CreditManager database is quarantined pending user recovery", "08006", 90030);
+        if (!FileManager.databaseAccessAllowed()) throw new SQLException("CreditManager storage lease is not held", "55000");
+        if (!Files.isRegularFile(FileManager.getDatabaseStorageFile())) {
+            healthy = false;
+            writeLocked = true;
+            availability = DatabaseAvailability.MISSING_DATABASE;
+            DataHealth.reportRecoveryRequired("Die aktive CreditManager-Datenbank fehlt. Es wurde keine neue leere Datenbank erzeugt.");
+            throw new SQLException("Existing database file is missing", "90013");
+        }
         return openConnection(FileManager.getDatabaseFile());
     }
-    private Connection openConnection(Path databaseBase) throws SQLException { return connections.open(databaseBase); }
+    private Connection openConnection(Path databaseBase) throws SQLException { return connections.openExistingReadWrite(databaseBase); }
     <T> T executeQueryWithSchemaRetry(String message, SqlQuery<T> query) {
         try {
             return query.run();
@@ -1734,6 +2562,11 @@ final class DatabaseCoordinator {
             throw new SQLException("Malformed JSON in " + table + '.' + column + " for " + id, exception);
         }
     }
+    void beginConsistentRead(Connection connection) throws SQLException {
+        connection.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);
+        connection.setReadOnly(true);
+        connection.setAutoCommit(false);
+    }
     String escapeLike(String value) { return value.replace("!", "!!").replace("%", "!%").replace("_", "!_"); }
     private boolean validUuid(String value) { try { UUID.fromString(value); return true; } catch (RuntimeException ignored) { return false; } }
     private boolean blank(String value) { return value == null || value.isBlank(); }
@@ -1753,10 +2586,30 @@ final class DatabaseCoordinator {
         }
     }
 
-    private record BackupValidation(boolean valid, int creditCount, int paymentCount, int paylogCount, int eventCount, int schemaVersion, long revision) {
-        private static BackupValidation invalid() { return new BackupValidation(false, 0, 0, 0, 0, 0, 0L); }
+    private record BackupCreation(boolean successful, long revision, long createdAt, Path localArtifact,
+                                  boolean mirrorSuccess, Path mirrorArtifact) {
+        private static BackupCreation failed() { return new BackupCreation(false, -1L, 0L, null, false, null); }
+    }
+    private record BackupCandidate(BackupManifestEntry entry, Path path, BackupSource source,
+                                   String storageUuid, long generation) { }
+    private record BackupIdentity(String storageUuid, long generation) { }
+    private record BackupIdentitySelection(boolean safe, String storageUuid, long generation) {
+        private static BackupIdentitySelection safe(String storageUuid, long generation) {
+            return new BackupIdentitySelection(true, storageUuid, generation);
+        }
+        private static BackupIdentitySelection unsafe() {
+            return new BackupIdentitySelection(false, null, 0L);
+        }
+        private boolean matches(String candidateUuid, long candidateGeneration) {
+            return safe && Objects.equals(storageUuid, candidateUuid) && generation == candidateGeneration;
+        }
+    }
+    private record BackupValidation(boolean valid, int creditCount, int paymentCount, int paylogCount, int eventCount,
+                                    int schemaVersion, long revision, String storageUuid, long generation) {
+        private static BackupValidation invalid() { return new BackupValidation(false, 0, 0, 0, 0, 0, 0L, null, 0L); }
         private int domainCount() { return creditCount + paymentCount + paylogCount + eventCount; }
     }
+    private record DatabaseFingerprint(String storageUuid, int schemaVersion, long revision, long[] domainCounts) { }
     DataHealthRecord readHealth(ResultSet result) throws SQLException { long resolved = result.getLong("resolved_at"); return new DataHealthRecord(UUID.fromString(result.getString("id")), result.getString("record_type"), result.getString("severity"), result.getString("source_table"), result.getString("source_id"), result.getString("title"), result.getString("message"), result.getString("raw_payload"), result.getString("repair_payload"), result.getString("status"), result.getLong("created_at"), result.wasNull() ? null : resolved); }
     @FunctionalInterface interface DatabaseWork { void run(Connection connection) throws Exception; }
     @FunctionalInterface interface SqlQuery<T> { T run() throws SQLException; }

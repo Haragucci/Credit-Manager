@@ -11,6 +11,7 @@ import op.creditmanager.client.core.service.PaylogLinkingService;
 import op.creditmanager.client.core.service.CreditQueryService;
 import op.creditmanager.client.core.service.CreditApplicationService;
 import op.creditmanager.client.core.service.CreditRecoveryService;
+import op.creditmanager.client.core.service.MutationCommitResult;
 import op.creditmanager.client.money.MoneyRules;
 import op.creditmanager.client.model.CreditEntry;
 import op.creditmanager.client.model.CreditEventEntry;
@@ -46,6 +47,7 @@ public class CreditManagerCore implements CreditOperations {
     private final CreditQueryService queries;
     private final CreditApplicationService credits;
     private final CreditRecoveryService recovery;
+    private final ThreadLocal<MutationCommitResult> lastMutationCommit = new ThreadLocal<>();
 
     protected CreditManagerCore(CreditRepository repository) {
         if (repository == null) throw new IllegalStateException("CreditRepository darf nicht NULL sein.");
@@ -180,6 +182,7 @@ public class CreditManagerCore implements CreditOperations {
 
     public List<CreditEntry> getOpenCreditsAsDebtor(String player) { return queries.openAsDebtor(player); }
     public List<CreditEntry> getOpenCreditsAsCreditor(String player) { return queries.openAsCreditor(player); }
+    public CreditStatisticsSnapshot getStatisticsSnapshot(String player) { return repository.snapshotOpenCredits(player); }
     public List<CreditEntry> getAllCreditsAsDebtor(String player) { return queries.allAsDebtor(player); }
     public List<CreditEntry> getAllCreditsAsCreditor(String player) { return queries.allAsCreditor(player); }
 
@@ -219,6 +222,7 @@ public class CreditManagerCore implements CreditOperations {
     public boolean discardRecovery(UUID token, boolean confirmed) { return recovery.discard(token, confirmed); }
     public boolean createRecoveryBackup(UUID token) { return recovery.createRecoveryBackup(token); }
     public boolean createSafetyBackup() { return recovery.createSafetyBackup(); }
+    public DatabaseManager.ManualBackupResult createHealthyBackupNow() { return DatabaseManager.getInstance().createHealthyBackupNow(); }
     public boolean restoreLatestSafetyBackup() { return recovery.restoreLatestSafetyBackup(); }
     public boolean recheckAndRepairDatabase() { return recovery.recheckAndRepairDatabase(); }
     public boolean createEmptyDatabaseAfterPhysicalRecovery() { return recovery.createEmptyDatabaseAfterPhysicalRecovery(); }
@@ -228,7 +232,6 @@ public class CreditManagerCore implements CreditOperations {
     private void reloadAll() {
         LegacyJsonMigrationService.getInstance().inspectAtStartup();
         repository.load();
-        CreditEventRepository.getInstance().bind(repository);
         CreditEventRepository.getInstance().load();
         TransactionRepository.getInstance().load();
         ClientConfigManager.reload();
@@ -242,9 +245,19 @@ public class CreditManagerCore implements CreditOperations {
         if (!isWritable()) throw new CreditException("Datenprüfung erforderlich: Änderungen sind vorübergehend gesperrt.");
     }
 
-    public void commitMutation(CreditEntry draft, List<Payment> paymentUpserts, List<UUID> paymentDeletions,
-                                List<CreditEventEntry> events, CreditEntry published) throws CreditException {
-        mutations.commit(draft, paymentUpserts, paymentDeletions, events, published);
+    public MutationCommitResult commitMutation(CreditEntry draft, List<Payment> paymentUpserts,
+                                               List<UUID> paymentDeletions, List<CreditEventEntry> events,
+                                               CreditEntry published) throws CreditException {
+        MutationCommitResult result = mutations.commit(draft, paymentUpserts, paymentDeletions, events, published);
+        lastMutationCommit.set(result);
+        if (!result.committed()) throw new CreditException(result.userMessage());
+        return result;
+    }
+
+    public MutationCommitResult consumeLastMutationCommit() {
+        MutationCommitResult result = lastMutationCommit.get();
+        lastMutationCommit.remove();
+        return result;
     }
 
     public List<CreditEventEntry> paymentEvents(CreditEntry entry, Payment payment, long remainingBeforeMinor) {

@@ -82,9 +82,10 @@ public final class ModernPaylogLinkScreen extends ModernBaseScreen {
         try {
             CreditManager.PaylogLinkResult result = manager.linkPaylogToDeal(paylog.getId(), deal.getId());
             if (result.linked()) {
-                if (result.remainingPaylogMinor() > 0L) {
+                boolean commitNoticeShown = showMutationCommitNotice();
+                if (!commitNoticeShown && result.remainingPaylogMinor() > 0L) {
                     toastWarning("Teilbetrag gebucht; " + FormatUtil.formatAmountMinor(result.remainingPaylogMinor()) + " bleiben im Paylog verfügbar.");
-                } else {
+                } else if (!commitNoticeShown) {
                     toastSuccess("Paylog vollständig als Zahlung gebucht.");
                 }
                 closeToParent();

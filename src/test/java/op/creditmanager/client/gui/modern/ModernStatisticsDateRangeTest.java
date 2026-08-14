@@ -7,6 +7,8 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ModernStatisticsDateRangeTest {
     @Test
@@ -27,5 +29,15 @@ class ModernStatisticsDateRangeTest {
 
         assertEquals(LocalDateTime.of(2026, 10, 20, 0, 0), java.time.Instant.ofEpochMilli(start).atZone(berlin).toLocalDateTime());
         assertEquals(Duration.ofHours(157), Duration.between(java.time.Instant.ofEpochMilli(start), java.time.Instant.ofEpochMilli(now)));
+    }
+
+    @Test
+    void customRangeRejectsMalformedAndReversedDatesWithoutFallback() {
+        assertFalse(op.creditmanager.client.gui.modern.stats.StatisticsRange.custom("invalid", "2026-08-14", ZoneId.of("Europe/Berlin")).valid());
+        assertFalse(op.creditmanager.client.gui.modern.stats.StatisticsRange.custom("2026-08-15", "2026-08-14", ZoneId.of("Europe/Berlin")).valid());
+
+        var valid = op.creditmanager.client.gui.modern.stats.StatisticsRange.custom("2026-08-13", "2026-08-14", ZoneId.of("Europe/Berlin"));
+        assertTrue(valid.valid());
+        assertTrue(valid.toInclusive() > valid.fromInclusive());
     }
 }

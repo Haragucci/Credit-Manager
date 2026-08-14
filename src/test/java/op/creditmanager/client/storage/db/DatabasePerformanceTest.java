@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import op.creditmanager.client.model.CreditEntry;
+import op.creditmanager.client.core.CreditEventRepository;
 import op.creditmanager.client.storage.DataHealth;
 import op.creditmanager.client.storage.FileManager;
 
@@ -17,6 +18,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.Locale;
 import java.util.UUID;
 
@@ -76,7 +78,7 @@ class DatabasePerformanceTest {
     }
 
     @Test
-    void hundredThousandEventsRemainUntouchedByTargetedCreditMutation() throws Exception {
+    void oneMillionEventsKeepRuntimeBoundedAndTargetedMutationsFast() throws Exception {
         CreditEntry credit = new CreditEntry(new UUID(2L, 1L), "performance-deal", "creditor", "debtor", 10_000L, null, "before");
         assertTrue(DatabaseManager.getInstance().commitCreditMutation(new DatabaseManager.CreditMutation(credit, List.of(), List.of(), List.of())));
         long revisionBefore = DatabaseManager.getInstance().revision();
@@ -84,7 +86,7 @@ class DatabasePerformanceTest {
         try (Connection connection = connection(); PreparedStatement insert = connection.prepareStatement(
                 "INSERT INTO credit_events (id,credit_id,event_type,amount,paid_after,remaining_after,created_at,deal_name,creditor,debtor,note,amount_before,amount_after,actor,source,item_payment,revision) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")) {
             connection.setAutoCommit(false);
-            for (int index = 0; index < 100_000; index++) {
+            for (int index = 0; index < 1_000_000; index++) {
                 insert.setString(1, new UUID(3L, index + 1L).toString());
                 insert.setString(2, credit.getId().toString());
                 insert.setString(3, "CREDIT_UPDATED");
@@ -105,16 +107,66 @@ class DatabasePerformanceTest {
                 insert.addBatch();
                 if ((index + 1) % 2_000 == 0) insert.executeBatch();
             }
+            coordinator().rebuildEventCounts(connection);
             connection.commit();
         }
 
-        credit.setNote("after");
-        assertTrue(DatabaseManager.getInstance().commitCreditMutation(new DatabaseManager.CreditMutation(credit, List.of(), List.of(), List.of())));
-        assertEquals(revisionBefore + 1L, DatabaseManager.getInstance().revision());
-        assertEquals(100_000L, count("credit_events"));
-        DatabaseManager.DatabaseState reloaded = DatabaseManager.getInstance().loadCreditState();
-        assertEquals(100_000, reloaded.events().size());
-        assertEquals("after", reloaded.credits().getFirst().getNote());
+        List<Long> mutationNanos = new ArrayList<>();
+        for (int index = 0; index < 31; index++) {
+            credit.setNote("after-" + index);
+            long started = System.nanoTime();
+            assertTrue(DatabaseManager.getInstance().commitCreditMutation(
+                    new DatabaseManager.CreditMutation(credit, List.of(), List.of(), List.of())));
+            mutationNanos.add(System.nanoTime() - started);
+        }
+        assertEquals(revisionBefore + 31L, DatabaseManager.getInstance().revision());
+        assertEquals(1_000_000L, count("credit_events"));
+        long statisticsStarted = System.nanoTime();
+        DatabaseManager.StatisticsEventSlice recent = DatabaseManager.getInstance()
+                .queryStatisticsEvents("creditor", 999_901L, 1_000_000L);
+        long statisticsNanos = System.nanoTime() - statisticsStarted;
+        assertEquals(100, recent.events().size());
+        assertTrue(recent.inactiveCreditIds().isEmpty());
+        long firstPageStarted = System.nanoTime();
+        DatabaseManager.QueryPage<?> firstPage = CreditEventRepository.getInstance().queryCreditPage(credit.getId(), 37, 0);
+        long firstPageNanos = System.nanoTime() - firstPageStarted;
+        long secondPageStarted = System.nanoTime();
+        DatabaseManager.QueryPage<?> secondPage = CreditEventRepository.getInstance().queryCreditPage(credit.getId(), 37, 37);
+        long secondPageNanos = System.nanoTime() - secondPageStarted;
+        long pageNanos = Math.max(firstPageNanos, secondPageNanos);
+        assertEquals(1_000_000L, firstPage.totalCount());
+        assertEquals(37, firstPage.entries().size());
+        assertEquals(37, secondPage.entries().size());
+        assertEquals(999_963L, ((op.creditmanager.client.model.CreditEventEntry) secondPage.entries().getFirst()).getTimestamp());
+        try (Connection connection = connection(); Statement statement = connection.createStatement();
+             ResultSet result = statement.executeQuery("EXPLAIN SELECT * FROM credit_events USE INDEX (idx_events_credit_created) WHERE credit_id='" + credit.getId()
+                     + "' ORDER BY credit_id,created_at DESC,id DESC LIMIT 37")) {
+            assertTrue(result.next());
+            String plan = result.getString(1).toUpperCase(Locale.ROOT);
+            assertTrue(plan.contains("IDX_EVENTS_CREDIT_CREATED"), plan);
+        }
+        long runtimeStarted = System.nanoTime();
+        DatabaseManager.DatabaseState runtime = DatabaseManager.getInstance().loadRuntimeCreditState();
+        long runtimeNanos = System.nanoTime() - runtimeStarted;
+        assertTrue(runtime.events().isEmpty());
+        assertEquals("after-30", runtime.credits().getFirst().getNote());
+        long cacheStarted = System.nanoTime();
+        assertTrue(CreditEventRepository.getInstance().load());
+        long cacheNanos = System.nanoTime() - cacheStarted;
+        assertEquals(DatabaseManager.PAGE_SIZE, CreditEventRepository.getInstance().getRecentEvents().size());
+
+        long p50 = percentile(mutationNanos, 0.50D);
+        long p95 = percentile(mutationNanos, 0.95D);
+        long p99 = percentile(mutationNanos, 0.99D);
+        System.out.printf(Locale.ROOT,
+                "creditmanager.performance.one_million_events_ms mutation_p50=%.3f mutation_p95=%.3f mutation_p99=%.3f page_max=%.3f statistics=%.3f runtime_load=%.3f cache_load=%.3f%n",
+                milliseconds(p50), milliseconds(p95), milliseconds(p99), milliseconds(pageNanos),
+                milliseconds(statisticsNanos), milliseconds(runtimeNanos), milliseconds(cacheNanos));
+        assertTrue(p99 < 2_000_000_000L, "mutation p99 exceeded 2000 ms");
+        assertTrue(pageNanos < 5_000_000_000L, "single event page exceeded 5000 ms");
+        assertTrue(statisticsNanos < 5_000_000_000L, "statistics slice exceeded 5000 ms");
+        assertTrue(runtimeNanos < 5_000_000_000L, "runtime load exceeded 5000 ms");
+        assertTrue(cacheNanos < 5_000_000_000L, "bounded event cache load exceeded 5000 ms");
     }
 
     @Test
@@ -167,6 +219,16 @@ class DatabasePerformanceTest {
         statement.setString(1, paylogId);
         statement.setString(2, token);
         statement.addBatch();
+    }
+
+    private long percentile(List<Long> values, double percentile) {
+        List<Long> sorted = values.stream().sorted().toList();
+        int index = Math.max(0, Math.min(sorted.size() - 1, (int) Math.ceil(percentile * sorted.size()) - 1));
+        return sorted.get(index);
+    }
+
+    private double milliseconds(long nanoseconds) {
+        return nanoseconds / 1_000_000D;
     }
 
     private long count(String table) throws Exception {

@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 
 class MoneyRulesTest {
     @Test
@@ -39,5 +41,27 @@ class MoneyRulesTest {
         assertTrue(MoneyRules.parse("1.000,000").isEmpty());
         assertTrue(MoneyRules.parse("1,000.000").isEmpty());
         assertTrue(MoneyRules.parse("1.234.56.78").isEmpty());
+    }
+
+    @Test
+    void rejectsLongBoundariesWithoutAbsoluteValueOverflow() {
+        assertFalse(MoneyRules.isValid(Long.MIN_VALUE));
+        assertFalse(MoneyRules.isValid(Long.MAX_VALUE));
+        assertTrue(MoneyRules.isValid(-MoneyRules.MAX_MINOR));
+        assertTrue(MoneyRules.isValid(MoneyRules.MAX_MINOR));
+        assertFalse(MoneyRules.isValid(-MoneyRules.MAX_MINOR - 1L));
+        assertFalse(MoneyRules.isValid(MoneyRules.MAX_MINOR + 1L));
+        assertThrows(IllegalArgumentException.class,
+                () -> MoneyRules.fromMajor(java.math.BigDecimal.valueOf(Long.MIN_VALUE, MoneyRules.SCALE), false));
+        assertThrows(IllegalArgumentException.class, () -> MoneyRules.toMajor(Long.MIN_VALUE));
+    }
+
+    @Test
+    void hostileInputCorpusNeverEscapesParserBoundary() {
+        for (String value : java.util.List.of("9".repeat(20_000), "1e309", "NaN", "Infinity", "-Inf",
+                "999999999999999999999999999999", "1.234.567.890.123.456,78", "1__2", "١٢٣", " 1 2 ",
+                "1,2,3,4,5mrd", "..", ",,")) {
+            assertDoesNotThrow(() -> MoneyRules.parse(value));
+        }
     }
 }

@@ -53,16 +53,16 @@ final class DatabaseMigrationService {
         }
     }
 
-    void migrateV7ToV8(Path activeBase, int installedVersion) throws Exception {
+    void migrateLegacyToV8(Path activeBase, int installedVersion) throws Exception {
         if (installedVersion >= DatabaseManager.SCHEMA_VERSION) return;
-        if (installedVersion < 1 || installedVersion > 7) {
+        if (!DatabaseSchemaSupportPolicy.requiresMigration(installedVersion)) {
             throw new DatabaseSchemaManager.SchemaValidationException("Unsupported schema version for staged migration: " + installedVersion);
         }
         Path activeStorage = storagePath(activeBase);
         if (!Files.isRegularFile(activeStorage)) throw new IOException("Active database file is missing");
         long[] sourceCounts;
         boolean hasData;
-        try (Connection active = connections.open(activeBase)) {
+        try (Connection active = connections.openExistingReadWrite(activeBase)) {
             sourceCounts = domainCounts(active);
             hasData = sum(sourceCounts) > 0L;
             if (hasData) createAndValidateSafetyBackup(active, sourceCounts);
@@ -85,10 +85,10 @@ final class DatabaseMigrationService {
         fileOps.copy(activeStorage, stageStorage, StandardCopyOption.COPY_ATTRIBUTES);
         journal.put("phase", hasData ? "SAFETY_BACKUP_CONFIRMED" : "STAGING_COPIED");
         writeJournal(journal);
-        try (Connection staging = connections.open(stageBase)) {
+        try (Connection staging = connections.openExistingReadWrite(stageBase)) {
             staging.setAutoCommit(false);
             try {
-                schema.migrateV7ToV8(staging);
+                schema.migrateLegacyToV8(staging);
                 schema.validateRequiredSchema(staging);
                 long[] migratedCounts = domainCounts(staging);
                 if (!java.util.Arrays.equals(sourceCounts, migratedCounts)) throw new IOException("Schema migration row counts changed");
@@ -107,7 +107,7 @@ final class DatabaseMigrationService {
         writeJournal(journal);
         try {
             moveWithoutReplacing(stageStorage, activeStorage);
-            try (Connection installed = connections.open(activeBase)) {
+            try (Connection installed = connections.openExistingReadWrite(activeBase)) {
                 schema.validateRequiredSchema(installed);
                 if (!java.util.Arrays.equals(sourceCounts, domainCounts(installed))) throw new IOException("Post-install row counts changed");
             }
@@ -128,6 +128,40 @@ final class DatabaseMigrationService {
         }
     }
 
+    void migrateRestoreCandidate(Path candidateStorage, int installedVersion) throws Exception {
+        if (installedVersion == DatabaseManager.SCHEMA_VERSION) return;
+        if (!DatabaseSchemaSupportPolicy.requiresMigration(installedVersion)) {
+            throw new DatabaseSchemaManager.SchemaValidationException("Unsupported restore schema version: " + installedVersion);
+        }
+        String name = candidateStorage.getFileName().toString();
+        if (!name.endsWith(".mv.db") || !Files.isRegularFile(candidateStorage)) {
+            throw new IOException("Restore candidate database is missing");
+        }
+        Path base = candidateStorage.resolveSibling(name.substring(0, name.length() - ".mv.db".length()));
+        long[] sourceCounts;
+        try (Connection connection = connections.openExistingReadWrite(base)) {
+            sourceCounts = domainCounts(connection);
+            connection.setAutoCommit(false);
+            try {
+                schema.migrateLegacyToV8(connection);
+                schema.validateRequiredSchema(connection);
+                if (!java.util.Arrays.equals(sourceCounts, domainCounts(connection))) {
+                    throw new IOException("Restore migration row counts changed");
+                }
+                connection.commit();
+            } catch (Exception exception) {
+                connection.rollback();
+                throw exception;
+            }
+        }
+        try (Connection validation = connections.openExistingReadWrite(base)) {
+            schema.validateRequiredSchema(validation);
+            if (!java.util.Arrays.equals(sourceCounts, domainCounts(validation))) {
+                throw new IOException("Migrated restore candidate row counts changed");
+            }
+        }
+    }
+
     private void createAndValidateSafetyBackup(Connection active, long[] sourceCounts) throws Exception {
         Path backup = FileManager.getBackupDirectory().resolve("creditmanager_pre_v8_" + System.currentTimeMillis() + ".zip");
         fileOps.createDirectories(backup.getParent());
@@ -139,7 +173,7 @@ final class DatabaseMigrationService {
             Path database = extractSingleDatabase(backup, validation);
             String name = database.getFileName().toString();
             Path base = database.resolveSibling(name.substring(0, name.length() - ".mv.db".length()));
-            try (Connection restored = connections.open(base)) {
+            try (Connection restored = connections.openExistingReadWrite(base)) {
                 if (!java.util.Arrays.equals(sourceCounts, domainCounts(restored))) {
                     throw new IOException("Pre-migration backup row counts differ");
                 }

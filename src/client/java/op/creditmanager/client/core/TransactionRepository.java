@@ -58,8 +58,8 @@ public final class TransactionRepository {
     public BoundedQueryCache.CacheStats queryCacheStats() { return queryCache.stats(); }
     public synchronized boolean isWritable() { return !recoveryRequired && DatabaseManager.getInstance().isSafeForWrites(); }
 
-    public synchronized void acceptCommittedMutation() {
-        revision = DatabaseManager.getInstance().revision();
+    public synchronized void acceptCommittedMutation(long committedRevision) {
+        revision = committedRevision;
         queryCache.clear();
     }
 

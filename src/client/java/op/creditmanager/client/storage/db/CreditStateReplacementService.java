@@ -46,6 +46,31 @@ final class CreditStateReplacementService {
             for (CreditEntry credit : credits) database.upsertCredit(connection, credit, rowRevision);
             for (Payment payment : payments) database.upsertPayment(connection, payment, rowRevision);
             for (CreditEventEntry event : events) database.upsertEvent(connection, event, rowRevision);
+            database.rebuildEventCounts(connection);
+            database.refreshPaylogLinkAmounts(connection, affectedPaylogs);
+            database.bumpRevision(connection);
+        });
+    }
+
+    boolean replacePreservingEvents(Collection<CreditEntry> credits, Collection<Payment> payments) {
+        if (credits == null || payments == null) return false;
+        return database.inTransaction(connection -> {
+            if (database.hasDomainData(connection) && credits.isEmpty()) {
+                throw new SQLException("Refusing to replace non-empty CreditManager data with an empty state");
+            }
+            if (database.hasOpenHealthErrors(connection)) {
+                throw new SQLException("Refusing credit-state replacement while unresolved data-health errors exist");
+            }
+            database.validateState(connection, credits, payments, List.of());
+            Set<UUID> affectedPaylogs = linkedPaylogIds(connection);
+            for (Payment payment : payments) {
+                if (payment.getPaylogId() != null) affectedPaylogs.add(payment.getPaylogId());
+            }
+            deleteStaleRows(connection, "payments", ids(payments, Payment::getId));
+            deleteStaleRows(connection, "credits", ids(credits, CreditEntry::getId));
+            long rowRevision = database.nextRevision(connection);
+            for (CreditEntry credit : credits) database.upsertCredit(connection, credit, rowRevision);
+            for (Payment payment : payments) database.upsertPayment(connection, payment, rowRevision);
             database.refreshPaylogLinkAmounts(connection, affectedPaylogs);
             database.bumpRevision(connection);
         });

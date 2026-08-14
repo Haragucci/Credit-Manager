@@ -37,7 +37,7 @@ public class ModernCreditListScreen extends ModernBaseScreen {
     private String filteredCacheKey = "";
     private List<CreditEntry> filteredCache = List.of();
 
-    private static final String[] FILTERS = {"Aktiv", "Offen", "Teilweise"};
+    private static final CreditStatusFilter[] FILTERS = CreditStatusFilter.values();
 
     public ModernCreditListScreen(CreditManager manager, boolean debts, Screen parent) {
         super(manager, parent, debts ? "Schulden" : "Forderungen", debts ? "debts" : "claims");
@@ -66,7 +66,7 @@ public class ModernCreditListScreen extends ModernBaseScreen {
         ModernUi.card(context, contentX, toolbarY, contentWidth, 34,
                 ModernUi.contains(mouseX, mouseY, contentX, toolbarY, contentWidth, 34));
         ModernUi.button(context, textRenderer, contentX, toolbarY + 39, filterWidth, 24,
-                FILTERS[statusIndex], ModernUi.theme().buttonNeutral,
+                FILTERS[statusIndex].label(), ModernUi.theme().buttonNeutral,
                 ModernUi.contains(mouseX, mouseY, contentX, toolbarY + 39, filterWidth, 24));
         ModernUi.button(context, textRenderer, newButtonX, toolbarY + 39, newButtonWidth, 24, "+ Neu",
                 debts ? ModernUi.theme().buttonDanger : ModernUi.theme().buttonPrimary,
@@ -142,7 +142,7 @@ public class ModernCreditListScreen extends ModernBaseScreen {
         if (key.equals(filteredCacheKey)) return filteredCache;
         List<CreditEntry> source = debts ? manager.getAllCreditsAsDebtor(player) : manager.getAllCreditsAsCreditor(player);
         filteredCache = source.stream()
-                .filter(entry -> statusMatches(entry.getStatus()))
+                .filter(entry -> FILTERS[statusIndex].matches(entry))
                 .filter(entry -> query.isEmpty()
                         || score(entry, query) > 0)
                 .sorted(Comparator.<CreditEntry>comparingInt(entry -> score(entry, query)).reversed()
@@ -150,14 +150,6 @@ public class ModernCreditListScreen extends ModernBaseScreen {
                 .toList();
         filteredCacheKey = key;
         return filteredCache;
-    }
-
-    private boolean statusMatches(String status) {
-        return switch (statusIndex) {
-            case 1 -> CreditManager.STATUS_OPEN.equals(status);
-            case 2 -> CreditManager.STATUS_PARTIAL.equals(status);
-            default -> CreditManager.STATUS_OPEN.equals(status) || CreditManager.STATUS_PARTIAL.equals(status);
-        };
     }
 
     private int score(CreditEntry entry, String query) {

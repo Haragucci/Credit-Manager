@@ -213,7 +213,7 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
         context.fill(x + 8, y + 7, x + 11, y + 28, color);
         String otherPlayer = outgoing ? entry.getToPlayer() : entry.getFromPlayer();
         ModernUi.drawTruncated(context, textRenderer, (outgoing ? "An " : "Von ") + safe(otherPlayer), x + 19, y + 7, Math.max(1, width - 164), ModernUi.theme().text);
-        String linkState = entry.isFullyLinked() ? "Verknüpft" : entry.getLinkedAmount() > 0
+        String linkState = entry.isFullyLinked() ? "Verknüpft" : entry.getLinkedAmountMinor() > 0L
                 ? "Rest: " + FormatUtil.formatAmountMinor(entry.getRemainingAmountMinor()) : "Klick: verknüpfen";
         ModernUi.drawTruncated(context, textRenderer, TimeUtil.formatDateTime(entry.getTimestamp()) + " · " + linkState,
                 x + 19, y + 20, Math.max(1, width - 164), ModernUi.theme().muted);

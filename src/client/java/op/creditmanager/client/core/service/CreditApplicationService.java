@@ -24,12 +24,25 @@ public final class CreditApplicationService {
         operations.validateAmountMinor(amountMinor);
         operations.validateDealInput(label, note, dueDate);
         String dealName = CreditEntry.buildDealName(debtor, creditor, label);
-        boolean exists = repository.getAllCredits().stream().anyMatch(entry -> dealName.equalsIgnoreCase(entry.getDealName())
-                && !CreditManagerCore.STATUS_CANCELLED.equals(entry.getStatus()));
-        if (exists) throw new CreditException("Ein aktiver Deal mit diesem Namen existiert bereits.");
+        CreditEntry conflict = duplicateConflict(dealName, null);
+        if (conflict != null) throw new CreditException(duplicateMessage(conflict));
         CreditEntry entry = new CreditEntry(UUID.randomUUID(), dealName, operations.lower(creditor), operations.lower(debtor), amountMinor, dueDate, note);
-        operations.commitMutation(entry, List.of(), List.of(), List.of(operations.event(CreditEventType.CREDIT_CREATED, entry,
-                entry.getAmountMinor(), entry.getAmountMinor(), entry.getNote(), creditor, "CREATE", false)), null);
+        operations.commitMutation(
+                entry,
+                List.of(),
+                List.of(),
+                List.of(operations.event(
+                        CreditEventType.CREDIT_CREATED,
+                        entry,
+                        entry.getAmountMinor(),
+                        entry.getAmountMinor(),
+                        entry.getNote(),
+                        creditor,
+                        "CREATE",
+                        false
+                )),
+                entry
+        );
         return entry;
     }
 
@@ -83,9 +96,8 @@ public final class CreditApplicationService {
         boolean counterpartyChanged = !operations.lower(creditor).equals(entry.getCreditor()) || !operations.lower(debtor).equals(entry.getDebtor());
         if (counterpartyChanged && !entry.getPayments().isEmpty()) throw new CreditException("Die Gegenpartei kann nach vorhandenen Zahlungen nicht geändert werden.");
         String name = CreditEntry.buildDealName(debtor, creditor, label);
-        boolean exists = repository.getAllCredits().stream().anyMatch(other -> !other.getId().equals(dealId)
-                && name.equalsIgnoreCase(other.getDealName()) && !CreditManagerCore.STATUS_CANCELLED.equals(other.getStatus()));
-        if (exists) throw new CreditException("Ein aktiver Deal mit diesem Namen existiert bereits.");
+        CreditEntry conflict = duplicateConflict(name, dealId);
+        if (conflict != null) throw new CreditException(duplicateMessage(conflict));
         CreditEntry draft = operations.copyCredit(entry);
         long previousAmount = draft.getAmountMinor();
         draft.setCreditor(operations.lower(creditor));
@@ -98,5 +110,32 @@ public final class CreditApplicationService {
         operations.commitMutation(draft, List.of(), List.of(), List.of(operations.event(CreditEventType.CREDIT_UPDATED, draft, amountMinor, previousAmount,
                 "Deal bearbeitet", null, "EDIT", false)), entry);
         return entry;
+    }
+
+    private CreditEntry duplicateConflict(String dealName, UUID excludedId) {
+        return repository.getAllCredits().stream()
+                .filter(entry -> excludedId == null || !excludedId.equals(entry.getId()))
+                .filter(entry -> dealName.equalsIgnoreCase(entry.getDealName()))
+                .min(java.util.Comparator.comparingInt(CreditApplicationService::conflictPriority))
+                .orElse(null);
+    }
+
+    static String duplicateMessage(CreditEntry conflict) {
+        if (conflict == null) return "Ein Deal mit diesem Namen existiert bereits.";
+        if (CreditManagerCore.STATUS_PAID.equals(conflict.getStatus())) return "Ein bereits bezahlter Deal mit diesem Namen existiert.";
+        if (CreditManagerCore.STATUS_CLOSED.equals(conflict.getStatus())) return "Ein bereits abgeschlossener Deal mit diesem Namen existiert.";
+        if (CreditManagerCore.STATUS_CANCELLED.equals(conflict.getStatus())) return "Ein stornierter Deal mit diesem Namen existiert bereits.";
+        if (conflict.isArchived()) return "Ein archivierter Deal mit diesem Namen existiert bereits.";
+        return "Ein aktiver Deal mit diesem Namen existiert bereits.";
+    }
+
+    private static int conflictPriority(CreditEntry entry) {
+        if (entry == null) return Integer.MAX_VALUE;
+        if (!entry.isArchived() && (CreditManagerCore.STATUS_OPEN.equals(entry.getStatus())
+                || CreditManagerCore.STATUS_PARTIAL.equals(entry.getStatus()))) return 0;
+        if (CreditManagerCore.STATUS_PAID.equals(entry.getStatus())) return 1;
+        if (CreditManagerCore.STATUS_CLOSED.equals(entry.getStatus())) return 2;
+        if (CreditManagerCore.STATUS_CANCELLED.equals(entry.getStatus())) return 3;
+        return 4;
     }
 }

@@ -19,8 +19,8 @@ public interface CreditOperations {
     void validateDealInput(String label, String note, Long dueDate) throws CreditException;
     void validatePaymentSource(String fromPlayer, CreditEntry entry) throws CreditException;
     CreditEntry copyCredit(CreditEntry source);
-    void commitMutation(CreditEntry draft, List<Payment> paymentUpserts, List<UUID> paymentDeletions,
-                        List<CreditEventEntry> events, CreditEntry published) throws CreditException;
+    MutationCommitResult commitMutation(CreditEntry draft, List<Payment> paymentUpserts, List<UUID> paymentDeletions,
+                                        List<CreditEventEntry> events, CreditEntry published) throws CreditException;
     List<CreditEventEntry> paymentEvents(CreditEntry entry, Payment payment, long remainingBeforeMinor);
     TransactionEntry getPaylog(UUID paylogId) throws CreditException;
     List<CreditEntry> matchingActiveDeals(TransactionEntry paylog);

@@ -501,7 +501,6 @@ class DatabaseSafetyTest {
         useTemporaryDataDirectory();
         CreditRepository repository = new CreditRepository();
         repository.load();
-        CreditEventRepository.getInstance().bind(repository);
         CreditEventRepository.getInstance().load();
         TransactionRepository.getInstance().load();
         return new CreditManager(repository);

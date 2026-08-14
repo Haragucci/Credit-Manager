@@ -323,7 +323,7 @@ public final class ModernEditCreditScreen extends ModernBaseScreen {
             String own = currentPlayerName();
             entry = manager.updateCreditMinor(entry.getId(), debts ? other : own, debts ? own : other, validation.amountMinor(), dueDate,
                     blankToNull(labelField.getText()), blankToNull(noteField.getText()));
-            toastSuccess("Deal aktualisiert.");
+            if (!showMutationCommitNotice()) toastSuccess("Deal aktualisiert.");
             closeToParent();
         } catch (CreditManager.CreditException exception) {
             toastError(exception.getMessage());

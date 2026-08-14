@@ -1,5 +1,7 @@
 package op.creditmanager.client.money;
 
+import op.creditmanager.client.model.CreditEntry;
+
 public final class CreditStatusRules {
     private CreditStatusRules() { }
 
@@ -13,5 +15,9 @@ public final class CreditStatusRules {
 
     public static boolean isManualFinal(String status) {
         return "CLOSED".equals(status) || "CANCELLED".equals(status);
+    }
+
+    public static boolean isActive(CreditEntry entry) {
+        return entry != null && !entry.isArchived() && ("OPEN".equals(entry.getStatus()) || "PARTIAL".equals(entry.getStatus()));
     }
 }

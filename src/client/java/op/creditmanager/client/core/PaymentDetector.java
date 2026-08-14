@@ -7,6 +7,7 @@ import op.creditmanager.client.CreditManagerClient;
 import op.creditmanager.client.config.ClientConfigManager;
 import op.creditmanager.client.config.PaylogAutoLinkMode;
 import op.creditmanager.client.core.service.PaylogDetectionOutcome;
+import op.creditmanager.client.core.service.MutationCommitResult;
 import op.creditmanager.client.gui.modern.toast.ModernToastManager;
 import op.creditmanager.client.model.CreditEntry;
 import op.creditmanager.client.model.TransactionEntry;
@@ -21,7 +22,7 @@ import java.util.UUID;
 import java.util.function.BooleanSupplier;
 
 @Environment(EnvType.CLIENT)
-public class PaymentDetector {
+public class PaymentDetector implements PaymentMessageRouter.Handler {
     private final PaymentMessageParser parser;
     private final PaymentDetectionDeduplicator deduplicator;
     private final CreditManager creditManager;
@@ -61,7 +62,7 @@ public class PaymentDetector {
         if (client.player == null) return;
         parser.parse(message, client.player.getName().getString()).ifPresent(payment ->
                 recordTransaction(new PaymentDetectionEvent(payment, channel, connectionId, serverId,
-                        receptionTimestamp, stableEventId)));
+                        receptionTimestamp, stableEventId, client.world == null ? -1L : client.world.getTime())));
     }
 
     public void rotateConnectionContext(String serverIdentity) {
@@ -114,6 +115,7 @@ public class PaymentDetector {
             try {
                 linkResult = creditManager.autoLinkDetectedPaylog(entry.getId(), mode,
                         ClientConfigManager.isCompleteDealOnPaylogOverpay());
+                reportMutationStatus(creditManager.consumeLastMutationCommit());
             } catch (CreditManager.CreditException exception) {
                 ModernToastManager.getInstance().showWarning("Paylog erkannt, automatische Buchung nicht möglich: " + exception.getMessage());
                 return;
@@ -161,6 +163,12 @@ public class PaymentDetector {
         }
         return "Passender Deal gefunden: " + match.getDealName() + " · "
                 + FormatUtil.formatAmountMinor(match.getRemainingAmountMinor()) + " offen";
+    }
+
+    private void reportMutationStatus(MutationCommitResult result) {
+        if (result == null || result.status() == MutationCommitResult.Status.COMMITTED_SYNCED
+                || result.status() == MutationCommitResult.Status.NOT_COMMITTED) return;
+        ModernToastManager.getInstance().showWarning(result.userMessage());
     }
 
     @FunctionalInterface

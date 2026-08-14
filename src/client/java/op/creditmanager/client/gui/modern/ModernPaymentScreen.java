@@ -66,6 +66,7 @@ public class ModernPaymentScreen extends ModernBaseScreen {
     private List<ModernLayout.Bounds> itemActionBounds = List.of();
     private List<ModernLayout.Bounds> modeTabBounds = List.of();
     private List<ModernLayout.Bounds> moneyActionBounds = List.of();
+    private final MutationSubmissionGuard submissionGuard = new MutationSubmissionGuard();
 
     public ModernPaymentScreen(CreditManager manager, CreditEntry entry, boolean debts, Screen parent) {
         super(manager, parent, debts ? "Zahlung leisten" : "Zahlung empfangen", debts ? "debts" : "claims");
@@ -301,7 +302,9 @@ public class ModernPaymentScreen extends ModernBaseScreen {
     }
 
     private void savePayment() {
+        if (!submissionGuard.tryBegin()) return;
         if (currentPlayerName().isBlank()) {
+            submissionGuard.reset();
             toastError("Du musst mit einem Spieler verbunden sein.");
             return;
         }
@@ -309,6 +312,7 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         try {
             amountMinor = FormatUtil.parseMoneyMinor(amountField.getText());
         } catch (IllegalArgumentException exception) {
+            submissionGuard.reset();
             toastError("Bitte einen gültigen positiven Betrag eingeben.");
             return;
         }
@@ -321,16 +325,19 @@ public class ModernPaymentScreen extends ModernBaseScreen {
             } else {
                 saved = manager.addMoneyPaymentMinor(entry.getId(), amountMinor);
             }
-            if (saved.getAmountMinor() < amountMinor) {
+            boolean commitNoticeShown = showMutationCommitNotice();
+            if (!commitNoticeShown && saved.getAmountMinor() < amountMinor) {
                 toastWarning("Es wurden nur " + FormatUtil.formatAmountMinor(saved.getAmountMinor())
                         + " gebucht, da der Deal damit vollständig bezahlt ist.");
-            } else {
+            } else if (!commitNoticeShown) {
                 toastSuccess(itemMode ? "Item-Zahlung gespeichert." : "Zahlung gespeichert.");
             }
             closeToParent();
         } catch (CreditManager.CreditException exception) {
+            submissionGuard.reset();
             toastError(exception.getMessage());
         } catch (IllegalArgumentException exception) {
+            submissionGuard.reset();
             toastError(exception.getMessage());
         }
     }
@@ -427,6 +434,7 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         itemActionBounds = List.of();
         modeTabBounds = List.of();
         moneyActionBounds = List.of();
+        submissionGuard.reset();
         formScroll.reset();
         selectedInventorySlots.clear();
         super.clearTransientState();

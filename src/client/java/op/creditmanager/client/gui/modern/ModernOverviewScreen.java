@@ -8,11 +8,10 @@ import net.minecraft.text.Text;
 import op.creditmanager.client.core.CreditManager;
 import op.creditmanager.client.gui.modern.theme.ModernThemePalette;
 import op.creditmanager.client.gui.modern.widget.ModernScrollArea;
-import op.creditmanager.client.model.CreditEntry;
 import op.creditmanager.client.util.BalanceReader;
 import op.creditmanager.client.util.FormatUtil;
 
-import java.util.List;
+import java.math.BigInteger;
 import java.util.OptionalLong;
 
 public class ModernOverviewScreen extends ModernBaseScreen {
@@ -21,6 +20,7 @@ public class ModernOverviewScreen extends ModernBaseScreen {
     private int statisticsY;
     private int safeContentWidth;
     private final ModernScrollArea contentScroll = new ModernScrollArea();
+    private final OpenDealSummaryCache summaryCache = new OpenDealSummaryCache();
 
     public ModernOverviewScreen(CreditManager manager, Screen parent) {
         super(manager, parent, "Detaillierte Übersicht", "overview");
@@ -30,11 +30,10 @@ public class ModernOverviewScreen extends ModernBaseScreen {
     public void render(DrawContext context, int mouseX, int mouseY, float delta) {
         renderShell(context, mouseX, mouseY);
         ModernThemePalette theme = ModernUi.theme();
-        List<CreditEntry> claims = manager.getOpenCreditsAsCreditor(currentPlayerName());
-        List<CreditEntry> debts = manager.getOpenCreditsAsDebtor(currentPlayerName());
-        long claimTotalMinor = sumRemainingMinor(claims);
-        long debtTotalMinor = sumRemainingMinor(debts);
-        long netMinor = Math.subtractExact(claimTotalMinor, debtTotalMinor);
+        OpenDealSummaryCache.OpenDealSummary summary = summaryCache.get(manager, currentPlayerName());
+        BigInteger claimTotalMinor = summary.claimTotalMinor();
+        BigInteger debtTotalMinor = summary.debtTotalMinor();
+        BigInteger netMinor = summary.netMinor();
         OptionalLong currentBalance = BalanceReader.readCurrentBalanceMinor(MinecraftClient.getInstance());
 
         int rowHeight = contentHeight < 260 ? 42 : 49;
@@ -47,15 +46,15 @@ public class ModernOverviewScreen extends ModernBaseScreen {
         context.enableScissor(contentX, viewportY, contentX + contentWidth, viewportY + viewportHeight);
         debtsY = claimsY + rowHeight + 6;
         drawMetric(context, mouseX, mouseY, claimsY, "Forderungen", FormatUtil.formatAmountMinor(claimTotalMinor),
-                claims.size() + " offene Deals · Liste öffnen", theme.success);
+                summary.claims().size() + " offene Deals · Liste öffnen", theme.success);
         drawMetric(context, mouseX, mouseY, debtsY, "Schulden", FormatUtil.formatAmountMinor(debtTotalMinor),
-                debts.size() + " offene Deals · Liste öffnen", theme.danger);
+                summary.debts().size() + " offene Deals · Liste öffnen", theme.danger);
 
         int columns = safeContentWidth >= 360 ? 2 : 1;
         int belowY = debtsY + rowHeight + 10;
         int metricWidth = columns == 2 ? (safeContentWidth - 8) / 2 : safeContentWidth;
-        drawSmallMetric(context, contentX, belowY, metricWidth, "Saldo", (netMinor >= 0 ? "+" : "") + FormatUtil.formatAmountMinor(netMinor),
-                netMinor >= 0 ? theme.success : theme.danger);
+        drawSmallMetric(context, contentX, belowY, metricWidth, "Saldo", (netMinor.signum() >= 0 ? "+" : "") + FormatUtil.formatAmountMinor(netMinor),
+                netMinor.signum() >= 0 ? theme.success : theme.danger);
         int accountX = columns == 2 ? contentX + metricWidth + 8 : contentX;
         int accountY = columns == 2 ? belowY : belowY + 42;
         drawSmallMetric(context, accountX, accountY, metricWidth,
@@ -63,11 +62,11 @@ public class ModernOverviewScreen extends ModernBaseScreen {
                         ? FormatUtil.formatAmountMinor(currentBalance.getAsLong()) : "aktuell nicht erkennbar",
                 currentBalance.isPresent() ? theme.accent : theme.muted);
         int forecastY = columns == 2 ? belowY + 42 : accountY + 42;
-        long forecastMinor = currentBalance.isPresent() ? Math.addExact(currentBalance.getAsLong(), netMinor) : 0L;
+        BigInteger forecastMinor = currentBalance.isPresent() ? BigInteger.valueOf(currentBalance.getAsLong()).add(netMinor) : BigInteger.ZERO;
         String forecast = currentBalance.isPresent() ? FormatUtil.formatAmountMinor(forecastMinor)
                 : "Kontostand wird benötigt";
         drawSmallMetric(context, contentX, forecastY, safeContentWidth, "Nach kompletter Verrechnung", forecast,
-                currentBalance.isPresent() && forecastMinor < 0 ? theme.danger : theme.success);
+                currentBalance.isPresent() && forecastMinor.signum() < 0 ? theme.danger : theme.success);
 
         statisticsY = forecastY + 50;
         ModernUi.button(context, textRenderer, contentX, statisticsY, Math.min(180, safeContentWidth), 23, "Statistiken", theme.buttonPrimary,
@@ -75,12 +74,6 @@ public class ModernOverviewScreen extends ModernBaseScreen {
         context.disableScissor();
         contentScroll.renderScrollbar(context, mouseX, mouseY);
         super.render(context, mouseX, mouseY, delta);
-    }
-
-    private long sumRemainingMinor(List<CreditEntry> entries) {
-        long sum = 0L;
-        for (CreditEntry entry : entries) sum = Math.addExact(sum, entry.getRemainingAmountMinor());
-        return sum;
     }
 
     private void drawMetric(DrawContext context, int mouseX, int mouseY, int y, String label, String value, String detail, int accent) {

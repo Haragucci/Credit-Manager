@@ -34,7 +34,7 @@ public final class DatabaseSchemaManager {
     private static final Gson GSON = new Gson();
     private static final List<String> CORE_TABLES = List.of("credits", "payments", "credit_events", "paylogs");
     private static final List<String> REQUIRED_TABLES = List.of("metadata", "schema_migrations", "credits", "payments",
-            "credit_events", "paylogs", "paylog_search_tokens", "deal_search_tokens", "data_health_records",
+            "credit_events", "credit_event_counts", "paylogs", "paylog_search_tokens", "deal_search_tokens", "data_health_records",
             "migration_log", "legacy_records");
     private static final Map<String, List<ExpectedColumn>> REQUIRED_COLUMNS = expectedColumns();
     private static final List<ExpectedIndex> REQUIRED_INDEXES = List.of(
@@ -46,7 +46,9 @@ public final class DatabaseSchemaManager {
             new ExpectedIndex("payments", "idx_payments_paylog", false, List.of("paylog_id")),
             new ExpectedIndex("payments", "idx_payments_created", false, List.of("created_at")),
             new ExpectedIndex("credit_events", "idx_events_credit", false, List.of("credit_id")),
+            new ExpectedIndex("credit_events", "idx_events_credit_created", false, List.of("credit_id", "created_at", "id")),
             new ExpectedIndex("credit_events", "idx_events_created", false, List.of("created_at")),
+            new ExpectedIndex("credit_events", "idx_events_created_id", false, List.of("created_at", "id")),
             new ExpectedIndex("paylogs", "idx_paylogs_hash", true, List.of("entry_hash")),
             new ExpectedIndex("paylogs", "idx_paylogs_created", false, List.of("created_at")),
             new ExpectedIndex("paylogs", "idx_paylogs_parties", false, List.of("payer", "receiver")),
@@ -123,16 +125,23 @@ public final class DatabaseSchemaManager {
         if (metadata.read(connection, "data_revision") == null) metadata.write(connection, "data_revision", "0");
     }
 
+    public void ensureAdditiveSchemaObjects(Connection connection) throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            createEventCountTable(statement);
+            createIndexes(statement);
+        }
+    }
+
     public void applyMigration(Connection connection, int version) throws SQLException {
         if (version == DatabaseManager.SCHEMA_VERSION) {
-            migrateV7ToV8(connection);
+            migrateLegacyToV8(connection);
             return;
         }
         if (version < DatabaseManager.SCHEMA_VERSION) return;
         throw new SQLException("Unknown CreditManager schema migration " + version);
     }
 
-    public void migrateV7ToV8(Connection connection) throws SQLException {
+    public void migrateLegacyToV8(Connection connection) throws SQLException {
         for (String table : CORE_TABLES) {
             if (!tableExists(connection, table)) throw new SchemaValidationException("Cannot migrate database missing core table: " + table);
         }
@@ -154,6 +163,8 @@ public final class DatabaseSchemaManager {
     }
 
     public void backfill(Connection connection) throws SQLException {
+        ensureAdditiveSchemaObjects(connection);
+        rebuildEventCounts(connection);
         backfillCreditSearchText(connection);
         backfillPaylogSearchText(connection);
         paylogTokens.backfill(connection);
@@ -178,18 +189,18 @@ public final class DatabaseSchemaManager {
         validatePrimaryKey(connection, "credits", List.of("id"));
         validatePrimaryKey(connection, "payments", List.of("id"));
         validatePrimaryKey(connection, "credit_events", List.of("id"));
+        validatePrimaryKey(connection, "credit_event_counts", List.of("credit_id"));
         validatePrimaryKey(connection, "paylogs", List.of("id"));
         validatePrimaryKey(connection, "paylog_search_tokens", List.of("paylog_id", "token"));
         validatePrimaryKey(connection, "deal_search_tokens", List.of("credit_id", "token"));
         validateForeignKey(connection, "payments", "credit_id", "credits", "id", DatabaseMetaData.importedKeyCascade);
         validateForeignKey(connection, "payments", "paylog_id", "paylogs", "id", DatabaseMetaData.importedKeyNoAction);
         validateForeignKey(connection, "credit_events", "credit_id", "credits", "id", DatabaseMetaData.importedKeyCascade);
+        validateForeignKey(connection, "credit_event_counts", "credit_id", "credits", "id", DatabaseMetaData.importedKeyCascade);
         validateForeignKey(connection, "paylog_search_tokens", "paylog_id", "paylogs", "id", DatabaseMetaData.importedKeyCascade);
         validateForeignKey(connection, "deal_search_tokens", "credit_id", "credits", "id", DatabaseMetaData.importedKeyCascade);
         validateUniqueConstraint(connection, "paylogs", List.of("entry_hash"));
-        validateCheckConstraint(connection, "credits", List.of("amount", "paid_amount"));
-        validateCheckConstraint(connection, "payments", List.of("amount", "payment_kind"));
-        validateCheckConstraint(connection, "paylogs", List.of("amount", "linked_amount", "link_count"));
+        validateCheckConstraintSemantics(connection);
         for (ExpectedIndex index : REQUIRED_INDEXES) validateIndex(connection, index);
         if (installedSchemaVersion(connection) != DatabaseManager.SCHEMA_VERSION) {
             throw new SchemaValidationException("Unexpected schema version");
@@ -223,6 +234,18 @@ public final class DatabaseSchemaManager {
         statement.execute("CREATE TABLE IF NOT EXISTS data_health_records (id VARCHAR(36) PRIMARY KEY, record_type VARCHAR(64) NOT NULL, severity VARCHAR(32) NOT NULL, source_table VARCHAR(64), source_id VARCHAR(128), title VARCHAR(256), message CLOB, raw_payload CLOB, repair_payload CLOB, status VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, resolved_at BIGINT)");
         statement.execute("CREATE TABLE IF NOT EXISTS migration_log (id VARCHAR(36) PRIMARY KEY, migration_type VARCHAR(64) NOT NULL, started_at BIGINT NOT NULL, completed_at BIGINT, details CLOB, status VARCHAR(32) NOT NULL)");
         statement.execute("CREATE TABLE IF NOT EXISTS legacy_records (id VARCHAR(36) PRIMARY KEY, record_kind VARCHAR(64) NOT NULL, original_id VARCHAR(256), raw_payload CLOB NOT NULL, reason CLOB, created_at BIGINT NOT NULL, migration_id VARCHAR(36) NOT NULL)");
+        createEventCountTable(statement);
+    }
+
+    private void createEventCountTable(Statement statement) throws SQLException {
+        statement.execute("CREATE TABLE IF NOT EXISTS credit_event_counts (credit_id VARCHAR(36) PRIMARY KEY, event_count BIGINT NOT NULL, CONSTRAINT ck_credit_event_counts_value CHECK (event_count>=0), CONSTRAINT fk_credit_event_counts_credit FOREIGN KEY (credit_id) REFERENCES credits(id) ON DELETE CASCADE)");
+    }
+
+    public void rebuildEventCounts(Connection connection) throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("DELETE FROM credit_event_counts");
+            statement.executeUpdate("INSERT INTO credit_event_counts (credit_id,event_count) SELECT credit_id,COUNT(*) FROM credit_events GROUP BY credit_id");
+        }
     }
 
     private void createIndexes(Statement statement) throws SQLException {
@@ -234,7 +257,9 @@ public final class DatabaseSchemaManager {
         statement.execute("CREATE INDEX IF NOT EXISTS idx_payments_paylog ON payments(paylog_id)");
         statement.execute("CREATE INDEX IF NOT EXISTS idx_payments_created ON payments(created_at)");
         statement.execute("CREATE INDEX IF NOT EXISTS idx_events_credit ON credit_events(credit_id)");
+        statement.execute("CREATE INDEX IF NOT EXISTS idx_events_credit_created ON credit_events(credit_id, created_at DESC, id DESC)");
         statement.execute("CREATE INDEX IF NOT EXISTS idx_events_created ON credit_events(created_at)");
+        statement.execute("CREATE INDEX IF NOT EXISTS idx_events_created_id ON credit_events(created_at DESC, id DESC)");
         statement.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_paylogs_hash ON paylogs(entry_hash)");
         statement.execute("CREATE INDEX IF NOT EXISTS idx_paylogs_created ON paylogs(created_at)");
         statement.execute("CREATE INDEX IF NOT EXISTS idx_paylogs_parties ON paylogs(payer, receiver)");
@@ -393,6 +418,7 @@ public final class DatabaseSchemaManager {
         try (Statement statement = connection.createStatement()) {
             statement.execute("DROP TABLE IF EXISTS paylog_search_tokens");
             statement.execute("DROP TABLE IF EXISTS deal_search_tokens");
+            statement.execute("DROP TABLE IF EXISTS credit_event_counts");
             statement.execute("DROP TABLE credit_events");
             statement.execute("DROP TABLE payments");
             statement.execute("DROP TABLE credits");
@@ -536,18 +562,35 @@ public final class DatabaseSchemaManager {
         if (constraints.values().stream().noneMatch(expectedColumns::equals)) throw new SchemaValidationException("Missing unique constraint for " + table + expectedColumns);
     }
 
-    private void validateCheckConstraint(Connection connection, String table, List<String> requiredTerms) throws SQLException {
-        String sql = "SELECT cc.check_clause FROM information_schema.table_constraints tc JOIN information_schema.check_constraints cc ON cc.constraint_catalog=tc.constraint_catalog AND cc.constraint_schema=tc.constraint_schema AND cc.constraint_name=tc.constraint_name WHERE LOWER(tc.table_name)=? AND tc.constraint_type='CHECK'";
-        List<String> clauses = new ArrayList<>();
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setString(1, table.toLowerCase(Locale.ROOT));
-            try (ResultSet result = statement.executeQuery()) {
-                while (result.next()) clauses.add(safe(result.getString(1)).toLowerCase(Locale.ROOT));
-            }
+    private void validateCheckConstraintSemantics(Connection connection) throws SQLException {
+        boolean originalAutoCommit = connection.getAutoCommit();
+        if (originalAutoCommit) connection.setAutoCommit(false);
+        java.sql.Savepoint savepoint = connection.setSavepoint();
+        String creditId = java.util.UUID.randomUUID().toString();
+        String paylogId = java.util.UUID.randomUUID().toString();
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("INSERT INTO credits (id,deal_name,creditor,debtor,amount,paid_amount,created_at,status,archived,revision) VALUES ('" + creditId + "','schema-probe','probe-creditor','probe-debtor',100,0,1,'OPEN',FALSE,0)");
+            statement.executeUpdate("INSERT INTO paylogs (id,payer,receiver,amount,normalized_text,created_at,entry_hash,revision,linked_amount,link_count) VALUES ('" + paylogId + "','probe-payer','probe-receiver',100,'schema probe',1,'" + paylogId + "',0,0,0)");
+            assertRejected(statement, "INSERT INTO credits (id,deal_name,creditor,debtor,amount,paid_amount,created_at,status,archived,revision) VALUES ('" + java.util.UUID.randomUUID() + "','invalid','a','b',0,0,1,'OPEN',FALSE,0)", "credits.amount");
+            assertRejected(statement, "INSERT INTO credits (id,deal_name,creditor,debtor,amount,paid_amount,created_at,status,archived,revision) VALUES ('" + java.util.UUID.randomUUID() + "','invalid','a','b',100,101,1,'PARTIAL',FALSE,0)", "credits.paid_amount");
+            assertRejected(statement, "INSERT INTO payments (id,credit_id,amount,payment_kind,created_at,revision) VALUES ('" + java.util.UUID.randomUUID() + "','" + creditId + "',0,'MONEY',1,0)", "payments.amount");
+            assertRejected(statement, "INSERT INTO payments (id,credit_id,amount,payment_kind,created_at,revision) VALUES ('" + java.util.UUID.randomUUID() + "','" + creditId + "',1,'INVALID',1,0)", "payments.payment_kind");
+            assertRejected(statement, "INSERT INTO paylogs (id,payer,receiver,amount,normalized_text,created_at,entry_hash,revision,linked_amount,link_count) VALUES ('" + java.util.UUID.randomUUID() + "','a','b',0,'invalid',1,'" + java.util.UUID.randomUUID() + "',0,0,0)", "paylogs.amount");
+            assertRejected(statement, "UPDATE paylogs SET linked_amount=101 WHERE id='" + paylogId + "'", "paylogs.linked_amount");
+            assertRejected(statement, "UPDATE paylogs SET link_count=-1 WHERE id='" + paylogId + "'", "paylogs.link_count");
+        } finally {
+            connection.rollback(savepoint);
+            if (originalAutoCommit) connection.setAutoCommit(true);
         }
-        for (String term : requiredTerms) {
-            if (clauses.stream().noneMatch(clause -> clause.contains(term.toLowerCase(Locale.ROOT)))) throw new SchemaValidationException("Missing check constraint for " + table + '.' + term);
+    }
+
+    private void assertRejected(Statement statement, String sql, String invariant) throws SQLException {
+        try {
+            statement.executeUpdate(sql);
+        } catch (SQLException expected) {
+            return;
         }
+        throw new SchemaValidationException("Check constraint does not enforce " + invariant);
     }
 
     private boolean tableExists(Connection connection, String table) throws SQLException {
@@ -618,6 +661,7 @@ public final class DatabaseSchemaManager {
         values.put("credits", List.of(new ExpectedColumn("id", Types.VARCHAR, false), new ExpectedColumn("amount", Types.BIGINT, false), new ExpectedColumn("paid_amount", Types.BIGINT, false), new ExpectedColumn("status", Types.VARCHAR, false), new ExpectedColumn("revision", Types.BIGINT, false)));
         values.put("payments", List.of(new ExpectedColumn("id", Types.VARCHAR, false), new ExpectedColumn("credit_id", Types.VARCHAR, false), new ExpectedColumn("amount", Types.BIGINT, false), new ExpectedColumn("payment_kind", Types.VARCHAR, false), new ExpectedColumn("paylog_id", Types.VARCHAR, true), new ExpectedColumn("revision", Types.BIGINT, false)));
         values.put("credit_events", List.of(new ExpectedColumn("id", Types.VARCHAR, false), new ExpectedColumn("credit_id", Types.VARCHAR, false), new ExpectedColumn("amount", Types.BIGINT, false), new ExpectedColumn("paid_after", Types.BIGINT, false), new ExpectedColumn("remaining_after", Types.BIGINT, false), new ExpectedColumn("amount_before", Types.BIGINT, false), new ExpectedColumn("amount_after", Types.BIGINT, false)));
+        values.put("credit_event_counts", List.of(new ExpectedColumn("credit_id", Types.VARCHAR, false), new ExpectedColumn("event_count", Types.BIGINT, false)));
         values.put("paylogs", List.of(new ExpectedColumn("id", Types.VARCHAR, false), new ExpectedColumn("amount", Types.BIGINT, false), new ExpectedColumn("entry_hash", Types.VARCHAR, false), new ExpectedColumn("linked_amount", Types.BIGINT, false), new ExpectedColumn("link_count", Types.INTEGER, false)));
         return Map.copyOf(values);
     }

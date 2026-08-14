@@ -39,7 +39,7 @@ public final class MoneyRules {
         BigDecimal rounded = major.setScale(SCALE, ROUNDING);
         long minor = rounded.movePointRight(SCALE).longValueExact();
         if (positiveRequired && minor <= 0L) throw new IllegalArgumentException("Betrag muss positiv sein");
-        if (Math.abs(minor) > MAX_MINOR) throw new IllegalArgumentException("Betrag liegt außerhalb des erlaubten Bereichs");
+        if (!isValid(minor)) throw new IllegalArgumentException("Betrag liegt außerhalb des erlaubten Bereichs");
         return MoneyAmount.ofMinor(minor);
     }
 

@@ -298,7 +298,7 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
         try {
             manager.archiveCredit(entry.getId());
             pendingDealAction = null;
-            toastSuccess("Deal archiviert.");
+            if (!showMutationCommitNotice()) toastSuccess("Deal archiviert.");
         } catch (CreditManager.CreditException exception) {
             pendingDealAction = null;
             toastError(exception.getMessage());
@@ -314,7 +314,7 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
         try {
             manager.closeCredit(entry.getId());
             pendingDealAction = null;
-            toastSuccess("Deal abgeschlossen.");
+            if (!showMutationCommitNotice()) toastSuccess("Deal abgeschlossen.");
         } catch (CreditManager.CreditException exception) {
             pendingDealAction = null;
             toastError(exception.getMessage());
@@ -324,7 +324,7 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
     private void reactivateDeal() {
         try {
             manager.reactivateCredit(entry.getId());
-            toastSuccess("Deal reaktiviert.");
+            if (!showMutationCommitNotice()) toastSuccess("Deal reaktiviert.");
         } catch (CreditManager.CreditException exception) {
             toastError(exception.getMessage());
         }
@@ -341,7 +341,7 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
             manager.deletePayment(payment.getId());
             paymentDeleteArmed = null;
             paymentDeleteArmedAt = 0L;
-            toastSuccess("Zahlung gelöscht.");
+            if (!showMutationCommitNotice()) toastSuccess("Zahlung gelöscht.");
         } catch (CreditManager.CreditException exception) {
             paymentDeleteArmed = null;
             paymentDeleteArmedAt = 0L;

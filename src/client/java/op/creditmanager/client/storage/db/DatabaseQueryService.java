@@ -32,6 +32,7 @@ final class DatabaseQueryService {
         for (String token : DealSearchText.tokens(query)) appendPaylogSearchToken(where, values, token);
         return database.executeQueryWithSchemaRetry("Paylogs konnten nicht aus der Datenbank geladen werden.", () -> {
             try (Connection connection = database.connection()) {
+                database.beginConsistentRead(connection);
                 long count = database.count(connection, "SELECT COUNT(*) FROM paylogs" + where, values);
                 String sql = "SELECT id, payer, receiver, amount, raw_text, normalized_text, created_at, entry_hash, source, metadata, linked_amount, (SELECT COUNT(paylog_id) FROM payments WHERE 1=0) AS schema_guard FROM paylogs" + where + " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?";
                 try (PreparedStatement statement = connection.prepareStatement(sql)) {
@@ -57,6 +58,7 @@ final class DatabaseQueryService {
         for (String token : DealSearchText.tokens(query)) appendPaylogSearchToken(where, values, token);
         return database.executeQueryWithSchemaRetry("Verfügbare Paylogs konnten nicht aus der Datenbank geladen werden.", () -> {
             try (Connection connection = database.connection()) {
+                database.beginConsistentRead(connection);
                 long count = database.count(connection, "SELECT COUNT(*) FROM paylogs" + where, values);
                 String sql = "SELECT id, payer, receiver, amount, raw_text, normalized_text, created_at, entry_hash, source, metadata, linked_amount, (SELECT COUNT(paylog_id) FROM payments WHERE 1=0) AS schema_guard FROM paylogs" + where + " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?";
                 try (PreparedStatement statement = connection.prepareStatement(sql)) {
@@ -90,6 +92,7 @@ final class DatabaseQueryService {
         String order = historyOrder(sort == null ? DatabaseManager.DealHistorySort.NEWEST : sort);
         return database.executeQueryWithSchemaRetry("Deal-History konnte nicht aus der Datenbank geladen werden.", () -> {
             try (Connection connection = database.connection()) {
+                database.beginConsistentRead(connection);
                 long count = database.count(connection, "SELECT COUNT(*) FROM credits" + where, values);
                 List<CreditEntry> entries = database.readCredits(connection, "SELECT * FROM credits" + where + " ORDER BY " + order + " LIMIT ? OFFSET ?", values, pageSize, Math.max(0, offset));
                 return new DatabaseManager.QueryPage<>(List.copyOf(entries), count, Math.max(0, offset), pageSize);

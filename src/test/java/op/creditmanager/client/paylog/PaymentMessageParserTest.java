@@ -38,4 +38,17 @@ class PaymentMessageParserTest {
         assertTrue(parser.parse("OPSUCHT » Spieler hat dir 1.00.000$ gegeben.", "Ich").isEmpty());
         assertTrue(parser.parse("x".repeat(16_385), "Ich").isEmpty());
     }
+
+    @Test
+    void parsesTheExactObservedOpsuchtFixtures() {
+        DetectedPayment outgoing = parser.parse("OPSUCHT \u00bb Du hast Jerry237 1.000$ gegeben.", "TillJ").orElseThrow();
+        assertEquals("tillj", outgoing.fromPlayer());
+        assertEquals("jerry237", outgoing.toPlayer());
+        assertEquals(100_000L, outgoing.amountMinor());
+
+        DetectedPayment incoming = parser.parse("OPSUCHT \u00bb Jerry237 hat dir 1.000$ gegeben.", "TillJ").orElseThrow();
+        assertEquals("jerry237", incoming.fromPlayer());
+        assertEquals("tillj", incoming.toPlayer());
+        assertEquals(100_000L, incoming.amountMinor());
+    }
 }

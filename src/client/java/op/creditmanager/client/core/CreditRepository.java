@@ -2,6 +2,8 @@ package op.creditmanager.client.core;
 
 import op.creditmanager.client.CreditManagerClient;
 import op.creditmanager.client.money.MoneyRules;
+import op.creditmanager.client.money.MoneyAggregate;
+import op.creditmanager.client.money.CreditStatusRules;
 import op.creditmanager.client.model.CreditEntry;
 import op.creditmanager.client.model.CreditEventEntry;
 import op.creditmanager.client.model.CreditEventType;
@@ -26,7 +28,6 @@ public class CreditRepository {
     private volatile Map<UUID, CreditEntry> credits = new ConcurrentHashMap<>();
     private volatile Map<String, PlayerCreditData> players = new ConcurrentHashMap<>();
     private volatile Map<UUID, Payment> payments = new ConcurrentHashMap<>();
-    private volatile List<CreditEventEntry> events = new ArrayList<>();
     private volatile List<RecoveryRecord> recoveryRecords = new ArrayList<>();
     private List<RecoveryRecord> stagedRecoveryRecords;
     private boolean recoveryRequired;
@@ -37,10 +38,9 @@ public class CreditRepository {
             Map<UUID, CreditEntry> nextCredits = new ConcurrentHashMap<>();
             Map<String, PlayerCreditData> nextPlayers = new ConcurrentHashMap<>();
             Map<UUID, Payment> nextPayments = new ConcurrentHashMap<>();
-            List<CreditEventEntry> nextEvents = new ArrayList<>();
             List<RecoveryRecord> nextRecoveryRecords = new ArrayList<>();
             stagedRecoveryRecords = nextRecoveryRecords;
-            DatabaseManager.DatabaseState state = DatabaseManager.getInstance().loadCreditState();
+            DatabaseManager.DatabaseState state = DatabaseManager.getInstance().loadRuntimeCreditState();
             for (CreditEntry entry : state.credits()) {
                 if (!isValidCredit(entry)) {
                     addRecovery(RecoveryType.CREDIT, entry == null || entry.getId() == null ? "unknown" : entry.getId().toString(), entry, null, null, "Ungültiger Deal in der Datenbank");
@@ -59,13 +59,6 @@ public class CreditRepository {
                 if (payment.getToPlayer() == null || payment.getToPlayer().isBlank()) payment.setToPlayer(credit.getCreditor());
                 nextPayments.put(payment.getId(), payment);
             }
-            for (CreditEventEntry event : state.events()) {
-                if (event == null || event.getId() == null || event.getType() == null || event.getCreditId() == null || !nextCredits.containsKey(event.getCreditId())) {
-                    addRecovery(RecoveryType.EVENT, event == null || event.getId() == null ? "unknown" : event.getId().toString(), null, null, event, "Ungültiges Historien-Ereignis in der Datenbank");
-                    continue;
-                }
-                nextEvents.add(event);
-            }
             reconcilePayments(nextCredits, nextPayments);
             rebuildPlayerIndex(nextPlayers, nextCredits);
             if (!DatabaseManager.getInstance().isSafeForWrites()) {
@@ -75,7 +68,6 @@ public class CreditRepository {
             credits = nextCredits;
             payments = nextPayments;
             players = nextPlayers;
-            events = nextEvents;
             recoveryRecords = nextRecoveryRecords;
             recoveryRequired = !nextRecoveryRecords.isEmpty();
             revision = DatabaseManager.getInstance().revision();
@@ -94,11 +86,19 @@ public class CreditRepository {
 
     public synchronized boolean isWritable() { return !recoveryRequired && DatabaseManager.getInstance().isSafeForWrites(); }
     public synchronized long getRevision() { return revision; }
-    public synchronized boolean hasPrimaryState() { return true; }
+
+    public synchronized CreditStatisticsSnapshot snapshotOpenCredits(String playerName) {
+        String normalized = playerName == null ? "" : playerName.trim().toLowerCase(Locale.ROOT);
+        PlayerCreditData data = players.get(normalized);
+        if (data == null) return new CreditStatisticsSnapshot(normalized, List.of(), List.of(), revision);
+        List<CreditStatisticsSnapshot.OpenCredit> claims = snapshotOpenCredits(data.getCreditsAsCreditor());
+        List<CreditStatisticsSnapshot.OpenCredit> debts = snapshotOpenCredits(data.getCreditsAsDebtor());
+        return new CreditStatisticsSnapshot(normalized, claims, debts, revision);
+    }
 
     public synchronized boolean saveAll() {
         if (recoveryRequired) return false;
-        boolean saved = DatabaseManager.getInstance().replaceCreditState(credits.values(), payments.values(), events);
+        boolean saved = DatabaseManager.getInstance().replaceCreditDataPreservingEvents(credits.values(), payments.values());
         if (saved) { revision = DatabaseManager.getInstance().revision(); FileManager.tidyAfterSuccessfulSave(); }
         return saved;
     }
@@ -110,25 +110,20 @@ public class CreditRepository {
         rebuildPlayerIndex();
     }
     public synchronized void applyCommittedMutation(CreditEntry credit, List<Payment> paymentUpserts, List<UUID> paymentDeletions,
-                                             List<CreditEventEntry> newEvents) {
+                                             List<CreditEventEntry> newEvents, long committedRevision) {
         if (credit == null || credit.getId() == null) return;
         Map<UUID, CreditEntry> nextCredits = new ConcurrentHashMap<>(credits);
         Map<UUID, Payment> nextPayments = new ConcurrentHashMap<>(payments);
         Map<String, PlayerCreditData> nextPlayers = new ConcurrentHashMap<>();
-        List<CreditEventEntry> nextEvents = new ArrayList<>(events);
         nextCredits.put(credit.getId(), credit);
         if (paymentDeletions != null) for (UUID id : paymentDeletions) if (id != null) nextPayments.remove(id);
         if (paymentUpserts != null) for (Payment payment : paymentUpserts) if (payment != null && payment.getId() != null) nextPayments.put(payment.getId(), payment);
-        if (newEvents != null) for (CreditEventEntry event : newEvents) {
-            if (event != null && event.getId() != null && nextEvents.stream().noneMatch(existing -> event.getId().equals(existing.getId()))) nextEvents.add(event);
-        }
         reconcilePayments(nextCredits, nextPayments);
         rebuildPlayerIndex(nextPlayers, nextCredits);
         credits = nextCredits;
         payments = nextPayments;
         players = nextPlayers;
-        events = nextEvents;
-        revision = DatabaseManager.getInstance().revision();
+        revision = committedRevision;
     }
     public synchronized void putPayment(Payment payment) {
         payments.put(payment.getId(), payment);
@@ -136,11 +131,8 @@ public class CreditRepository {
         if (entry != null && entry.getPayments().stream().noneMatch(existing -> payment.getId().equals(existing.getId()))) entry.addPayment(payment);
         revision++;
     }
-    public synchronized void deleteCredit(UUID id) { if (credits.remove(id) != null) { payments.entrySet().removeIf(value -> id.equals(value.getValue().getCreditId())); events.removeIf(event -> id.equals(event.getCreditId())); rebuildPlayerIndex(); revision++; } }
-    public synchronized void deletePayment(UUID paymentId) { Payment payment = payments.remove(paymentId); if (payment != null) { CreditEntry entry = credits.get(payment.getCreditId()); if (entry != null) entry.removePayment(paymentId); events.removeIf(event -> paymentId.toString().equals(event.getSource())); revision++; } }
-
-    public synchronized List<CreditEventEntry> getEvents() { return new ArrayList<>(events); }
-    public synchronized void replaceEvents(List<CreditEventEntry> values) { events = values == null ? new ArrayList<>() : new ArrayList<>(values); revision++; }
+    public synchronized void deleteCredit(UUID id) { if (credits.remove(id) != null) { payments.entrySet().removeIf(value -> id.equals(value.getValue().getCreditId())); rebuildPlayerIndex(); revision++; } }
+    public synchronized void deletePayment(UUID paymentId) { Payment payment = payments.remove(paymentId); if (payment != null) { CreditEntry entry = credits.get(payment.getCreditId()); if (entry != null) entry.removePayment(paymentId); revision++; } }
     public synchronized List<RecoveryRecord> getRecoveryRecords() { return List.copyOf(recoveryRecords); }
 
     public synchronized boolean repairCredit(UUID token, String creditor, String debtor, double amount, long createdAt) {
@@ -227,7 +219,7 @@ public class CreditRepository {
         publishRepair(record);
         return true;
     }
-    public synchronized boolean createRecoveryBackup(UUID token) { return recoveryRecords.stream().anyMatch(value -> value.token().equals(token)) && DatabaseManager.getInstance().createBackup(); }
+    public synchronized boolean createRecoveryBackup(UUID token) { return recoveryRecords.stream().anyMatch(value -> value.token().equals(token)) && DatabaseManager.getInstance().createRecoverySnapshot(); }
 
     public synchronized int repairWithSafeDefaults() {
         if (recoveryRequired && recoveryRecords.isEmpty()) {
@@ -247,8 +239,6 @@ public class CreditRepository {
         }
         return repaired;
     }
-    public synchronized void registerEventRecovery(CreditEventEntry event, String sourceKey, Path sourceFile) { addRecovery(RecoveryType.EVENT, sourceKey, null, null, event, "Ungültiges Historien-Ereignis"); }
-
     private void addRecovery(RecoveryType type, String sourceKey, CreditEntry credit, Payment payment, CreditEventEntry event, String message) {
         RecoveryRecord record = new RecoveryRecord(UUID.randomUUID(), type, sourceKey, credit, payment, event, FileManager.getDatabaseFile(), message);
         if (stagedRecoveryRecords != null) {
@@ -329,7 +319,19 @@ public class CreditRepository {
             creditPayments.sort(Comparator.comparingLong(Payment::getTimestamp));
         }
         for (CreditEntry entry : targetCredits.values()) {
-            entry.replacePayments(paymentsByCredit.getOrDefault(entry.getId(), List.of()));
+            List<Payment> values = paymentsByCredit.getOrDefault(entry.getId(), List.of());
+            java.math.BigInteger total = MoneyAggregate.sum(values, Payment::getAmountMinor);
+            boolean valid = values.stream().allMatch(payment -> MoneyRules.isPositive(payment.getAmountMinor()))
+                    && total.signum() >= 0 && total.compareTo(java.math.BigInteger.valueOf(Long.MAX_VALUE)) <= 0
+                    && total.compareTo(java.math.BigInteger.valueOf(entry.getAmountMinor())) <= 0
+                    && total.equals(java.math.BigInteger.valueOf(entry.getPaidAmountMinor()));
+            if (valid) {
+                entry.replacePayments(values);
+            } else {
+                entry.setPayments(values);
+                addRecovery(RecoveryType.CREDIT, entry.getId().toString(), entry, null, null,
+                        "Zahlungssumme ist außerhalb des sicheren Bereichs; Rohdaten wurden nicht normalisiert.");
+            }
         }
     }
     private void rebuildPlayerIndex() { rebuildPlayerIndex(players, credits); }
@@ -342,6 +344,17 @@ public class CreditRepository {
     }
     private boolean isValidCredit(CreditEntry entry) { return entry != null && entry.getId() != null && entry.getCreditor() != null && !entry.getCreditor().isBlank() && entry.getDebtor() != null && !entry.getDebtor().isBlank() && !entry.getCreditor().equalsIgnoreCase(entry.getDebtor()) && MoneyRules.isPositive(entry.getAmountMinor()); }
     private boolean isValidPayment(Payment payment) { return payment != null && payment.getId() != null && payment.getCreditId() != null && MoneyRules.isPositive(payment.getAmountMinor()); }
+
+    private List<CreditStatisticsSnapshot.OpenCredit> snapshotOpenCredits(List<UUID> ids) {
+        List<CreditStatisticsSnapshot.OpenCredit> result = new ArrayList<>(ids.size());
+        for (UUID id : ids) {
+            CreditEntry credit = credits.get(id);
+            if (CreditStatusRules.isActive(credit)) {
+                result.add(new CreditStatisticsSnapshot.OpenCredit(id, credit.getRemainingAmountMinor()));
+            }
+        }
+        return List.copyOf(result);
+    }
 
     public Optional<CreditEntry> findCreditById(UUID id) { return Optional.ofNullable(credits.get(id)); }
     public Optional<CreditEntry> findCreditByShortId(String shortId) { String lower = shortId.toLowerCase(Locale.ROOT); return credits.values().stream().filter(credit -> credit.getId().toString().toLowerCase(Locale.ROOT).startsWith(lower)).findFirst(); }

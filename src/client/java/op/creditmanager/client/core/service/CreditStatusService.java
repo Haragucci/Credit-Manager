@@ -2,12 +2,13 @@ package op.creditmanager.client.core.service;
 
 import op.creditmanager.client.core.CreditManagerCore.CreditException;
 import op.creditmanager.client.model.CreditEntry;
+import op.creditmanager.client.money.CreditStatusRules;
 
 import java.util.List;
 
 public final class CreditStatusService {
     public boolean isActive(CreditEntry entry) {
-        return entry != null && !entry.isArchived() && ("OPEN".equals(entry.getStatus()) || "PARTIAL".equals(entry.getStatus()));
+        return CreditStatusRules.isActive(entry);
     }
 
     public void requireActive(CreditEntry entry) throws CreditException {

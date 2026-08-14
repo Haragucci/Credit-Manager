@@ -11,8 +11,11 @@ import op.creditmanager.client.storage.FileManager;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -64,6 +67,24 @@ class BackupCatalogTest {
         assertEquals(1, corruptManifest.size());
         assertEquals(missingManifest.getFirst().fileName(), corruptManifest.getFirst().fileName());
         assertTrue(Files.readString(manifest).startsWith("["));
+    }
+
+    @Test
+    void logicalHealthErrorAllowsForensicSnapshotButNeverAutomaticRestore() throws Exception {
+        try (Connection connection = database.connection(); Statement statement = connection.createStatement()) {
+            statement.executeUpdate("INSERT INTO data_health_records (id,record_type,severity,title,message,status,created_at) VALUES ('"
+                    + UUID.randomUUID() + "','TEST_SNAPSHOT','ERROR','test','test','OPEN',1)");
+        }
+
+        assertFalse(database.createBackup());
+        assertTrue(database.createRecoverySnapshot());
+        List<DatabaseManager.BackupManifestEntry> backups = database.listBackups();
+
+        assertEquals(1, backups.size());
+        assertEquals(DatabaseManager.BackupArtifactType.RECOVERY_SNAPSHOT, backups.getFirst().artifactType());
+        assertFalse(backups.getFirst().automaticRestoreEligible());
+        assertFalse(database.restoreLatestValidBackup());
+        assertEquals(1, database.loadCreditState().credits().size());
     }
 
     @Test
@@ -159,6 +180,111 @@ class BackupCatalogTest {
             assertEquals(1L, files.filter(path -> path.getFileName().toString().endsWith(".zip")).count());
         }
         assertTrue(database.listBackups().stream().anyMatch(DatabaseManager.BackupManifestEntry::healthy));
+    }
+
+    @Test
+    void retiredBackupRetentionStaysBoundedAcrossOneThousandArtifactsAndPreservesBothTypes() throws Exception {
+        assertTrue(database.createBackup());
+        Path activeBackup;
+        try (var files = Files.list(FileManager.getBackupDirectory())) {
+            activeBackup = files.filter(path -> path.getFileName().toString().endsWith(".zip")).findFirst().orElseThrow();
+        }
+        Path retired = FileManager.getRecoveryDirectory().resolve("retired-backups");
+        Files.createDirectories(retired);
+        Path healthy = retired.resolve("healthy.zip");
+        Files.copy(activeBackup, healthy);
+        Path snapshot = retired.resolve("creditmanager_recovery_snapshot_latest.zip");
+        Files.copy(activeBackup, snapshot);
+        for (int index = 0; index < 1_000; index++) {
+            Files.writeString(retired.resolve(String.format("invalid-%03d.zip", index)), "not a backup " + index);
+        }
+
+        Method prune = DatabaseCoordinator.class.getDeclaredMethod("pruneRetiredBackups", Path.class);
+        prune.setAccessible(true);
+        prune.invoke(database, retired);
+
+        try (var files = Files.list(retired)) {
+            assertEquals(64L, files.filter(Files::isRegularFile).count());
+        }
+        assertTrue(Files.isRegularFile(healthy));
+        assertTrue(Files.isRegularFile(snapshot));
+    }
+
+    @Test
+    void backupDirectoryWriteFailureLeavesDatabaseAndCatalogIntactAndCanBeRetried() throws Exception {
+        Path backupDirectory = FileManager.getBackupDirectory().toAbsolutePath().normalize();
+        RecoveryFileOps diskFull = new RecoveryFileOps() {
+            @Override
+            void createDirectories(Path directory) throws IOException {
+                if (directory.toAbsolutePath().normalize().equals(backupDirectory)) {
+                    throw new IOException("injected disk full");
+                }
+                super.createDirectories(directory);
+            }
+        };
+        DatabaseCoordinator failing = new DatabaseCoordinator(DatabaseFaultInjector.NONE, diskFull);
+        failing.initialize();
+        long revision = failing.revision();
+
+        assertFalse(failing.createBackup());
+
+        assertEquals(revision, failing.revision());
+        DatabaseManager.DatabaseState state = failing.loadCreditState();
+        assertEquals(List.of(new UUID(20L, 1L)), state.credits().stream().map(CreditEntry::getId).toList());
+        assertEquals("first", state.credits().getFirst().getNote());
+        assertTrue(state.payments().isEmpty());
+        assertTrue(state.events().isEmpty());
+        assertTrue(failing.listBackups().isEmpty());
+        assertTrue(database.createBackup());
+        assertEquals(1, database.listBackups().size());
+    }
+
+    @Test
+    void retiredBackupDeleteFailurePreservesProtectedArtifactsAndRetryConverges() throws Exception {
+        assertTrue(database.createBackup());
+        Path activeBackup;
+        try (var files = Files.list(FileManager.getBackupDirectory())) {
+            activeBackup = files.filter(path -> path.getFileName().toString().endsWith(".zip")).findFirst().orElseThrow();
+        }
+        Path retired = FileManager.getRecoveryDirectory().resolve("retired-backups");
+        Files.createDirectories(retired);
+        Path healthy = retired.resolve("healthy.zip");
+        Path snapshot = retired.resolve("creditmanager_recovery_snapshot_latest.zip");
+        Files.copy(activeBackup, healthy);
+        Files.copy(activeBackup, snapshot);
+        for (int index = 0; index < 65; index++) {
+            Files.writeString(retired.resolve(String.format("invalid-%03d.zip", index)), "not a backup " + index);
+        }
+        RecoveryFileOps failingDelete = new RecoveryFileOps() {
+            private boolean failed;
+
+            @Override
+            void deleteIfExists(Path target) throws IOException {
+                if (!failed) {
+                    failed = true;
+                    throw new IOException("injected delete failure");
+                }
+                super.deleteIfExists(target);
+            }
+        };
+        DatabaseCoordinator failing = new DatabaseCoordinator(DatabaseFaultInjector.NONE, failingDelete);
+
+        invokeRetiredPrune(failing, retired);
+
+        assertTrue(Files.isRegularFile(healthy));
+        assertTrue(Files.isRegularFile(snapshot));
+        invokeRetiredPrune(database, retired);
+        try (var files = Files.list(retired)) {
+            assertEquals(64L, files.filter(Files::isRegularFile).count());
+        }
+        assertTrue(Files.isRegularFile(healthy));
+        assertTrue(Files.isRegularFile(snapshot));
+    }
+
+    private void invokeRetiredPrune(DatabaseCoordinator coordinator, Path retired) throws Exception {
+        Method prune = DatabaseCoordinator.class.getDeclaredMethod("pruneRetiredBackups", Path.class);
+        prune.setAccessible(true);
+        prune.invoke(coordinator, retired);
     }
 
     private void addCredit(UUID id, String note) {

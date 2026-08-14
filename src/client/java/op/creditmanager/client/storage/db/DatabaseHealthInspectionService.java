@@ -14,6 +14,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -45,8 +46,8 @@ final class DatabaseHealthInspectionService {
         boolean completed = database.inTransaction(DatabaseWriteMode.HEALTH_MAINTENANCE, connection -> {
             try (Statement statement = connection.createStatement()) {
                 queryCount[0]++;
-                try (ResultSet result = statement.executeQuery("SELECT c.*, COALESCE(p.actual_paid,0) AS actual_paid FROM credits c LEFT JOIN (SELECT credit_id,SUM(amount) actual_paid FROM payments GROUP BY credit_id) p ON p.credit_id=c.id")) {
-                    while (result.next()) inspectCredit(connection, result, observed);
+                try (ResultSet result = statement.executeQuery("SELECT c.* FROM credits c")) {
+                    while (result.next()) inspectCredit(connection, result, paymentAggregate(connection, result.getString("id")), observed);
                 }
                 database.inject(DatabaseFaultInjector.FailurePoint.HEALTH_AFTER_CREDITS_BEFORE_PAYMENTS);
                 queryCount[0]++;
@@ -58,8 +59,8 @@ final class DatabaseHealthInspectionService {
                     while (result.next()) inspectEvent(connection, result, observed);
                 }
                 queryCount[0]++;
-                try (ResultSet result = statement.executeQuery("SELECT l.*, COALESCE(p.actual_linked,0) AS actual_linked, COALESCE(p.actual_count,0) AS actual_count FROM paylogs l LEFT JOIN (SELECT paylog_id,SUM(amount) actual_linked,COUNT(*) actual_count FROM payments WHERE paylog_id IS NOT NULL GROUP BY paylog_id) p ON p.paylog_id=l.id")) {
-                    while (result.next()) inspectPaylog(connection, result, observed);
+                try (ResultSet result = statement.executeQuery("SELECT l.* FROM paylogs l")) {
+                    while (result.next()) inspectPaylog(connection, result, paymentAggregateForPaylog(connection, result.getString("id")), observed);
                 }
                 queryCount[0]++;
                 try (ResultSet result = statement.executeQuery("SELECT entry_hash FROM paylogs GROUP BY entry_hash HAVING COUNT(*) > 1")) {
@@ -110,7 +111,8 @@ final class DatabaseHealthInspectionService {
         });
     }
 
-    private void inspectCredit(Connection connection, ResultSet result, Set<FindingKey> observed) throws SQLException {
+    private void inspectCredit(Connection connection, ResultSet result, PaymentAggregateValue aggregate,
+                               Set<FindingKey> observed) throws SQLException {
         String id = result.getString("id");
         if (!validUuid(id)) report(connection, observed, "CREDIT_ID", "ERROR", "credits", id, "Ungültige Deal-ID", "Die Deal-ID ist keine UUID.", rowPayload(result), null);
         String creditor = result.getString("creditor");
@@ -118,9 +120,9 @@ final class DatabaseHealthInspectionService {
         if (blank(creditor) || blank(debtor) || creditor.equalsIgnoreCase(debtor)) report(connection, observed, "CREDIT_PARTIES", "ERROR", "credits", id, "Ungültige Parteien", "Gläubiger und Schuldner müssen vorhanden und verschieden sein.", rowPayload(result), null);
         long amount = result.getLong("amount");
         long paid = result.getLong("paid_amount");
-        long actualPaid = result.getLong("actual_paid");
+        BigInteger actualPaid = aggregate.total();
         if (!MoneyRules.isPositive(amount) || paid < 0L || paid > amount) report(connection, observed, "CREDIT_AMOUNT", "ERROR", "credits", id, "Ungültiger Betrag", "Gesamtbetrag oder bezahlter Betrag ist inkonsistent.", rowPayload(result), null);
-        if (paid != actualPaid) report(connection, observed, "CREDIT_PAYMENT_TOTAL", "ERROR", "credits", id, "Zahlungssumme inkonsistent", "Der gespeicherte bezahlte Betrag entspricht nicht der Summe der Zahlungen.", rowPayload(result), null);
+        if (!actualPaid.equals(BigInteger.valueOf(paid))) report(connection, observed, "CREDIT_PAYMENT_TOTAL", "ERROR", "credits", id, "Zahlungssumme inkonsistent", "Der gespeicherte bezahlte Betrag entspricht nicht der Summe der Zahlungen oder liegt außerhalb des Long-Bereichs.", rowPayload(result), null);
         String status = result.getString("status");
         if (!CreditStatusRules.isManualFinal(status) && MoneyRules.isPositive(amount) && paid >= 0L && paid <= amount && !CreditStatusRules.derive(amount, paid).equals(status)) report(connection, observed, "CREDIT_STATUS", "ERROR", "credits", id, "Status inkonsistent", "Der Status entspricht nicht dem exakten Zahlungsstand.", rowPayload(result), null);
         result.getLong("completed_at");
@@ -172,14 +174,38 @@ final class DatabaseHealthInspectionService {
         if (result.getLong("amount") < 0L || result.getLong("paid_after") < 0L || result.getLong("remaining_after") < 0L || result.getLong("amount_before") < 0L || result.getLong("amount_after") < 0L) report(connection, observed, "EVENT_AMOUNT", "ERROR", "credit_events", id, "Ungültiger Eventbetrag", "Ein Event enthält einen negativen Betrag.", rowPayload(result), null);
     }
 
-    private void inspectPaylog(Connection connection, ResultSet result, Set<FindingKey> observed) throws SQLException {
+    private void inspectPaylog(Connection connection, ResultSet result, PaymentAggregateValue aggregate,
+                               Set<FindingKey> observed) throws SQLException {
         String id = result.getString("id");
         long amount = result.getLong("amount");
-        long actualLinked = result.getLong("actual_linked");
-        int actualCount = result.getInt("actual_count");
+        BigInteger actualLinked = aggregate.total();
+        int actualCount = aggregate.count();
         if (!validUuid(id) || !MoneyRules.isPositive(amount) || blank(result.getString("payer")) || blank(result.getString("receiver")) || result.getLong("created_at") <= 0L || blank(result.getString("raw_text"))) report(connection, observed, "PAYLOG_DATA", "WARNING", "paylogs", id, "Unvollständiger Paylog", "Paylog enthält fehlende Parteien, Betrag, Datum oder Originaltext.", rowPayload(result), null);
-        if (actualLinked != result.getLong("linked_amount") || actualCount != result.getInt("link_count")) report(connection, observed, "PAYLOG_LINK_AGGREGATE", "ERROR", "paylogs", id, "Paylog-Aggregat inkonsistent", "Gespeicherte Linksumme oder Linkanzahl entspricht nicht den Zahlungen.", rowPayload(result), null);
-        if (actualLinked > amount) report(connection, observed, "PAYLOG_LINK_OVERBOOKED", "ERROR", "paylogs", id, "Paylog überbucht", "Die Summe verknüpfter Zahlungen ist größer als der Paylog-Betrag.", rowPayload(result), null);
+        if (!actualLinked.equals(BigInteger.valueOf(result.getLong("linked_amount"))) || actualCount != result.getInt("link_count")) report(connection, observed, "PAYLOG_LINK_AGGREGATE", "ERROR", "paylogs", id, "Paylog-Aggregat inkonsistent", "Gespeicherte Linksumme oder Linkanzahl entspricht nicht den Zahlungen.", rowPayload(result), null);
+        if (actualLinked.compareTo(BigInteger.valueOf(amount)) > 0) report(connection, observed, "PAYLOG_LINK_OVERBOOKED", "ERROR", "paylogs", id, "Paylog überbucht", "Die Summe verknüpfter Zahlungen ist größer als der Paylog-Betrag.", rowPayload(result), null);
+    }
+
+    private PaymentAggregateValue paymentAggregate(Connection connection, String creditId) throws SQLException {
+        return paymentAggregate(connection, "SELECT amount FROM payments WHERE credit_id=?", creditId);
+    }
+
+    private PaymentAggregateValue paymentAggregateForPaylog(Connection connection, String paylogId) throws SQLException {
+        return paymentAggregate(connection, "SELECT amount FROM payments WHERE paylog_id=?", paylogId);
+    }
+
+    private PaymentAggregateValue paymentAggregate(Connection connection, String sql, String id) throws SQLException {
+        BigInteger total = BigInteger.ZERO;
+        int count = 0;
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, id);
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) {
+                    total = total.add(BigInteger.valueOf(result.getLong(1)));
+                    if (count < Integer.MAX_VALUE) count++;
+                }
+            }
+        }
+        return new PaymentAggregateValue(total, count);
     }
 
     private JsonElement parseStringArray(String json) {
@@ -273,4 +299,5 @@ final class DatabaseHealthInspectionService {
     }
 
     private record FindingKey(String type, String table, String sourceId) { }
+    private record PaymentAggregateValue(BigInteger total, int count) { }
 }

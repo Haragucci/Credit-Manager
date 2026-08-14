@@ -178,7 +178,7 @@ public class ModernCreateCreditScreen extends ModernBaseScreen {
         try {
             manager.createCreditMinor(debts ? otherPlayer : ownPlayer, debts ? ownPlayer : otherPlayer, amountMinor, dueDate,
                     blankToNull(labelField.getText()), blankToNull(noteField.getText()));
-            toastSuccess("Deal erstellt.");
+            if (!showMutationCommitNotice()) toastSuccess("Deal erstellt.");
             if (parent instanceof ModernCreditListScreen) {
                 closeToParent();
             } else {

@@ -43,6 +43,23 @@ class PaymentDetectionDeduplicatorTest {
         assertTrue(deduplicator.reserve(secondConnection, 1_001L) != null);
     }
 
+    @Test
+    void gameFallbackSuppressesTheSameCallbackButKeepsTwoRealIdenticalPayments() {
+        PaymentDetectionDeduplicator deduplicator = new PaymentDetectionDeduplicator(500L, 8);
+        DetectedPayment payment = new DetectedPayment("debtor", "creditor", 1_000L,
+                "OPSUCHT » Du hast creditor 10$ gegeben.");
+        PaymentDetectionEvent first = new PaymentDetectionEvent(payment, "GAME", "connection", "server", 1_000L, null);
+        PaymentDetectionEvent sameCallback = new PaymentDetectionEvent(payment, "GAME", "connection", "server", 1_000L, null);
+        PaymentDetectionEvent laterPayment = new PaymentDetectionEvent(payment, "GAME", "connection", "server", 1_001L, null);
+
+        PaymentDetectionDeduplicator.Reservation reservation = deduplicator.reserve(first, 1_000L);
+        assertTrue(reservation != null);
+        deduplicator.commit(reservation, 1_000L);
+
+        assertFalse(deduplicator.reserve(sameCallback, 1_001L) != null);
+        assertTrue(deduplicator.reserve(laterPayment, 1_001L) != null);
+    }
+
     private PaymentDetectionEvent event(String id, String connectionId) {
         PaymentDetectionEvent template = event(id);
         return new PaymentDetectionEvent(template.payment(), template.channel(), connectionId, template.serverId(),

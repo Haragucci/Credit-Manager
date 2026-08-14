@@ -5,6 +5,7 @@ import op.creditmanager.client.money.MoneyAmount;
 import op.creditmanager.client.money.MoneyRules;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.math.RoundingMode;
 import java.text.NumberFormat;
 import java.util.Locale;
@@ -18,8 +19,13 @@ public class FormatUtil {
     }
 
     public static String formatAmountMinor(long minorUnits) {
+        return formatAmountMinor(BigInteger.valueOf(minorUnits));
+    }
+
+    public static String formatAmountMinor(BigInteger minorUnits) {
         synchronized (BETRAG_FORMAT) {
-            return BETRAG_FORMAT.format(MoneyRules.toMajor(minorUnits)) + "$";
+            BigDecimal major = new BigDecimal(minorUnits == null ? BigInteger.ZERO : minorUnits, 2);
+            return BETRAG_FORMAT.format(major) + "$";
         }
     }
 
@@ -33,7 +39,36 @@ public class FormatUtil {
     }
 
     public static String formatChartAmountMinor(long minorUnits, boolean showPlus) {
-        return formatChartAmount(MoneyRules.toDisplayDouble(minorUnits), showPlus);
+        return formatChartAmountMinor(BigInteger.valueOf(minorUnits), showPlus);
+    }
+
+    public static String formatChartAmountMinor(BigInteger minorUnits) {
+        return formatChartAmountMinor(minorUnits, false);
+    }
+
+    public static String formatChartAmountMinor(BigInteger minorUnits, boolean showPlus) {
+        BigInteger value = minorUnits == null ? BigInteger.ZERO : minorUnits;
+        String sign = value.signum() < 0 ? "-" : showPlus && value.signum() > 0 ? "+" : "";
+        BigDecimal absolute = new BigDecimal(value.abs(), 2);
+        BigDecimal divisor = BigDecimal.ONE;
+        String suffix = "";
+        if (absolute.compareTo(new BigDecimal("999999500")) >= 0) {
+            divisor = new BigDecimal("1000000000");
+            suffix = "Mrd";
+        } else if (absolute.compareTo(new BigDecimal("999500")) >= 0) {
+            divisor = new BigDecimal("1000000");
+            suffix = "M";
+        } else if (absolute.compareTo(new BigDecimal("999.5")) >= 0) {
+            divisor = new BigDecimal("1000");
+            suffix = "k";
+        }
+        BigDecimal compact = absolute.divide(divisor, 2, RoundingMode.HALF_UP).stripTrailingZeros();
+        if (compact.precision() - compact.scale() > 12) {
+            int exponent = compact.precision() - compact.scale() - 1;
+            BigDecimal scientific = compact.movePointLeft(exponent).setScale(2, RoundingMode.HALF_UP).stripTrailingZeros();
+            return sign + scientific.toPlainString().replace('.', ',') + "e" + exponent + suffix + "$";
+        }
+        return sign + compact.toPlainString().replace('.', ',') + suffix + "$";
     }
 
     public static String formatChartAmount(double amount) {

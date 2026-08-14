@@ -6,6 +6,8 @@ import org.junit.jupiter.api.io.TempDir;
 import op.creditmanager.client.config.ClientConfig;
 import op.creditmanager.client.config.ClientConfigManager;
 import op.creditmanager.client.model.CreditEntry;
+import op.creditmanager.client.model.CreditEventEntry;
+import op.creditmanager.client.model.CreditEventType;
 import op.creditmanager.client.model.Payment;
 import op.creditmanager.client.model.TransactionEntry;
 import op.creditmanager.client.storage.FileManager;
@@ -94,6 +96,28 @@ class CreditRepositoryDatabaseTest {
         CreditRepository reloaded = new CreditRepository(); reloaded.load();
         assertEquals(1, reloaded.getAllCredits().size());
         assertTrue(reloaded.getAllPayments().isEmpty());
+    }
+
+    @Test
+    void repositorySnapshotSavePreservesAuthoritativeEventHistory() throws Exception {
+        useTemporaryDataDirectory();
+        CreditRepository repository = new CreditRepository();
+        assertTrue(repository.load());
+        CreditEntry credit = new CreditEntry(UUID.randomUUID(), "history-preservation", "creditor", "debtor", 100D, null, null);
+        repository.putCredit(credit);
+        assertTrue(repository.saveAll());
+        CreditEventEntry event = new CreditEventEntry(CreditEventType.CREDIT_CREATED, credit,
+                credit.getAmountMinor(), credit.getAmountMinor(), "created", "creditor", "MANUAL", false);
+        assertTrue(DatabaseManager.getInstance().commitCreditMutation(
+                new DatabaseManager.CreditMutation(credit, List.of(), List.of(), List.of(event))));
+
+        credit.setNote("updated");
+        assertTrue(repository.saveAll());
+
+        DatabaseManager.DatabaseState state = DatabaseManager.getInstance().loadCreditState();
+        assertEquals(1, state.events().size());
+        assertEquals(event.getId(), state.events().getFirst().getId());
+        assertEquals("updated", state.credits().getFirst().getNote());
     }
 
     @Test
@@ -312,6 +336,12 @@ class CreditRepositoryDatabaseTest {
         DatabaseManager.DataHealthRecord finding = first.stream().filter(record -> "CREDIT_PAYMENT_TOTAL".equals(record.type())).findFirst().orElseThrow();
         assertTrue(database.resolveHealthRecord(finding.id(), "{}", false));
         assertTrue(database.listHealthRecords(false).stream().noneMatch(record -> finding.id().equals(record.id())));
+    }
+
+    @Test
+    void creditRepositoryDoesNotOwnASecondEventHistory() {
+        assertTrue(java.util.Arrays.stream(CreditRepository.class.getDeclaredFields())
+                .noneMatch(field -> field.getGenericType().getTypeName().contains("CreditEventEntry")));
     }
 
     private Connection connection() throws SQLException {

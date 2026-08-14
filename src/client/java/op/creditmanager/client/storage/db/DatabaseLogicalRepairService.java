@@ -156,6 +156,7 @@ final class DatabaseLogicalRepairService {
         if (raw == null) throw new SQLException("Discard target event does not exist");
         preserveAudit(connection, "DISCARD_EVENT", id.toString(), raw, reason, migrationId);
         deleteOne(connection, "credit_events", id);
+        database.rebuildEventCounts(connection);
     }
 
     private void preserveRelatedRows(Connection connection, String kind, String table, UUID creditId, String reason, String migrationId) throws SQLException {

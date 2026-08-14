@@ -29,10 +29,17 @@ public final class PaymentDetectionDeduplicator {
     public synchronized Reservation reserve(PaymentDetectionEvent event, long now) {
         if (event == null || event.payment() == null) return null;
         String key = key(event);
-        if (reserved.contains(key)) return null;
+        if (reserved.contains(key)) {
+            PaymentDetectionTrace.record(event, key, "DUPLICATE_RESERVED");
+            return null;
+        }
         Long previous = committed.get(key);
-        if (previous != null && now - previous < cooldownMillis) return null;
+        if (previous != null && now - previous < cooldownMillis) {
+            PaymentDetectionTrace.record(event, key, "DUPLICATE_COMMITTED");
+            return null;
+        }
         reserved.add(key);
+        PaymentDetectionTrace.record(event, key, "RESERVED");
         return new Reservation(UUID.randomUUID(), key);
     }
 

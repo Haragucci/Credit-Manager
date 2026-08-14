@@ -10,6 +10,7 @@ import net.minecraft.client.gl.RenderPipelines;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import op.creditmanager.client.core.CreditManager;
+import op.creditmanager.client.core.service.MutationCommitResult;
 import op.creditmanager.client.gui.modern.theme.ModernThemePalette;
 import op.creditmanager.client.gui.modern.theme.ColorUtil;
 import op.creditmanager.client.gui.modern.toast.ModernToastManager;
@@ -229,6 +230,20 @@ public abstract class ModernBaseScreen extends Screen {
     }
     protected void toastWarning(String message) { toast(message, ModernToastType.WARNING); }
     protected void toastInfo(String message) { toast(message, ModernToastType.INFO); }
+
+    protected boolean showMutationCommitNotice() {
+        MutationCommitResult result = manager.consumeLastMutationCommit();
+        if (result == null || result.status() == MutationCommitResult.Status.COMMITTED_SYNCED) return false;
+        if (result.status() == MutationCommitResult.Status.COMMITTED_RELOAD_REQUIRED) {
+            toastWarning(result.userMessage());
+            return true;
+        }
+        if (result.status() == MutationCommitResult.Status.COMMITTED_DEGRADED) {
+            toastError(result.userMessage());
+            return true;
+        }
+        return false;
+    }
 
     protected boolean isAnyInputFocused() {
         if (getFocused() instanceof TextFieldWidget field && field.isFocused()) {

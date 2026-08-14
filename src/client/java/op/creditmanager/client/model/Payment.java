@@ -1,5 +1,7 @@
 package op.creditmanager.client.model;
 
+import op.creditmanager.client.money.MoneyRules;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -10,7 +12,8 @@ public class Payment {
     private UUID creditId;
     private String fromPlayer;
     private String toPlayer;
-    private Double amount;
+    private long amountMinor;
+    private PaymentKind paymentKind;
     private List<String> items;
     private String itemNbt;
     private List<String> itemNbtEntries;
@@ -19,17 +22,31 @@ public class Payment {
     private UUID paylogId;
     private String note;
 
+    public Payment() {
+        this.items = new ArrayList<>();
+        this.itemNbtEntries = new ArrayList<>();
+        this.paymentKind = PaymentKind.MONEY;
+    }
+
     public Payment(UUID creditId, String fromPlayer, String toPlayer,
-                   Double amount, List<String> items, String source) {
+                   long amountMinor, List<String> items, String source) {
         this.id = UUID.randomUUID();
         this.creditId = creditId;
         this.fromPlayer = fromPlayer;
         this.toPlayer = toPlayer;
-        this.amount = amount;
+        this.amountMinor = amountMinor;
         this.items = items != null ? items : new ArrayList<>();
+        this.paymentKind = this.items.isEmpty() ? PaymentKind.MONEY : PaymentKind.ITEM;
         this.itemNbtEntries = new ArrayList<>();
         this.timestamp = System.currentTimeMillis();
         this.source = source;
+    }
+
+    @Deprecated
+    public Payment(UUID creditId, String fromPlayer, String toPlayer,
+                   Double amount, List<String> items, String source) {
+        this(creditId, fromPlayer, toPlayer,
+                amount == null ? 0L : MoneyRules.fromLegacyDouble(amount, false).minorUnits(), items, source);
     }
 
     public UUID getId() { return id; }
@@ -44,8 +61,13 @@ public class Payment {
     public String getToPlayer() { return toPlayer; }
     public void setToPlayer(String toPlayer) { this.toPlayer = toPlayer; }
 
-    public Double getAmount() { return amount; }
-    public void setAmount(Double amount) { this.amount = amount; }
+    public long getAmountMinor() { return amountMinor; }
+    public void setAmountMinor(long amountMinor) { this.amountMinor = amountMinor; }
+    @Deprecated public Double getAmount() { return MoneyRules.toDisplayDouble(amountMinor); }
+    @Deprecated public void setAmount(Double amount) { this.amountMinor = amount == null ? 0L : MoneyRules.fromLegacyDouble(amount, false).minorUnits(); }
+
+    public PaymentKind getPaymentKind() { return paymentKind == null ? (getItems().isEmpty() ? PaymentKind.MONEY : PaymentKind.ITEM) : paymentKind; }
+    public void setPaymentKind(PaymentKind paymentKind) { this.paymentKind = paymentKind == null ? PaymentKind.MONEY : paymentKind; }
 
     public List<String> getItems() {
         if (items == null) items = new ArrayList<>();

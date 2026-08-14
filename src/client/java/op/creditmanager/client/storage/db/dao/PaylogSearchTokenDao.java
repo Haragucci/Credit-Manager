@@ -40,7 +40,7 @@ public final class PaylogSearchTokenDao {
         entry.setId(UUID.fromString(result.getString("id")));
         entry.setFromPlayer(result.getString("payer"));
         entry.setToPlayer(result.getString("receiver"));
-        entry.setAmount(result.getDouble("amount"));
+        entry.setAmountMinor(result.getLong("amount"));
         entry.setRawText(result.getString("raw_text"));
         entry.setTimestamp(result.getLong("created_at"));
         entry.setSource(result.getString("source"));

@@ -12,8 +12,8 @@ public final class CreditSnapshotMapper {
         copy.setDealName(source.getDealName());
         copy.setCreditor(source.getCreditor());
         copy.setDebtor(source.getDebtor());
-        copy.setAmount(source.getAmount());
-        copy.setPaidAmount(source.getPaidAmount());
+        copy.setAmountMinor(source.getAmountMinor());
+        copy.setPaidAmountMinor(source.getPaidAmountMinor());
         copy.setCreatedAt(source.getCreatedAt());
         copy.setDueDate(source.getDueDate());
         copy.setStatus(source.getStatus());
@@ -25,7 +25,7 @@ public final class CreditSnapshotMapper {
     }
 
     public Payment copyPayment(Payment source) {
-        Payment copy = new Payment(source.getCreditId(), source.getFromPlayer(), source.getToPlayer(), source.getAmount(),
+        Payment copy = new Payment(source.getCreditId(), source.getFromPlayer(), source.getToPlayer(), source.getAmountMinor(),
                 new ArrayList<>(source.getItems()), source.getSource());
         copy.setId(source.getId());
         copy.setItemNbt(source.getItemNbt());
@@ -33,6 +33,7 @@ public final class CreditSnapshotMapper {
         copy.setTimestamp(source.getTimestamp());
         copy.setPaylogId(source.getPaylogId());
         copy.setNote(source.getNote());
+        copy.setPaymentKind(source.getPaymentKind());
         return copy;
     }
 
@@ -41,8 +42,8 @@ public final class CreditSnapshotMapper {
         target.setDealName(source.getDealName());
         target.setCreditor(source.getCreditor());
         target.setDebtor(source.getDebtor());
-        target.setAmount(source.getAmount());
-        target.setPaidAmount(source.getPaidAmount());
+        target.setAmountMinor(source.getAmountMinor());
+        target.setPaidAmountMinor(source.getPaidAmountMinor());
         target.setCreatedAt(source.getCreatedAt());
         target.setDueDate(source.getDueDate());
         target.setStatus(source.getStatus());

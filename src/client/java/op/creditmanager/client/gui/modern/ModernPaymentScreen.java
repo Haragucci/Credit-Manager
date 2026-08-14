@@ -66,6 +66,7 @@ public class ModernPaymentScreen extends ModernBaseScreen {
     private List<ModernLayout.Bounds> itemActionBounds = List.of();
     private List<ModernLayout.Bounds> modeTabBounds = List.of();
     private List<ModernLayout.Bounds> moneyActionBounds = List.of();
+    private final MutationSubmissionGuard submissionGuard = new MutationSubmissionGuard();
 
     public ModernPaymentScreen(CreditManager manager, CreditEntry entry, boolean debts, Screen parent) {
         super(manager, parent, debts ? "Zahlung leisten" : "Zahlung empfangen", debts ? "debts" : "claims");
@@ -301,41 +302,47 @@ public class ModernPaymentScreen extends ModernBaseScreen {
     }
 
     private void savePayment() {
+        if (!submissionGuard.tryBegin()) return;
         if (currentPlayerName().isBlank()) {
+            submissionGuard.reset();
             toastError("Du musst mit einem Spieler verbunden sein.");
             return;
         }
-        double amount;
+        long amountMinor;
         try {
-            amount = FormatUtil.parseMoney(amountField.getText());
+            amountMinor = FormatUtil.parseMoneyMinor(amountField.getText());
         } catch (IllegalArgumentException exception) {
+            submissionGuard.reset();
             toastError("Bitte einen gültigen positiven Betrag eingeben.");
             return;
         }
         try {
             Payment saved;
             if (itemMode) {
-                saved = saveSelectedItems(amount);
+                saved = saveSelectedItems(amountMinor);
             } else if (selectedPaylog != null) {
-                saved = manager.addPaylogPayment(entry.getId(), selectedPaylog.getId(), amount, parseSelectedTimestamp(), noteField.getText()).payment();
+                saved = manager.addPaylogPaymentMinor(entry.getId(), selectedPaylog.getId(), amountMinor, parseSelectedTimestamp(), noteField.getText()).payment();
             } else {
-                saved = manager.addMoneyPayment(entry.getId(), amount);
+                saved = manager.addMoneyPaymentMinor(entry.getId(), amountMinor);
             }
-            if (saved.getAmount() + 0.0001D < amount) {
-                toastWarning("Es wurden nur " + FormatUtil.formatAmount(saved.getAmount())
+            boolean commitNoticeShown = showMutationCommitNotice();
+            if (!commitNoticeShown && saved.getAmountMinor() < amountMinor) {
+                toastWarning("Es wurden nur " + FormatUtil.formatAmountMinor(saved.getAmountMinor())
                         + " gebucht, da der Deal damit vollständig bezahlt ist.");
-            } else {
+            } else if (!commitNoticeShown) {
                 toastSuccess(itemMode ? "Item-Zahlung gespeichert." : "Zahlung gespeichert.");
             }
             closeToParent();
         } catch (CreditManager.CreditException exception) {
+            submissionGuard.reset();
             toastError(exception.getMessage());
         } catch (IllegalArgumentException exception) {
+            submissionGuard.reset();
             toastError(exception.getMessage());
         }
     }
 
-    private Payment saveSelectedItems(double sharedValue) throws CreditManager.CreditException {
+    private Payment saveSelectedItems(long sharedValueMinor) throws CreditManager.CreditException {
         PlayerInventory inventory = playerInventory();
         if (inventory == null || selectedInventorySlots.isEmpty()) {
             throw new CreditManager.CreditException("Bitte mindestens ein Item aus dem Inventar auswählen.");
@@ -355,7 +362,7 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         if (descriptions.isEmpty()) {
             throw new CreditManager.CreditException("Die ausgewählten Items sind nicht mehr im Inventar.");
         }
-        return manager.addItemPayment(entry.getId(), descriptions, sharedValue, serializedStacks);
+        return manager.addItemPaymentMinor(entry.getId(), descriptions, sharedValueMinor, serializedStacks);
     }
 
     private PlayerInventory playerInventory() {
@@ -365,7 +372,8 @@ public class ModernPaymentScreen extends ModernBaseScreen {
 
     public void usePaylog(TransactionEntry paylog) {
         selectedPaylog = paylog;
-        amountDraft = String.valueOf(Math.min(entry.getRemainingAmount(), paylog.getRemainingAmount()));
+        amountDraft = op.creditmanager.client.money.MoneyRules.toMajor(
+                Math.min(entry.getRemainingAmountMinor(), paylog.getRemainingAmountMinor())).toPlainString();
         var time = java.time.Instant.ofEpochMilli(paylog.getTimestamp()).atZone(ZoneId.systemDefault());
         dateDraft = DateTimeFormatter.ofPattern("dd.MM.uuuu").format(time);
         timeDraft = DateTimeFormatter.ofPattern("HH:mm").format(time);
@@ -426,6 +434,7 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         itemActionBounds = List.of();
         modeTabBounds = List.of();
         moneyActionBounds = List.of();
+        submissionGuard.reset();
         formScroll.reset();
         selectedInventorySlots.clear();
         super.clearTransientState();

@@ -55,13 +55,15 @@ public final class CreditRecoveryService {
 
     public boolean ignore(UUID token) { return repository.ignoreRecovery(token); }
 
+    public boolean discard(UUID token, boolean confirmed) { return repository.discardRecovery(token, confirmed); }
+
     public boolean createRecoveryBackup(UUID token) {
         if (CONFIG_RECOVERY_TOKEN.equals(token)) return JsonStorage.createBackup(FileManager.getClientConfigFile());
-        if (TRANSACTION_RECOVERY_TOKEN.equals(token)) return DatabaseManager.getInstance().createBackup();
+        if (TRANSACTION_RECOVERY_TOKEN.equals(token)) return DatabaseManager.getInstance().createRecoverySnapshot();
         return repository.createRecoveryBackup(token);
     }
 
-    public boolean createSafetyBackup() { return DatabaseManager.getInstance().createBackup(); }
+    public boolean createSafetyBackup() { return DatabaseManager.getInstance().createRecoverySnapshot(); }
 
     public boolean restoreLatestSafetyBackup() {
         if (!DatabaseManager.getInstance().restoreLatestValidBackup()) return false;

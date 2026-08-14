@@ -6,26 +6,115 @@ import net.fabricmc.loader.api.FabricLoader;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.StandardCopyOption;
 import java.util.Comparator;
+import java.util.Optional;
+import java.util.UUID;
 
 public class FileManager {
 
     private static Path dataDirectory;
+    private static Path initializedDirectory;
+    private static Path backupMirrorDirectory;
+    private static StorageRootResolver.StorageLocation storageLocation;
+    private static ProcessStorageLease storageLease;
+    private static StorageAccessState storageAccessState = StorageAccessState.UNINITIALIZED;
+    private static boolean dataDirectoryCreated;
 
-    public static void initialize() {
-        if (dataDirectory != null) return;
-
-        dataDirectory = FabricLoader.getInstance()
-                .getGameDir()
-                .resolve("CreditManagerLogs");
-
-        try {
-            if (!Files.exists(dataDirectory)) {
-                Files.createDirectories(dataDirectory);
-                CreditManagerClient.LOGGER.info("Created CreditManagerLogs directory at: " + dataDirectory);
+    public static synchronized void initialize() {
+        if (dataDirectory != null) {
+            Path normalized = dataDirectory.toAbsolutePath().normalize();
+            if (!normalized.equals(initializedDirectory)) {
+                releaseLeaseQuietly();
+                initializedDirectory = normalized;
+                storageLocation = new StorageRootResolver.StorageLocation(normalized, null,
+                        StorageRootResolver.StorageEnvironment.STANDARD, "externally-managed",
+                        StorageRootResolver.ResolutionSource.STANDARD_GAME_DIR, true, java.util.List.of("externally-managed"));
+                storageAccessState = StorageAccessState.EXTERNALLY_MANAGED;
+                dataDirectoryCreated = false;
             }
+            return;
+        }
+        Path gameDirectory = FabricLoader.getInstance().getGameDir().toAbsolutePath().normalize();
+        storageLocation = new StorageRootResolver().resolve(gameDirectory);
+        dataDirectory = storageLocation.canonicalRoot();
+        initializedDirectory = dataDirectory;
+        if (!storageLocation.resolved()) {
+            storageAccessState = StorageAccessState.STORAGE_LOCATION_UNRESOLVED;
+            CreditManagerClient.LOGGER.error("CreditManager persistent storage could not be resolved safely for {}", storageLocation.environment());
+            return;
+        }
+        BackupMirrorPathResolver.Resolution mirror = new BackupMirrorPathResolver().resolve(dataDirectory, storageLocation);
+        backupMirrorDirectory = mirror.enabled() ? mirror.root() : null;
+        if (!mirror.enabled()) CreditManagerClient.LOGGER.warn("CreditManager backup mirror is disabled: {}", mirror.reason());
+        try {
+            dataDirectoryCreated = !Files.exists(dataDirectory);
+            Files.createDirectories(dataDirectory);
+            Optional<ProcessStorageLease> acquired = ProcessStorageLease.tryAcquire(dataDirectory);
+            if (acquired.isEmpty()) {
+                storageAccessState = StorageAccessState.SECONDARY_INSTANCE;
+                CreditManagerClient.LOGGER.warn("CreditManager storage is already leased by another process: {}", dataDirectory);
+                return;
+            }
+            storageLease = acquired.get();
+            storageAccessState = StorageAccessState.PRIMARY;
+            CreditManagerClient.LOGGER.info("CreditManager storage environment: {}, root: {}", storageLocation.environment(), dataDirectory);
         } catch (IOException e) {
-            CreditManagerClient.LOGGER.error("Failed to create CreditManagerLogs directory", e);
+            storageAccessState = StorageAccessState.STORAGE_IO_FAILED;
+            CreditManagerClient.LOGGER.error("Failed to initialise persistent CreditManager storage", e);
+        }
+    }
+
+    public static synchronized boolean retryStorageLease() {
+        if (storageAccessState != StorageAccessState.SECONDARY_INSTANCE && storageAccessState != StorageAccessState.STORAGE_IO_FAILED) return false;
+        if (storageLocation == null || !storageLocation.resolved()) return false;
+        try {
+            Optional<ProcessStorageLease> acquired = ProcessStorageLease.tryAcquire(dataDirectory);
+            if (acquired.isEmpty()) return false;
+            storageLease = acquired.get();
+            storageAccessState = StorageAccessState.PRIMARY;
+            return true;
+        } catch (IOException exception) {
+            CreditManagerClient.LOGGER.warn("Could not retry CreditManager storage lease", exception);
+            return false;
+        }
+    }
+
+    public static synchronized void shutdown() {
+        releaseLeaseQuietly();
+        if (storageAccessState == StorageAccessState.PRIMARY) storageAccessState = StorageAccessState.RELEASED;
+    }
+
+    public static synchronized boolean databaseAccessAllowed() {
+        return storageAccessState == StorageAccessState.PRIMARY || storageAccessState == StorageAccessState.EXTERNALLY_MANAGED;
+    }
+
+    public static synchronized boolean hasPrimaryStorageLease() {
+        return storageAccessState == StorageAccessState.EXTERNALLY_MANAGED
+                || storageAccessState == StorageAccessState.PRIMARY && storageLease != null && storageLease.isHeld();
+    }
+
+    public static synchronized StorageAccessState storageAccessState() {
+        return storageAccessState;
+    }
+
+    public static synchronized StorageRootResolver.StorageLocation storageLocation() {
+        return storageLocation;
+    }
+
+    public static synchronized boolean wasDataDirectoryCreated() {
+        return dataDirectoryCreated;
+    }
+
+    private static void releaseLeaseQuietly() {
+        if (storageLease == null) return;
+        try {
+            storageLease.close();
+        } catch (IOException exception) {
+            CreditManagerClient.LOGGER.warn("Could not release CreditManager storage lease cleanly", exception);
+        } finally {
+            storageLease = null;
         }
     }
 
@@ -69,6 +158,14 @@ public class FileManager {
         return dataDirectory.resolve("creditmanager.mv.db");
     }
 
+    public static Path getStorageIdentityFile() {
+        return dataDirectory.resolve("storage_identity.json");
+    }
+
+    public static Path getLegacyDataDirectory() {
+        return storageLocation == null ? null : storageLocation.legacyRoot();
+    }
+
     public static Path getLegacyArchiveDirectory() {
         return dataDirectory.resolve("legacy-json");
     }
@@ -84,6 +181,10 @@ public class FileManager {
 
     public static Path getBackupDirectory() {
         return dataDirectory.resolve("backups");
+    }
+
+    public static Path getBackupMirrorDirectory() {
+        return backupMirrorDirectory;
     }
 
     public static Path getBackupManifestFile() {
@@ -102,6 +203,10 @@ public class FileManager {
         return getRecoveryDirectory().resolve("validation");
     }
 
+    public static Path getDiscardRecoveryDirectory() {
+        return getRecoveryDirectory().resolve("discard-snapshots");
+    }
+
     public static void tidyAfterSuccessfulSave() {
         try {
             Path backups = dataDirectory.resolve("backups");
@@ -111,9 +216,13 @@ public class FileManager {
             }
             try (var files = Files.list(backups)) {
                 files.filter(Files::isRegularFile)
+                        .filter(path -> {
+                            String name = path.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+                            return !name.endsWith(".zip") && !name.endsWith(".mv.db") && !name.equals("manifest.json");
+                        })
                         .collect(java.util.stream.Collectors.groupingBy(FileManager::backupType))
                         .values()
-                        .forEach(group -> group.stream().sorted(Comparator.comparingLong(FileManager::modified).reversed()).skip(12).forEach(FileManager::deleteQuietly));
+                        .forEach(group -> group.stream().sorted(Comparator.comparingLong(FileManager::modified).reversed()).skip(12).forEach(FileManager::archiveRetiredBackup));
             }
         } catch (IOException exception) {
             CreditManagerClient.LOGGER.warn("Could not tidy CreditManager data directory", exception);
@@ -127,4 +236,27 @@ public class FileManager {
         return marker > 0 ? name.substring(0, marker) : name;
     }
     private static void deleteQuietly(Path path) { try { Files.deleteIfExists(path); } catch (IOException ignored) { } }
+    private static void archiveRetiredBackup(Path path) {
+        Path target = getRecoveryDirectory().resolve("retired-file-backups").resolve(path.getFileName() + "." + UUID.randomUUID());
+        try {
+            Files.createDirectories(target.getParent());
+            try {
+                Files.move(path, target, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException exception) {
+                Files.move(path, target);
+            }
+        } catch (IOException exception) {
+            CreditManagerClient.LOGGER.warn("Could not archive retired CreditManager file backup: {}", path, exception);
+        }
+    }
+
+    public enum StorageAccessState {
+        UNINITIALIZED,
+        PRIMARY,
+        EXTERNALLY_MANAGED,
+        SECONDARY_INSTANCE,
+        STORAGE_LOCATION_UNRESOLVED,
+        STORAGE_IO_FAILED,
+        RELEASED
+    }
 }

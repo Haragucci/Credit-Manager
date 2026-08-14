@@ -247,6 +247,12 @@ public final class ClientConfigManager {
         }
 
         FileManager.initialize();
+        if (!FileManager.databaseAccessAllowed()) {
+            config = new ClientConfig();
+            config.normalize();
+            recoveryRequired = true;
+            return config;
+        }
         Path path = FileManager.getClientConfigFile();
         JsonStorage.LoadResult<ClientConfig> result = JsonStorage.load(path, ClientConfig.class, new ClientConfig());
         config = result.value();
@@ -258,7 +264,7 @@ public final class ClientConfigManager {
     }
 
     private static boolean save(ClientConfig value) {
-        if (recoveryRequired) return false;
+        if (recoveryRequired || !FileManager.databaseAccessAllowed()) return false;
         value.normalize();
         if (JsonStorage.save(FileManager.getClientConfigFile(), value)) return true;
         config = null;

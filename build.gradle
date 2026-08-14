@@ -64,8 +64,14 @@ tasks.withType(JavaCompile).configureEach {
 }
 
 tasks.named('test') {
-	failOnNoDiscoveredTests = false
-	useJUnitPlatform()
+	failOnNoDiscoveredTests = true
+	def childClasspathFile = layout.buildDirectory.file('tmp/test/creditmanager-child-classpath.txt').get().asFile
+	systemProperty 'creditmanager.testRuntimeClasspathFile', childClasspathFile.absolutePath
+	doFirst {
+		childClasspathFile.parentFile.mkdirs()
+		childClasspathFile.setText(sourceSets.test.runtimeClasspath.asPath, 'UTF-8')
+	}
+	useJUnitPlatform { excludeTags 'performance' }
 }
 
 tasks.register('performanceTest', Test) {
@@ -74,6 +80,12 @@ tasks.register('performanceTest', Test) {
 	testClassesDirs = sourceSets.test.output.classesDirs
 	classpath = sourceSets.test.runtimeClasspath
 	useJUnitPlatform { includeTags 'performance' }
+	failOnNoDiscoveredTests = true
+	afterSuite { descriptor, result ->
+		if (descriptor.parent == null && providers.gradleProperty('creditmanager.performanceTests').map { it.toBoolean() }.orElse(false).get() && result.testCount == 0) {
+			throw new GradleException('No CreditManager performance tests were executed')
+		}
+	}
 	onlyIf { providers.gradleProperty('creditmanager.performanceTests').map { it.toBoolean() }.orElse(false).get() }
 }
 
@@ -102,16 +114,98 @@ tasks.register('verifyReleaseJar') {
 	dependsOn tasks.named('remapJar')
 	doLast {
 		def releaseJar = tasks.named('remapJar').get().archiveFile.get().asFile
-		def entries = new java.util.zip.ZipFile(releaseJar).withCloseable { zip ->
-			zip.entries().collect { it.name }
-		}
-		if (!entries.any { it ==~ /META-INF\/jars\/h2-.+\.jar/ }) {
-			throw new GradleException("Release jar does not embed H2: ${releaseJar}")
-		}
-		def forbiddenTerms = ['CmTest', 'devtools', 'TestData', 'DevFeatureGate', 'TEST_DATA', 'CMTEST', 'DevTest', 'TestDataChatHook', 'test-paylog', 'Test Command', 'local-dev']
-		def forbidden = entries.findAll { entry -> forbiddenTerms.any { term -> entry.contains(term) } }
-		if (!forbidden.isEmpty()) {
-			throw new GradleException("Release jar contains development-only files: ${forbidden}")
+		if (!releaseJar.isFile()) throw new GradleException("Remapped release JAR missing: ${releaseJar}")
+		def zip = new java.util.zip.ZipFile(releaseJar)
+		try {
+			def entries = zip.entries().toList()
+			def names = entries.collect { it.name }
+			if (names.any { it.startsWith('/') || it.contains('\\') || it.split('/').contains('..') }) {
+				throw new GradleException('Release JAR contains an unsafe entry path')
+			}
+			if (names.size() != names.toSet().size()) throw new GradleException('Release JAR contains duplicate entries')
+			def metadataEntry = zip.getEntry('fabric.mod.json')
+			if (metadataEntry == null) throw new GradleException('fabric.mod.json missing from release JAR')
+			def metadata = new groovy.json.JsonSlurper().parse(zip.getInputStream(metadataEntry))
+			if (metadata.id != 'creditmanager' || metadata.environment != 'client' || metadata.version != project.version.toString()) {
+				throw new GradleException('fabric.mod.json identity, environment or version is invalid')
+			}
+			if (metadata.entrypoints?.client != ['op.creditmanager.client.CreditManagerClient']) {
+				throw new GradleException('fabric.mod.json client entrypoint is invalid')
+			}
+			if (metadata.depends?.minecraft != '1.21.11' || metadata.depends?.java != '>=21' || metadata.depends?.fabricloader != '>=0.18.4' || metadata.depends?.get('fabric-api') == null) {
+				throw new GradleException('fabric.mod.json runtime dependencies are invalid')
+			}
+			def h2 = names.findAll { it ==~ /META-INF\/jars\/h2-2\.3\.232\.jar/ }
+			if (h2.size() != 1) throw new GradleException('Expected exactly one nested H2 2.3.232 runtime JAR')
+			def h2Entry = zip.getEntry(h2.first())
+			def h2RuntimeClasses = [] as Set
+			def nestedH2 = new java.util.zip.ZipInputStream(zip.getInputStream(h2Entry))
+			try {
+				for (def nested = nestedH2.nextEntry; nested != null; nested = nestedH2.nextEntry) {
+					if (nested.name == 'org/h2/Driver.class' || nested.name == 'org/h2/engine/Engine.class') {
+						h2RuntimeClasses.add(nested.name)
+					}
+				}
+			} finally {
+				nestedH2.close()
+			}
+			if (h2RuntimeClasses != ['org/h2/Driver.class', 'org/h2/engine/Engine.class'] as Set) {
+				throw new GradleException('Nested H2 JAR is missing required runtime classes')
+			}
+			def required = [
+				'assets/creditmanager/icon.png',
+				'assets/creditmanager/font/gui.json',
+				'assets/creditmanager/textures/font/ascii.png',
+				'assets/creditmanager/textures/gui/logo.png',
+				'assets/creditmanager/items/money.json',
+				'assets/creditmanager/models/item/money.json',
+				'assets/creditmanager/textures/item/money.png'
+			]
+			def missing = required.findAll { !names.contains(it) }
+			if (!missing.isEmpty()) throw new GradleException("Required runtime assets missing: ${missing}")
+			def runtimeClasses = [
+				'op/creditmanager/client/CreditManagerClient.class',
+				'op/creditmanager/client/CreditManagerShutdownCoordinator.class',
+				'op/creditmanager/client/core/CreditEventRepository.class',
+				'op/creditmanager/client/core/CreditStatisticsSnapshot.class',
+				'op/creditmanager/client/core/CreditStatisticsSnapshot$OpenCredit.class',
+				'op/creditmanager/client/core/PaymentMessageRouter.class',
+				'op/creditmanager/client/core/service/CreditMutationService.class',
+				'op/creditmanager/client/core/service/MutationCommitResult.class',
+				'op/creditmanager/client/gui/modern/recovery/RecoveryActionController.class',
+				'op/creditmanager/client/gui/modern/CreditStatusFilter.class',
+				'op/creditmanager/client/gui/modern/stats/StatisticsViewModel.class',
+				'op/creditmanager/client/money/MoneyAggregate.class',
+				'op/creditmanager/client/storage/ProcessStorageLease.class',
+				'op/creditmanager/client/storage/BackupMirrorPathResolver.class',
+				'op/creditmanager/client/storage/StorageRootResolver.class',
+				'op/creditmanager/client/storage/StorageRootResolver$StorageLocation.class',
+				'op/creditmanager/client/storage/db/BackupCheckpointService.class',
+				'op/creditmanager/client/storage/db/BackupMirrorService.class',
+				'op/creditmanager/client/storage/db/DatabaseSchemaSupportPolicy.class',
+				'op/creditmanager/client/storage/db/FreshDatabasePolicy.class',
+				'op/creditmanager/client/storage/db/StorageIdentityGuard.class',
+				'op/creditmanager/client/storage/db/DatabaseManager.class',
+				'op/creditmanager/client/storage/db/DatabaseManager$BackupArtifactType.class',
+				'op/creditmanager/client/storage/db/DatabaseManager$MutationCommitReceipt.class',
+				'op/creditmanager/client/storage/db/DatabaseManager$StatisticsEventSlice.class',
+				'op/creditmanager/client/money/MoneyRules.class',
+				'op/creditmanager/client/gui/modern/ModernMainScreen.class',
+				'op/creditmanager/client/gui/modern/ModernRecoveryScreen.class'
+			]
+			def missingClasses = runtimeClasses.findAll { !names.contains(it) }
+			if (!missingClasses.isEmpty()) throw new GradleException("Required runtime classes missing: ${missingClasses}")
+			if (names.any {
+				def lower = it.toLowerCase(java.util.Locale.ROOT)
+				it.endsWith('.java') || lower.startsWith('src/test/') || lower.startsWith('org/junit/') ||
+				lower.startsWith('org/opentest4j/') || lower.startsWith('org/hamcrest/') ||
+				lower.contains('/fixtures/') || lower.contains('/testdata/') ||
+				lower ==~ /.*\/(?:[^\/]*test(?:\$[^\/]*)?|tests?(?:\$[^\/]*)?)\.class/
+			}) {
+				throw new GradleException('Release JAR contains source, JUnit, fixture or test classes')
+			}
+		} finally {
+			zip.close()
 		}
 	}
 }
@@ -122,15 +216,23 @@ tasks.register('verifyNoDevCommandsInRelease') {
 	dependsOn tasks.named('remapJar')
 	doLast {
 		def releaseJar = tasks.named('remapJar').get().archiveFile.get().asFile
-		def forbiddenTerms = ['CmTest', 'devtools', 'TestData', 'DevFeatureGate', 'TEST_DATA', 'CMTEST', 'DevTest', 'TestDataChatHook', 'test-paylog', 'Test Command', 'local-dev']
-		def forbidden = new java.util.zip.ZipFile(releaseJar).withCloseable { zip ->
-			zip.entries().collect { entry ->
-				def payload = entry.directory || !entry.name.startsWith('op/creditmanager/') ? '' : new String(zip.getInputStream(entry).bytes, java.nio.charset.StandardCharsets.ISO_8859_1)
-				[name: entry.name, payload: payload]
-			}.findAll { entry -> forbiddenTerms.any { term -> entry.name.contains(term) || entry.payload.contains(term) } }
-		}
-		if (!forbidden.isEmpty()) {
-			throw new GradleException("Release jar contains development command classes: ${forbidden}")
+		if (!releaseJar.isFile()) throw new GradleException("Remapped release JAR missing: ${releaseJar}")
+		def zip = new java.util.zip.ZipFile(releaseJar)
+		try {
+			def forbidden = zip.entries().toList()*.name.findAll {
+				def lower = it.toLowerCase(java.util.Locale.ROOT)
+				lower.startsWith('op/creditmanager/client/dev/') ||
+				lower.startsWith('op/creditmanager/client/test/') ||
+				lower.startsWith('op/creditmanager/client/tests/') ||
+				lower.contains('/fixtures/') ||
+				lower.contains('/testdata/') ||
+				lower.contains('formatutilselftest') ||
+				lower.contains('dev-only') ||
+				lower.contains('test-only')
+			}
+			if (!forbidden.isEmpty()) throw new GradleException("Development-only release content found: ${forbidden}")
+		} finally {
+			zip.close()
 		}
 	}
 }

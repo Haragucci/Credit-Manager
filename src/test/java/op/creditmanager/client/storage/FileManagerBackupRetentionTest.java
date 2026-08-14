@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class FileManagerBackupRetentionTest {
     @TempDir
@@ -22,7 +23,7 @@ class FileManagerBackupRetentionTest {
     }
 
     @Test
-    void retainsBackupsIndependentlyPerBackupType() throws Exception {
+    void keepsDatabaseArchivesForTheCatalogAndArchivesExcessFileBackups() throws Exception {
         Files.createDirectories(dataDirectory);
         previousDirectory = (Path) dataDirectoryField().get(null);
         dataDirectoryField().set(null, dataDirectory);
@@ -34,10 +35,19 @@ class FileManagerBackupRetentionTest {
         FileManager.tidyAfterSuccessfulSave();
 
         try (var files = Files.list(backups)) {
-            assertEquals(12L, files.filter(path -> path.getFileName().toString().startsWith("creditmanager_backup_")).count());
+            assertEquals(13L, files.filter(path -> path.getFileName().toString().startsWith("creditmanager_backup_")).count());
         }
         try (var files = Files.list(backups)) {
             assertEquals(12L, files.filter(path -> path.getFileName().toString().startsWith("client_config_backup_")).count());
+        }
+        Path retired = FileManager.getRecoveryDirectory().resolve("retired-file-backups");
+        try (var files = Files.list(retired)) {
+            assertEquals(1L, files.count());
+        }
+        try (var files = Files.list(retired)) {
+            Path archived = files.findFirst().orElseThrow();
+            assertTrue(archived.getFileName().toString().startsWith("client_config_backup_0.json"));
+            assertEquals("backup", Files.readString(archived));
         }
     }
 

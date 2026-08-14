@@ -20,11 +20,12 @@ public final class PaylogSearchText {
         ZonedDateTime time = Instant.ofEpochMilli(entry.getTimestamp()).atZone(ZoneId.systemDefault());
         String source = safe(entry.getSource());
         String sourceWords = source.equalsIgnoreCase("MANUAL") ? "manual manuell" : source.equalsIgnoreCase("DETECTED") ? "detected erkannt" : source;
-        String wholeAmount = Math.abs(entry.getAmount() - Math.rint(entry.getAmount())) < 0.0000001D
-                ? Long.toString((long) entry.getAmount()) : "";
+        long amountMinor = entry.getAmountMinor();
+        String wholeAmount = amountMinor % 100L == 0L ? Long.toString(amountMinor / 100L) : "";
+        String exactAmount = op.creditmanager.client.money.MoneyRules.toMajor(amountMinor).toPlainString();
         String text = String.join(" ", safe(entry.getFromPlayer()), safe(entry.getToPlayer()), wholeAmount,
-                String.valueOf(entry.getAmount()), String.format(Locale.ROOT, "%.2f", entry.getAmount()),
-                FormatUtil.formatAmount(entry.getAmount()), FormatUtil.formatChartAmount(entry.getAmount(), false),
+                exactAmount, exactAmount.replace('.', ','),
+                FormatUtil.formatAmountMinor(amountMinor), FormatUtil.formatChartAmountMinor(amountMinor, false),
                 safe(entry.getRawText()), safe(entry.getMetadata()), sourceWords,
                 time.toLocalDate().toString(), GERMAN_DATE.format(time), GERMAN_DATE_TIME.format(time), String.valueOf(entry.getTimestamp()));
         return SearchNormalizer.normalize(text);

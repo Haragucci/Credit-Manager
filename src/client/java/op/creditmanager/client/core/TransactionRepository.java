@@ -56,7 +56,12 @@ public final class TransactionRepository {
     public Optional<TransactionEntry> find(UUID id) { return DatabaseManager.getInstance().findPaylog(id); }
     public synchronized long getRevision() { return revision; }
     public BoundedQueryCache.CacheStats queryCacheStats() { return queryCache.stats(); }
-    public synchronized boolean isWritable() { return !recoveryRequired && DatabaseManager.getInstance().isHealthy(); }
+    public synchronized boolean isWritable() { return !recoveryRequired && DatabaseManager.getInstance().isSafeForWrites(); }
+
+    public synchronized void acceptCommittedMutation(long committedRevision) {
+        revision = committedRevision;
+        queryCache.clear();
+    }
 
     public synchronized boolean resetCorruptTransactionsWithBackup() {
         DatabaseManager database = DatabaseManager.getInstance();
@@ -92,7 +97,7 @@ public final class TransactionRepository {
 
     private TransactionEntry copy(TransactionEntry source) {
         TransactionEntry copy = new TransactionEntry();
-        copy.setId(source.getId()); copy.setFromPlayer(source.getFromPlayer()); copy.setToPlayer(source.getToPlayer()); copy.setAmount(source.getAmount()); copy.setTimestamp(source.getTimestamp()); copy.setRawText(source.getRawText()); copy.setNormalizedText(source.getNormalizedText()); copy.setSource(source.getSource()); copy.setHash(source.getHash()); copy.setMetadata(source.getMetadata()); copy.setLinkedAmount(source.getLinkedAmount());
+        copy.setId(source.getId()); copy.setFromPlayer(source.getFromPlayer()); copy.setToPlayer(source.getToPlayer()); copy.setAmountMinor(source.getAmountMinor()); copy.setTimestamp(source.getTimestamp()); copy.setRawText(source.getRawText()); copy.setNormalizedText(source.getNormalizedText()); copy.setSource(source.getSource()); copy.setHash(source.getHash()); copy.setMetadata(source.getMetadata()); copy.setLinkedAmountMinor(source.getLinkedAmountMinor());
         return copy;
     }
 

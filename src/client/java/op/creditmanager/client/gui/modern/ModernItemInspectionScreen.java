@@ -39,9 +39,9 @@ public class ModernItemInspectionScreen extends ModernBaseScreen {
     public void render(DrawContext context, int mouseX, int mouseY, float delta) {
         renderShell(context, mouseX, mouseY);
 
-        String amount = payment.getAmount() == null
+        String amount = payment.getAmountMinor() <= 0L
                 ? "Ohne Geldwert"
-                : FormatUtil.formatAmount(payment.getAmount());
+                : FormatUtil.formatAmountMinor(payment.getAmountMinor());
 
         String from = safeName(credit == null ? null : credit.getDebtor());
         String to = safeName(credit == null ? null : credit.getCreditor());

@@ -31,6 +31,16 @@ public final class DataHealth {
         }
     }
 
+    public static synchronized void reportWarning(String reason, String warning) {
+        lastCheckedAt = System.currentTimeMillis();
+        reasons.add(reason);
+        if (pendingWarning == null) pendingWarning = warning;
+    }
+
+    public static synchronized void clearReason(String reason) {
+        if (reasons.remove(reason)) lastCheckedAt = System.currentTimeMillis();
+    }
+
     public static synchronized String consumeWarning() {
         String warning = pendingWarning;
         pendingWarning = null;

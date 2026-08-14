@@ -56,7 +56,7 @@ public final class ModernPaylogPaymentSelectionScreen extends ModernBaseScreen {
             return;
         }
         String key = searchField == null ? "" : searchField.getText().trim();
-        if (!key.equals(rawKey)) { rawKey = key; debouncer.update(key, System.currentTimeMillis()); loaded = false; queryError = null; }
+        if (!key.equals(rawKey)) { if (pending != null) pending.future().cancel(true); pending = null; sequence++; rawKey = key; debouncer.update(key, System.currentTimeMillis()); loaded = false; queryError = null; }
         if (pending != null && pending.future().isDone()) { apply(pending); pending = null; }
         if (pending == null && queryError == null && (force || debouncer.ready(System.currentTimeMillis()))) { force = false; schedule(); }
     }
@@ -83,7 +83,7 @@ public final class ModernPaylogPaymentSelectionScreen extends ModernBaseScreen {
     @Override public void render(DrawContext context, int mouseX, int mouseY, float delta) {
         renderShell(context, mouseX, mouseY);
         ModernLayout.positionTextField(searchField, contentX + 4, contentY + 4, Math.max(1, contentWidth - 8), contentY, contentHeight, true);
-        ModernUi.drawTruncated(context, textRenderer, credit.getDebtor() + " → " + credit.getCreditor() + " · offen " + FormatUtil.formatAmount(credit.getRemainingAmount()), contentX, contentY + 37, contentWidth, ModernUi.theme().muted);
+        ModernUi.drawTruncated(context, textRenderer, credit.getDebtor() + " → " + credit.getCreditor() + " · offen " + FormatUtil.formatAmountMinor(credit.getRemainingAmountMinor()), contentX, contentY + 37, contentWidth, ModernUi.theme().muted);
         int baseListY = contentY + 52;
         errorCardY = baseListY;
         int errorCardHeight = queryError == null ? 0 : errorCardHeight();
@@ -107,8 +107,8 @@ public final class ModernPaylogPaymentSelectionScreen extends ModernBaseScreen {
     private void drawRow(DrawContext context, int mouseX, int mouseY, TransactionEntry paylog, int x, int y, int width) {
         ModernUi.card(context, x, y, width, 38, ModernUi.contains(mouseX, mouseY, x, y, width, 38));
         ModernUi.drawTruncated(context, textRenderer, paylog.getFromPlayer() + " → " + paylog.getToPlayer(), x + 10, y + 8, Math.max(40, width - 128), ModernUi.theme().text);
-        ModernUi.drawTruncated(context, textRenderer, TimeUtil.formatDateTime(paylog.getTimestamp()) + " · Rest " + FormatUtil.formatAmount(paylog.getRemainingAmount()), x + 10, y + 22, Math.max(40, width - 128), ModernUi.theme().muted);
-        ModernUi.drawGuiTextRightAligned(context, textRenderer, FormatUtil.formatAmount(paylog.getAmount()), x + width - 10, y + 13, ModernUi.theme().success);
+        ModernUi.drawTruncated(context, textRenderer, TimeUtil.formatDateTime(paylog.getTimestamp()) + " · Rest " + FormatUtil.formatAmountMinor(paylog.getRemainingAmountMinor()), x + 10, y + 22, Math.max(40, width - 128), ModernUi.theme().muted);
+        ModernUi.drawGuiTextRightAligned(context, textRenderer, FormatUtil.formatAmountMinor(paylog.getAmountMinor()), x + width - 10, y + 13, ModernUi.theme().success);
     }
 
     private int errorCardHeight() { return ModernLayout.stack(Math.max(1, contentWidth - 12), 2, 74, 8) ? 76 : 48; }
@@ -140,6 +140,6 @@ public final class ModernPaylogPaymentSelectionScreen extends ModernBaseScreen {
     }
 
     @Override public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) { if (scroll.contains(mouseX, mouseY)) { scroll.scroll(verticalAmount); return true; } return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount); }
-    @Override protected void clearTransientState() { disposed = true; sequence++; scroll.reset(); pending = null; loaded = false; queryError = null; errorButtons = List.of(); super.clearTransientState(); }
+    @Override protected void clearTransientState() { disposed = true; sequence++; if (pending != null) pending.future().cancel(true); scroll.reset(); pending = null; loaded = false; queryError = null; errorButtons = List.of(); super.clearTransientState(); }
     private record Pending(long id, String key, CompletableFuture<DatabaseManager.QueryPage<TransactionEntry>> future) { }
 }

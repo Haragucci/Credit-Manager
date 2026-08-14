@@ -7,6 +7,7 @@ import op.creditmanager.client.gui.modern.theme.ColorUtil;
 import op.creditmanager.client.gui.modern.theme.ModernThemePalette;
 import op.creditmanager.client.util.FormatUtil;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -20,15 +21,15 @@ public final class ModernChartRenderer {
     }
 
     public static void bars(DrawContext context, TextRenderer renderer, int x, int y, int width, int height,
-                            double claims, double debts) {
+                            BigInteger claimsMinor, BigInteger debtsMinor) {
         if (width <= 0 || height <= 0) return;
 
         ModernThemePalette theme = ModernUi.theme();
         ModernUi.card(context, x, y, width, height, false);
         if (width < 28 || height < 36) return;
 
-        double safeClaims = safeAmount(claims);
-        double safeDebts = safeAmount(debts);
+        BigInteger safeClaims = safeAmount(claimsMinor);
+        BigInteger safeDebts = safeAmount(debtsMinor);
         int inset = clamp(width / 36, 6, 10);
         int innerLeft = x + inset;
         int innerRight = x + width - inset;
@@ -36,9 +37,9 @@ public final class ModernChartRenderer {
         int innerWidth = innerRight - innerLeft;
         if (innerWidth < 16 || innerBottom <= y + inset) return;
 
-        double balance = safeClaims - safeDebts;
+        BigInteger balance = safeClaims.subtract(safeDebts);
         String title = fitText(renderer, FULL_TITLE, COMPACT_TITLE, innerWidth);
-        String summary = FormatUtil.formatChartAmount(balance, balance > 0.0D);
+        String summary = FormatUtil.formatChartAmountMinor(balance, balance.signum() > 0);
         int headerY = y + inset;
         boolean headerInline = ModernUi.getGuiTextWidth(renderer, title) + 8
                 + ModernUi.getGuiTextWidth(renderer, summary) <= innerWidth;
@@ -54,12 +55,12 @@ public final class ModernChartRenderer {
             headerBottom = summaryY + TEXT_HEIGHT;
         }
 
-        if (safeClaims == 0.0D && safeDebts == 0.0D) {
+        if (safeClaims.signum() == 0 && safeDebts.signum() == 0) {
             drawEmptyState(context, renderer, innerLeft, innerRight, headerBottom, innerBottom, theme);
             return;
         }
 
-        double scale = niceCeil(Math.max(safeClaims, safeDebts));
+        BigInteger scale = safeClaims.max(safeDebts);
         int gridSteps = height >= 150 ? 4 : height >= 112 ? 3 : 2;
         List<String> axisLabels = axisLabels(scale, gridSteps);
         int widestAxisLabel = widestLabel(renderer, axisLabels);
@@ -71,8 +72,8 @@ public final class ModernChartRenderer {
             return;
         }
 
-        String claimValue = FormatUtil.formatChartAmount(safeClaims);
-        String debtValue = FormatUtil.formatChartAmount(safeDebts);
+        String claimValue = FormatUtil.formatChartAmountMinor(safeClaims);
+        String debtValue = FormatUtil.formatChartAmountMinor(safeDebts);
         int largestValueLabel = Math.max(ModernUi.getGuiTextWidth(renderer, claimValue),
                 ModernUi.getGuiTextWidth(renderer, debtValue));
         boolean valueLegend = plotWidth < 2 * (largestValueLabel + 6);
@@ -127,10 +128,10 @@ public final class ModernChartRenderer {
         }
     }
 
-    private static int drawBar(DrawContext context, int x, int top, int baseline, int width, double value,
-                               double scale, int color, ModernThemePalette theme) {
+    private static int drawBar(DrawContext context, int x, int top, int baseline, int width, BigInteger value,
+                               BigInteger scale, int color, ModernThemePalette theme) {
         int plotHeight = baseline - top;
-        int filledHeight = value <= 0.0D ? 0 : Math.max(2, (int) Math.round(plotHeight * value / scale));
+        int filledHeight = value.signum() <= 0 ? 0 : Math.max(2, scaledBarHeight(value, scale, plotHeight));
         filledHeight = Math.min(plotHeight, filledHeight);
         int filledTop = baseline - filledHeight;
 
@@ -143,12 +144,12 @@ public final class ModernChartRenderer {
         return filledTop;
     }
 
-    private static void drawSmartBarLabel(DrawContext context, TextRenderer renderer, String label, double value,
+    private static void drawSmartBarLabel(DrawContext context, TextRenderer renderer, String label, BigInteger value,
                                           int barX, int barWidth, int slotLeft, int slotRight, int barTop,
                                           int baseline, int filledTop, int color, ModernThemePalette theme) {
         int textWidth = ModernUi.getGuiTextWidth(renderer, label);
         int labelX = clamp(barX + barWidth / 2 - textWidth / 2, slotLeft + 1, slotRight - textWidth - 1);
-        if (value <= 0.0D) {
+        if (value.signum() <= 0) {
             ModernUi.drawGuiText(context, renderer, label, labelX, baseline - TEXT_HEIGHT - 2, theme.muted);
             return;
         }
@@ -227,10 +228,11 @@ public final class ModernChartRenderer {
         ModernUi.drawGuiTextCentered(context, renderer, message, (left + right) / 2, messageY, theme.muted);
     }
 
-    private static List<String> axisLabels(double scale, int steps) {
+    private static List<String> axisLabels(BigInteger scale, int steps) {
         List<String> labels = new ArrayList<>(steps + 1);
         for (int line = 0; line <= steps; line++) {
-            labels.add(FormatUtil.formatChartAmount(scale * (steps - line) / steps));
+            labels.add(FormatUtil.formatChartAmountMinor(scale.multiply(BigInteger.valueOf(steps - line))
+                    .divide(BigInteger.valueOf(steps))));
         }
         return labels;
     }
@@ -261,14 +263,20 @@ public final class ModernChartRenderer {
         return ModernUi.trimGuiText(renderer, compact, Math.max(1, maxWidth));
     }
 
-    private static int summaryColor(double balance, ModernThemePalette theme) {
-        if (balance > 0.0D) return theme.success;
-        if (balance < 0.0D) return theme.danger;
+    private static int summaryColor(BigInteger balance, ModernThemePalette theme) {
+        if (balance.signum() > 0) return theme.success;
+        if (balance.signum() < 0) return theme.danger;
         return theme.muted;
     }
 
-    private static double safeAmount(double value) {
-        return Double.isFinite(value) && value > 0.0D ? value : 0.0D;
+    private static BigInteger safeAmount(BigInteger value) {
+        return value != null && value.signum() > 0 ? value : BigInteger.ZERO;
+    }
+
+    static int scaledBarHeight(BigInteger value, BigInteger scale, int plotHeight) {
+        if (value == null || scale == null || value.signum() <= 0 || scale.signum() <= 0 || plotHeight <= 0) return 0;
+        BigInteger height = value.min(scale).multiply(BigInteger.valueOf(plotHeight)).divide(scale);
+        return height.min(BigInteger.valueOf(plotHeight)).intValue();
     }
 
     private static int clamp(int value, int minimum, int maximum) {

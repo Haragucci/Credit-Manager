@@ -74,6 +74,9 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
         }
         String filterKey = filterKey();
         if (!filterKey.equals(requestedFilterKey)) {
+            if (pending != null) pending.future().cancel(true);
+            pending = null;
+            requestSequence++;
             requestedFilterKey = filterKey;
             pageOffset = 0;
             scroll.reset();
@@ -210,11 +213,11 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
         context.fill(x + 8, y + 7, x + 11, y + 28, color);
         String otherPlayer = outgoing ? entry.getToPlayer() : entry.getFromPlayer();
         ModernUi.drawTruncated(context, textRenderer, (outgoing ? "An " : "Von ") + safe(otherPlayer), x + 19, y + 7, Math.max(1, width - 164), ModernUi.theme().text);
-        String linkState = entry.isFullyLinked() ? "Verknüpft" : entry.getLinkedAmount() > 0
-                ? "Rest: " + FormatUtil.formatAmount(entry.getRemainingAmount()) : "Klick: verknüpfen";
+        String linkState = entry.isFullyLinked() ? "Verknüpft" : entry.getLinkedAmountMinor() > 0L
+                ? "Rest: " + FormatUtil.formatAmountMinor(entry.getRemainingAmountMinor()) : "Klick: verknüpfen";
         ModernUi.drawTruncated(context, textRenderer, TimeUtil.formatDateTime(entry.getTimestamp()) + " · " + linkState,
                 x + 19, y + 20, Math.max(1, width - 164), ModernUi.theme().muted);
-        ModernUi.drawGuiTextRightAligned(context, textRenderer, (outgoing ? "-" : "+") + FormatUtil.formatAmount(entry.getAmount()), x + width - 12, y + 13, color);
+        ModernUi.drawGuiTextRightAligned(context, textRenderer, (outgoing ? "-" : "+") + FormatUtil.formatAmountMinor(entry.getAmountMinor()), x + width - 12, y + 13, color);
     }
 
     @Override public boolean mouseClicked(Click click, boolean doubled) {
@@ -277,7 +280,7 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
         scroll.reset();
         if (searchField != null) searchField.setText("");
         page = new DatabaseManager.QueryPage<>(List.of(), 0, 0, PAGE_SIZE);
-        appliedKey = ""; requestedFilterKey = ""; pending = null; queryError = null; errorButtons = List.of(); pageOffset = 0; forceQuery = false;
+        appliedKey = ""; requestedFilterKey = ""; if (pending != null) pending.future().cancel(true); pending = null; queryError = null; errorButtons = List.of(); pageOffset = 0; forceQuery = false;
         super.clearTransientState();
     }
 

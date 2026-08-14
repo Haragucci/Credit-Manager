@@ -10,6 +10,7 @@ import net.minecraft.client.gl.RenderPipelines;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import op.creditmanager.client.core.CreditManager;
+import op.creditmanager.client.core.service.MutationCommitResult;
 import op.creditmanager.client.gui.modern.theme.ModernThemePalette;
 import op.creditmanager.client.gui.modern.theme.ColorUtil;
 import op.creditmanager.client.gui.modern.toast.ModernToastManager;
@@ -53,19 +54,17 @@ public abstract class ModernBaseScreen extends Screen {
 
     @Override
     protected void init() {
-        int shortestSide = Math.max(1, Math.min(width, height));
-        int outerMargin = Math.min(Math.max(1, shortestSide / 16), 24);
-        panelWidth = Math.max(1, Math.min(760, width - outerMargin * 2));
-        panelHeight = Math.max(1, Math.min(460, height - outerMargin * 2));
-        panelX = (width - panelWidth) / 2;
-        panelY = (height - panelHeight) / 2;
-        compactLayout = panelWidth < 220 || panelHeight < 170;
-        sidebarWidth = compactLayout ? 0 : Math.min(150, Math.max(78, panelWidth / 5));
-        int contentInset = compactLayout ? Math.min(6, Math.max(1, panelWidth / 8)) : 18;
-        contentX = panelX + sidebarWidth + contentInset;
-        contentY = panelY + Math.min(48, Math.max(32, panelHeight / 3));
-        contentWidth = Math.max(1, panelX + panelWidth - contentInset - contentX);
-        contentHeight = Math.max(1, panelY + panelHeight - contentInset - contentY);
+        ModernLayout.ShellBounds layout = ModernLayout.shell(width, height);
+        panelWidth = layout.panelWidth();
+        panelHeight = layout.panelHeight();
+        panelX = layout.panelX();
+        panelY = layout.panelY();
+        compactLayout = layout.compact();
+        sidebarWidth = layout.sidebarWidth();
+        contentX = layout.contentX();
+        contentY = layout.contentY();
+        contentWidth = layout.contentWidth();
+        contentHeight = layout.contentHeight();
     }
 
     protected void renderShell(DrawContext context, int mouseX, int mouseY) {
@@ -231,6 +230,20 @@ public abstract class ModernBaseScreen extends Screen {
     }
     protected void toastWarning(String message) { toast(message, ModernToastType.WARNING); }
     protected void toastInfo(String message) { toast(message, ModernToastType.INFO); }
+
+    protected boolean showMutationCommitNotice() {
+        MutationCommitResult result = manager.consumeLastMutationCommit();
+        if (result == null || result.status() == MutationCommitResult.Status.COMMITTED_SYNCED) return false;
+        if (result.status() == MutationCommitResult.Status.COMMITTED_RELOAD_REQUIRED) {
+            toastWarning(result.userMessage());
+            return true;
+        }
+        if (result.status() == MutationCommitResult.Status.COMMITTED_DEGRADED) {
+            toastError(result.userMessage());
+            return true;
+        }
+        return false;
+    }
 
     protected boolean isAnyInputFocused() {
         if (getFocused() instanceof TextFieldWidget field && field.isFocused()) {

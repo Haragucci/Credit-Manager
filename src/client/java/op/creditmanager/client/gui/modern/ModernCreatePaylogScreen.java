@@ -130,12 +130,12 @@ public final class ModernCreatePaylogScreen extends ModernBaseScreen {
             return;
         }
         try {
-            double amount = FormatUtil.parseMoney(amountField.getText());
-            TransactionEntry entry = new TransactionEntry(payer.toLowerCase(Locale.ROOT), receiver.toLowerCase(Locale.ROOT), amount);
+            long amountMinor = FormatUtil.parseMoneyMinor(amountField.getText());
+            TransactionEntry entry = new TransactionEntry(payer.toLowerCase(Locale.ROOT), receiver.toLowerCase(Locale.ROOT), amountMinor);
             entry.setTimestamp(parseTimestamp());
             entry.setSource("MANUAL");
             String note = noteField.getText().trim();
-            entry.setRawText("[Manuell] " + payer + " -> " + receiver + ": " + FormatUtil.formatAmount(amount)
+            entry.setRawText("[Manuell] " + payer + " -> " + receiver + ": " + FormatUtil.formatAmountMinor(amountMinor)
                     + " am " + DateTimeFormatter.ofPattern("dd.MM.uuuu HH:mm").format(java.time.Instant.ofEpochMilli(entry.getTimestamp()).atZone(ZoneId.systemDefault()))
                     + (note.isBlank() ? "" : " | " + note));
             if (!TransactionRepository.getInstance().add(entry)) {

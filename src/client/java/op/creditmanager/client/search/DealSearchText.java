@@ -28,9 +28,9 @@ public final class DealSearchText {
         values.add(safe(entry.getNote()));
         values.add(entry.getId() == null ? "" : entry.getId().toString());
         if (entry.getId() != null) values.add(entry.getId().toString().substring(0, 8));
-        values.add(amountWords(entry.getAmount()));
-        values.add(amountWords(entry.getPaidAmount()));
-        values.add(amountWords(entry.getRemainingAmount()));
+        values.add(amountWords(entry.getAmountMinor()));
+        values.add(amountWords(entry.getPaidAmountMinor()));
+        values.add(amountWords(entry.getRemainingAmountMinor()));
         values.add(dateWords(entry.getCreatedAt()));
         if (entry.getCompletedAt() != null) values.add(dateWords(entry.getCompletedAt()));
         if (entry.getDueDate() != null) values.add(dateWords(entry.getDueDate()));
@@ -42,11 +42,11 @@ public final class DealSearchText {
         return normalized.isBlank() ? List.of() : List.of(normalized.split("\\s+"));
     }
 
-    private static String amountWords(double amount) {
-        String wholeAmount = Math.abs(amount - Math.rint(amount)) < 0.0000001D
-                ? Long.toString((long) amount) : "";
-        return wholeAmount + " " + amount + " " + String.format(Locale.ROOT, "%.2f", amount) + " "
-                + FormatUtil.formatAmount(amount) + " " + FormatUtil.formatChartAmount(amount, false);
+    private static String amountWords(long amountMinor) {
+        String exact = java.math.BigDecimal.valueOf(amountMinor, 2).toPlainString();
+        String wholeAmount = amountMinor % 100L == 0L ? Long.toString(amountMinor / 100L) : "";
+        return wholeAmount + " " + exact + " " + FormatUtil.formatAmountMinor(amountMinor) + " "
+                + FormatUtil.formatChartAmountMinor(amountMinor, false);
     }
 
     private static String dateWords(long timestamp) {

@@ -1,5 +1,7 @@
 package op.creditmanager.client.model;
 
+import op.creditmanager.client.money.MoneyRules;
+
 import java.util.UUID;
 
 public class TransactionEntry {
@@ -7,23 +9,28 @@ public class TransactionEntry {
     private UUID id;
     private String fromPlayer;
     private String toPlayer;
-    private double amount;
+    private long amountMinor;
     private long timestamp;
     private String rawText;
     private String normalizedText;
     private String source;
     private String hash;
     private String metadata;
-    private double linkedAmount;
+    private long linkedAmountMinor;
 
     public TransactionEntry() {}
 
-    public TransactionEntry(String fromPlayer, String toPlayer, double amount) {
+    public TransactionEntry(String fromPlayer, String toPlayer, long amountMinor) {
         this.id = UUID.randomUUID();
         this.fromPlayer = fromPlayer;
         this.toPlayer = toPlayer;
-        this.amount = amount;
+        this.amountMinor = amountMinor;
         this.timestamp = System.currentTimeMillis();
+    }
+
+    @Deprecated
+    public TransactionEntry(String fromPlayer, String toPlayer, double amount) {
+        this(fromPlayer, toPlayer, MoneyRules.fromLegacyDouble(amount, true).minorUnits());
     }
 
     public UUID getId() { return id; }
@@ -35,8 +42,10 @@ public class TransactionEntry {
     public String getToPlayer() { return toPlayer; }
     public void setToPlayer(String toPlayer) { this.toPlayer = toPlayer; }
 
-    public double getAmount() { return amount; }
-    public void setAmount(double amount) { this.amount = amount; }
+    public long getAmountMinor() { return amountMinor; }
+    public void setAmountMinor(long amountMinor) { this.amountMinor = amountMinor; }
+    @Deprecated public double getAmount() { return MoneyRules.toDisplayDouble(amountMinor); }
+    @Deprecated public void setAmount(double amount) { this.amountMinor = MoneyRules.fromLegacyDouble(amount, true).minorUnits(); }
 
     public long getTimestamp() { return timestamp; }
     public void setTimestamp(long timestamp) { this.timestamp = timestamp; }
@@ -56,8 +65,11 @@ public class TransactionEntry {
     public String getMetadata() { return metadata; }
     public void setMetadata(String metadata) { this.metadata = metadata; }
 
-    public double getLinkedAmount() { return linkedAmount; }
-    public void setLinkedAmount(double linkedAmount) { this.linkedAmount = Math.max(0.0D, linkedAmount); }
-    public double getRemainingAmount() { return Math.max(0.0D, amount - linkedAmount); }
-    public boolean isFullyLinked() { return getRemainingAmount() <= 0.0001D; }
+    public long getLinkedAmountMinor() { return linkedAmountMinor; }
+    public void setLinkedAmountMinor(long linkedAmountMinor) { this.linkedAmountMinor = Math.max(0L, linkedAmountMinor); }
+    public long getRemainingAmountMinor() { return Math.max(0L, Math.subtractExact(amountMinor, linkedAmountMinor)); }
+    public boolean isFullyLinked() { return getRemainingAmountMinor() == 0L; }
+    @Deprecated public double getLinkedAmount() { return MoneyRules.toDisplayDouble(linkedAmountMinor); }
+    @Deprecated public void setLinkedAmount(double linkedAmount) { this.linkedAmountMinor = MoneyRules.fromLegacyDouble(Math.max(0D, linkedAmount), false).minorUnits(); }
+    @Deprecated public double getRemainingAmount() { return MoneyRules.toDisplayDouble(getRemainingAmountMinor()); }
 }

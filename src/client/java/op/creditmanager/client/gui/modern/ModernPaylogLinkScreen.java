@@ -27,7 +27,7 @@ public final class ModernPaylogLinkScreen extends ModernBaseScreen {
         renderShell(context, mouseX, mouseY);
         ModernUi.card(context, contentX, contentY + 5, contentWidth, 59, false);
         ModernUi.drawTruncated(context, textRenderer, safe(paylog.getFromPlayer()) + " → " + safe(paylog.getToPlayer()), contentX + 10, contentY + 14, contentWidth - 20, ModernUi.theme().text);
-        ModernUi.drawGuiText(context, textRenderer, "Paylog: " + FormatUtil.formatAmount(paylog.getAmount()) + " · verfügbar: " + FormatUtil.formatAmount(paylog.getRemainingAmount()),
+        ModernUi.drawGuiText(context, textRenderer, "Paylog: " + FormatUtil.formatAmountMinor(paylog.getAmountMinor()) + " · verfügbar: " + FormatUtil.formatAmountMinor(paylog.getRemainingAmountMinor()),
                 contentX + 10, contentY + 31, paylog.isFullyLinked() ? ModernUi.theme().success : ModernUi.theme().muted);
         ModernUi.drawGuiText(context, textRenderer, "Wähle einen passenden offenen Deal", contentX + 10, contentY + 47, ModernUi.theme().muted);
 
@@ -58,9 +58,9 @@ public final class ModernPaylogLinkScreen extends ModernBaseScreen {
     private void drawDeal(DrawContext context, int mouseX, int mouseY, CreditEntry deal, int x, int y, int width) {
         ModernUi.card(context, x, y, width, 39, ModernUi.contains(mouseX, mouseY, x, y, width, 39));
         ModernUi.drawTruncated(context, textRenderer, deal.getDealName(), x + 10, y + 8, Math.max(44, width - 145), ModernUi.theme().text);
-        ModernUi.drawTruncated(context, textRenderer, "Offen: " + FormatUtil.formatAmount(deal.getRemainingAmount()) + " · klicken zum Buchen", x + 10, y + 23,
+        ModernUi.drawTruncated(context, textRenderer, "Offen: " + FormatUtil.formatAmountMinor(deal.getRemainingAmountMinor()) + " · klicken zum Buchen", x + 10, y + 23,
                 Math.max(44, width - 145), ModernUi.theme().muted);
-        ModernUi.drawGuiTextRightAligned(context, textRenderer, FormatUtil.formatAmount(Math.min(paylog.getRemainingAmount(), deal.getRemainingAmount())),
+        ModernUi.drawGuiTextRightAligned(context, textRenderer, FormatUtil.formatAmountMinor(Math.min(paylog.getRemainingAmountMinor(), deal.getRemainingAmountMinor())),
                 x + width - 10, y + 14, ModernUi.theme().success);
     }
 
@@ -82,9 +82,10 @@ public final class ModernPaylogLinkScreen extends ModernBaseScreen {
         try {
             CreditManager.PaylogLinkResult result = manager.linkPaylogToDeal(paylog.getId(), deal.getId());
             if (result.linked()) {
-                if (result.remainingPaylogAmount() > 0.0001D) {
-                    toastWarning("Teilbetrag gebucht; " + FormatUtil.formatAmount(result.remainingPaylogAmount()) + " bleiben im Paylog verfügbar.");
-                } else {
+                boolean commitNoticeShown = showMutationCommitNotice();
+                if (!commitNoticeShown && result.remainingPaylogMinor() > 0L) {
+                    toastWarning("Teilbetrag gebucht; " + FormatUtil.formatAmountMinor(result.remainingPaylogMinor()) + " bleiben im Paylog verfügbar.");
+                } else if (!commitNoticeShown) {
                     toastSuccess("Paylog vollständig als Zahlung gebucht.");
                 }
                 closeToParent();

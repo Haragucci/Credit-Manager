@@ -243,9 +243,13 @@ public class ModernStatisticsScreen extends ModernBaseScreen {
         java.util.function.BooleanSupplier stillCurrent = () -> manager.getRevision() == requestedKey.managerRevision()
                 && eventRepository.getRevision() == requestedKey.eventRevision();
         if (retry) {
-            statisticsViewModel.retry(requestedKey, loader, stillCurrent, ModernQueryExecutor.get(), runnable -> MinecraftClient.getInstance().execute(runnable));
+            statisticsViewModel.retryLatest(requestedKey, loader, stillCurrent,
+                    supplier -> ModernQueryExecutor.submitLatest(this, supplier),
+                    runnable -> MinecraftClient.getInstance().execute(runnable));
         } else {
-            statisticsViewModel.request(requestedKey, loader, stillCurrent, ModernQueryExecutor.get(), runnable -> MinecraftClient.getInstance().execute(runnable));
+            statisticsViewModel.requestLatest(requestedKey, loader, stillCurrent,
+                    supplier -> ModernQueryExecutor.submitLatest(this, supplier),
+                    runnable -> MinecraftClient.getInstance().execute(runnable));
         }
     }
 
@@ -288,6 +292,7 @@ public class ModernStatisticsScreen extends ModernBaseScreen {
         validationMessage = "";
         retryBounds = null;
         statisticsViewModel.close();
+        ModernQueryExecutor.cancel(this);
         super.clearTransientState();
     }
 }

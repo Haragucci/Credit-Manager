@@ -72,13 +72,7 @@ public final class PaylogSearch {
     }
 
     private static int textScore(TransactionEntry entry, String token) {
-        String wanted = SearchNormalizer.normalize(token);
-        if (wanted.isEmpty()) return 1;
-        String visible = SearchNormalizer.normalize(visibleText(entry));
-        if (visible.equals(wanted)) return 950;
-        if (visible.startsWith(wanted)) return 850;
-        if (visible.contains(wanted)) return 700;
-        return Math.max(FuzzySearch.score(entry.getFromPlayer(), token), FuzzySearch.score(entry.getToPlayer(), token));
+        return FuzzySearch.score(visibleText(entry), token);
     }
 
     private static String visibleText(TransactionEntry entry) {

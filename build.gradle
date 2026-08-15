@@ -41,7 +41,7 @@ dependencies {
 	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
 	// H2 is a pure-Java embedded database.  Loom packages it into the client jar,
 	// so CreditManager has no native or online database dependency at runtime.
-	implementation include("com.h2database:h2:2.3.232")
+	implementation include("com.h2database:h2:2.3.230")
 
 	// Fabric API. This is technically optional, but you probably want it anyway.
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
@@ -135,8 +135,8 @@ tasks.register('verifyReleaseJar') {
 			if (metadata.depends?.minecraft != '1.21.11' || metadata.depends?.java != '>=21' || metadata.depends?.fabricloader != '>=0.18.4' || metadata.depends?.get('fabric-api') == null) {
 				throw new GradleException('fabric.mod.json runtime dependencies are invalid')
 			}
-			def h2 = names.findAll { it ==~ /META-INF\/jars\/h2-2\.3\.232\.jar/ }
-			if (h2.size() != 1) throw new GradleException('Expected exactly one nested H2 2.3.232 runtime JAR')
+			def h2 = names.findAll { it ==~ /META-INF\/jars\/h2-2\.3\.230\.jar/ }
+			if (h2.size() != 1) throw new GradleException('Expected exactly one nested H2 2.3.230 runtime JAR')
 			def h2Entry = zip.getEntry(h2.first())
 			def h2RuntimeClasses = [] as Set
 			def nestedH2 = new java.util.zip.ZipInputStream(zip.getInputStream(h2Entry))

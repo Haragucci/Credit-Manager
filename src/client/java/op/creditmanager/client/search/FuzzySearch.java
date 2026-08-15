@@ -8,16 +8,29 @@ public final class FuzzySearch {
         String value = SearchNormalizer.normalize(candidate);
         String wanted = SearchNormalizer.normalize(query);
         if (wanted.isEmpty()) return 1;
+        String[] queryTokens = wanted.split(" ");
+        if (queryTokens.length > 1) {
+            int total = 0;
+            for (String queryToken : queryTokens) {
+                int tokenScore = scoreNormalized(value, queryToken);
+                if (tokenScore == 0) return 0;
+                total += tokenScore;
+            }
+            return total / queryTokens.length;
+        }
+        return scoreNormalized(value, wanted);
+    }
+
+    private static int scoreNormalized(String value, String wanted) {
         if (value.equals(wanted)) return 1_000;
         if (value.startsWith(wanted)) return 800 - Math.min(200, value.length() - wanted.length());
-        if (value.contains(wanted)) return 600 - Math.min(180, value.indexOf(wanted));
         int best = 0;
         for (String token : value.split(" ")) {
-            if (token.startsWith(wanted)) best = Math.max(best, 500);
-            else if (token.contains(wanted)) best = Math.max(best, 400);
-            else if (!token.isEmpty()) {
+            if (token.equals(wanted)) best = Math.max(best, 700);
+            else if (token.startsWith(wanted)) best = Math.max(best, 500);
+            else if (wanted.length() >= 4 && !token.isEmpty()) {
                 int distance = damerauLevenshtein(token, wanted);
-                int tolerance = wanted.length() <= 4 ? 1 : Math.max(2, wanted.length() / 3);
+                int tolerance = wanted.length() == 4 ? 1 : Math.max(2, wanted.length() / 3);
                 if (distance <= tolerance) best = Math.max(best, 300 - distance * 45);
             }
         }

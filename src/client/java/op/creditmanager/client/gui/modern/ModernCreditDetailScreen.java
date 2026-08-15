@@ -42,6 +42,7 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
     private GuiFontMode layoutFont;
     private boolean layoutExpanded;
     private boolean noteExpanded;
+    private final MutationSubmissionGuard submissionGuard = new MutationSubmissionGuard();
 
     private enum DealAction { ARCHIVE, CLOSE }
 
@@ -147,6 +148,12 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
     }
 
     private void renderActions(DrawContext context, int mouseX, int mouseY, List<ModernLayout.Bounds> relative) {
+        if (submissionGuard.isActive()) {
+            for (ModernLayout.Bounds bounds : relative) {
+                drawAction(context, mouseX, mouseY, bounds, "Speichert…", ModernUi.theme().buttonNeutral);
+            }
+            return;
+        }
         boolean finished = CreditManager.STATUS_PAID.equals(entry.getStatus())
                 || CreditManager.STATUS_CLOSED.equals(entry.getStatus()) || CreditManager.STATUS_CANCELLED.equals(entry.getStatus());
         boolean canReactivate = entry.isArchived() || CreditManager.STATUS_CLOSED.equals(entry.getStatus()) || CreditManager.STATUS_CANCELLED.equals(entry.getStatus());
@@ -166,7 +173,7 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
         int x = contentX + bounds.x();
         int y = translatedY(bounds.y());
         ModernUi.button(context, textRenderer, x, y, bounds.width(), bounds.height(), label, color,
-                ModernUi.contains(mouseX, mouseY, x, y, bounds.width(), bounds.height()));
+                !submissionGuard.isActive() && ModernUi.contains(mouseX, mouseY, x, y, bounds.width(), bounds.height()));
     }
 
     private void renderPayments(DrawContext context, int mouseX, int mouseY, List<Payment> payments,
@@ -221,9 +228,10 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
         String amount = FormatUtil.formatAmountMinor(payment.getAmountMinor());
         ModernUi.drawGuiTextRightAligned(context, textRenderer, amount, x + width - 70, y + 7, color);
         boolean armed = paymentDeleteArmed != null && paymentDeleteArmed.equals(payment.getId());
-        ModernUi.button(context, textRenderer, x + width - 62, y + 7, 54, 20, armed ? "Bestätigen" : "Löschen",
+        ModernUi.button(context, textRenderer, x + width - 62, y + 7, 54, 20,
+                submissionGuard.isActive() ? "Warten…" : armed ? "Bestätigen" : "Löschen",
                 armed ? ModernUi.theme().buttonDanger : ModernUi.theme().buttonNeutral,
-                ModernUi.contains(mouseX, mouseY, x + width - 62, y + 7, 54, 20));
+                !submissionGuard.isActive() && ModernUi.contains(mouseX, mouseY, x + width - 62, y + 7, 54, 20));
     }
 
     @Override
@@ -290,63 +298,72 @@ public class ModernCreditDetailScreen extends ModernBaseScreen {
     }
 
     private void archiveDeal() {
+        if (submissionGuard.isActive()) return;
         if (pendingDealAction != DealAction.ARCHIVE) {
             pendingDealAction = DealAction.ARCHIVE;
             toastWarning("Erneut klicken, um den Deal zu archivieren.");
             return;
         }
-        try {
-            manager.archiveCredit(entry.getId());
-            pendingDealAction = null;
-            if (!showMutationCommitNotice()) toastSuccess("Deal archiviert.");
-        } catch (CreditManager.CreditException exception) {
-            pendingDealAction = null;
-            toastError(exception.getMessage());
-        }
+        UUID creditId = entry.getId();
+        pendingDealAction = null;
+        submitMutation(submissionGuard, () -> manager.archiveCredit(creditId),
+                (result, failure, screenCurrent) -> completeDealMutation(
+                        result, failure, screenCurrent, "Deal archiviert.", "Deal konnte nicht archiviert werden."));
     }
 
     private void closeDeal() {
+        if (submissionGuard.isActive()) return;
         if (pendingDealAction != DealAction.CLOSE) {
             pendingDealAction = DealAction.CLOSE;
             toastWarning("Erneut klicken, um den Deal ohne Zahlung abzuschließen.");
             return;
         }
-        try {
-            manager.closeCredit(entry.getId());
-            pendingDealAction = null;
-            if (!showMutationCommitNotice()) toastSuccess("Deal abgeschlossen.");
-        } catch (CreditManager.CreditException exception) {
-            pendingDealAction = null;
-            toastError(exception.getMessage());
-        }
+        UUID creditId = entry.getId();
+        pendingDealAction = null;
+        submitMutation(submissionGuard, () -> manager.closeCredit(creditId),
+                (result, failure, screenCurrent) -> completeDealMutation(
+                        result, failure, screenCurrent, "Deal abgeschlossen.", "Deal konnte nicht abgeschlossen werden."));
     }
 
     private void reactivateDeal() {
-        try {
-            manager.reactivateCredit(entry.getId());
-            if (!showMutationCommitNotice()) toastSuccess("Deal reaktiviert.");
-        } catch (CreditManager.CreditException exception) {
-            toastError(exception.getMessage());
-        }
+        if (submissionGuard.isActive()) return;
+        UUID creditId = entry.getId();
+        submitMutation(submissionGuard, () -> manager.reactivateCredit(creditId),
+                (result, failure, screenCurrent) -> completeDealMutation(
+                        result, failure, screenCurrent, "Deal reaktiviert.", "Deal konnte nicht reaktiviert werden."));
     }
 
     private void deletePayment(Payment payment) {
+        if (submissionGuard.isActive()) return;
         if (!payment.getId().equals(paymentDeleteArmed)) {
             paymentDeleteArmed = payment.getId();
             paymentDeleteArmedAt = System.currentTimeMillis();
             toastWarning("Löschen erneut bestätigen.");
             return;
         }
-        try {
-            manager.deletePayment(payment.getId());
-            paymentDeleteArmed = null;
-            paymentDeleteArmedAt = 0L;
-            if (!showMutationCommitNotice()) toastSuccess("Zahlung gelöscht.");
-        } catch (CreditManager.CreditException exception) {
-            paymentDeleteArmed = null;
-            paymentDeleteArmedAt = 0L;
-            toastError(exception.getMessage());
+        UUID paymentId = payment.getId();
+        paymentDeleteArmed = null;
+        paymentDeleteArmedAt = 0L;
+        submitMutation(submissionGuard, () -> {
+            manager.deletePayment(paymentId);
+            return null;
+        }, (result, failure, screenCurrent) -> {
+            if (failure != null) {
+                toastError(failure.getMessage() == null ? "Zahlung konnte nicht gelöscht werden." : failure.getMessage());
+                return;
+            }
+            if (!showMutationCommitNotice(result.commitResult())) toastSuccess("Zahlung gelöscht.");
+        });
+    }
+
+    private void completeDealMutation(op.creditmanager.client.core.CreditManagerMutationExecutor.MutationOutcome<CreditEntry> result,
+                                      Throwable failure, boolean screenCurrent, String success, String fallback) {
+        if (failure != null) {
+            toastError(failure.getMessage() == null ? fallback : failure.getMessage());
+            return;
         }
+        if (!showMutationCommitNotice(result.commitResult())) toastSuccess(success);
+        if (screenCurrent && result.value() != null) entry = result.value();
     }
 
     @Override

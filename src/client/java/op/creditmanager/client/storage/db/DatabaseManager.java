@@ -70,6 +70,7 @@ public final class DatabaseManager {
     public Optional<TransactionEntry> findPaylog(UUID id) { return coordinator.findPaylog(id); }
     public int addPaylogsBatch(Collection<TransactionEntry> entries) { int result = coordinator.addPaylogsBatch(entries); checkpoint(result > 0); return result; }
     public BatchInsertResult addPaylogsBatchDetailed(Collection<TransactionEntry> entries) { BatchInsertResult result = coordinator.addPaylogsBatchDetailed(entries); checkpoint(result.inserted() > 0); return result; }
+    public List<TransactionEntry> findPaylogCandidates(long minTimestamp, long maxTimestamp) { return coordinator.findPaylogCandidates(minTimestamp, maxTimestamp); }
     public List<TransactionEntry> queryPaylogs(String player, int direction, String query, int limit, int offset) { return coordinator.queryPaylogs(player, direction, query, limit, offset); }
     public QueryPage<TransactionEntry> queryPaylogPage(String player, int direction, String query, int limit, int offset) { return coordinator.queryPaylogPage(player, direction, query, limit, offset); }
     public QueryPage<CreditEntry> queryDealHistoryPage(String player, String query, int limit, int offset) { return coordinator.queryDealHistoryPage(player, query, limit, offset); }
@@ -101,6 +102,11 @@ public final class DatabaseManager {
     }
 
     public synchronized boolean shutdown(Duration timeout) {
+        boolean flushed = flushBackupCheckpoint(timeout);
+        return flushed && releaseStorageAfterCheckpoint();
+    }
+
+    public synchronized boolean flushBackupCheckpoint(Duration timeout) {
         boolean flushed = true;
         if (checkpointService != null) {
             flushed = checkpointService.flushAndShutdown(timeout);
@@ -109,8 +115,13 @@ public final class DatabaseManager {
                 checkpointRoot = null;
             }
         }
-        if (flushed) FileManager.shutdown();
         return flushed;
+    }
+
+    public synchronized boolean releaseStorageAfterCheckpoint() {
+        if (checkpointService != null) return false;
+        FileManager.shutdown();
+        return true;
     }
 
     private void checkpoint(boolean committed) {
@@ -123,7 +134,12 @@ public final class DatabaseManager {
     }
 
     private synchronized void ensureCheckpointService() {
-        if (FileManager.storageAccessState() != FileManager.StorageAccessState.PRIMARY || !coordinator.isHealthy()) return;
+        if (FileManager.storageAccessState() != FileManager.StorageAccessState.PRIMARY || !coordinator.isHealthy()) {
+            if (checkpointService != null) checkpointService.stopNow();
+            checkpointService = null;
+            checkpointRoot = null;
+            return;
+        }
         Path currentRoot = FileManager.getDataDirectory().toAbsolutePath().normalize();
         if (checkpointService != null && currentRoot.equals(checkpointRoot)) return;
         if (checkpointService != null) checkpointService.stopNow();

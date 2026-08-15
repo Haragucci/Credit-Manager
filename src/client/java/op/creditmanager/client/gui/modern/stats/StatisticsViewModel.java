@@ -40,18 +40,37 @@ public final class StatisticsViewModel {
         request(key, loader, stillCurrent, executor, publication, true);
     }
 
+    public void requestLatest(StatisticsViewKey key, Supplier<CreditStatistics> loader,
+                              BooleanSupplier stillCurrent, QuerySubmitter submitter,
+                              Consumer<Runnable> publication) {
+        request(key, loader, stillCurrent, submitter, publication, false);
+    }
+
+    public void retryLatest(StatisticsViewKey key, Supplier<CreditStatistics> loader,
+                            BooleanSupplier stillCurrent, QuerySubmitter submitter,
+                            Consumer<Runnable> publication) {
+        request(key, loader, stillCurrent, submitter, publication, true);
+    }
+
     private void request(StatisticsViewKey key, Supplier<CreditStatistics> loader, BooleanSupplier stillCurrent, Executor executor,
                          Consumer<Runnable> publication, boolean force) {
+        request(key, loader, stillCurrent,
+                (QuerySubmitter) value -> CompletableFuture.supplyAsync(value, executor),
+                publication, force);
+    }
+
+    private void request(StatisticsViewKey key, Supplier<CreditStatistics> loader, BooleanSupplier stillCurrent,
+                         QuerySubmitter submitter, Consumer<Runnable> publication, boolean force) {
         Objects.requireNonNull(key);
         Objects.requireNonNull(loader);
         Objects.requireNonNull(stillCurrent);
-        Objects.requireNonNull(executor);
+        Objects.requireNonNull(submitter);
         Objects.requireNonNull(publication);
         CompletableFuture<CreditStatistics> future;
         LatestQueryController.Ticket<StatisticsViewKey, CreditStatistics> ticket;
         synchronized (this) {
             if (!force && (key.equals(requestedKey) || key.equals(loadedKey))) return;
-            future = CompletableFuture.supplyAsync(loader, executor);
+            future = submitter.submit(loader);
             ticket = queries.replace(key, future);
             requestedKey = key;
             state = StatisticsViewState.loading();
@@ -133,5 +152,10 @@ public final class StatisticsViewModel {
                 && statistics.openDebtCount() == 0
                 && statistics.openClaimsMinor().equals(BigInteger.ZERO)
                 && statistics.openDebtsMinor().equals(BigInteger.ZERO);
+    }
+
+    @FunctionalInterface
+    public interface QuerySubmitter {
+        CompletableFuture<CreditStatistics> submit(Supplier<CreditStatistics> loader);
     }
 }

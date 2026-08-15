@@ -3,6 +3,7 @@ package op.creditmanager.client;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
@@ -17,7 +18,9 @@ import op.creditmanager.client.core.CreditRepository;
 import op.creditmanager.client.core.PaymentDetector;
 import op.creditmanager.client.core.PaymentMessageRouter;
 import op.creditmanager.client.core.TransactionRepository;
+import op.creditmanager.client.gui.SkinHeadUtil;
 import op.creditmanager.client.gui.modern.toast.ModernToastManager;
+import op.creditmanager.client.paylog.importer.BankPaylogImportController;
 import op.creditmanager.client.storage.FileManager;
 import op.creditmanager.client.storage.db.DatabaseHealthChecker;
 import op.creditmanager.client.storage.db.DatabaseManager;
@@ -43,9 +46,12 @@ public class CreditManagerClient implements ClientModInitializer {
         DatabaseManager database = DatabaseManager.getInstance();
         database.initialize();
         ClientConfigManager.reload();
+        SkinHeadUtil.initializeAsync();
 
         creditRepository = new CreditRepository();
         creditManager = new CreditManager(creditRepository);
+        BankPaylogImportController bankImportController = BankPaylogImportController.getInstance();
+        bankImportController.initialize(creditManager);
         paymentDetector = database.isHealthy() ? new PaymentDetector(creditManager) : null;
         if (database.isHealthy()) {
             DatabaseHealthChecker.getInstance().check();
@@ -71,6 +77,7 @@ public class CreditManagerClient implements ClientModInitializer {
             if (creditManager != null) CreditManagerCommand.register(dispatcher, creditManager);
             else LOGGER.error("CreditManager ist null beim Command-Setup!");
         });
+        ClientTickEvents.END_CLIENT_TICK.register(bankImportController::tick);
 
         ClientReceiveMessageEvents.CHAT.register((message, signedMessage, sender, params, receptionTimestamp) -> {
             runPaymentMessageCallback("incoming CHAT payment message metadata", () -> {
@@ -95,18 +102,27 @@ public class CreditManagerClient implements ClientModInitializer {
                     System.currentTimeMillis(), null, CreditManagerClient::logPaymentMessageFailure);
         }));
 
-        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) ->
-                PaymentMessageRouter.rotateContext(paymentDetector, serverIdentity(client), CreditManagerClient::logPaymentMessageFailure));
-        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) ->
-                PaymentMessageRouter.rotateContext(paymentDetector, "disconnected", CreditManagerClient::logPaymentMessageFailure));
+        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
+            PaymentMessageRouter.rotateContext(paymentDetector, serverIdentity(client), CreditManagerClient::logPaymentMessageFailure);
+            bankImportController.onJoin();
+        });
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+            PaymentMessageRouter.rotateContext(paymentDetector, "disconnected", CreditManagerClient::logPaymentMessageFailure);
+            bankImportController.onDisconnect();
+        });
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
             shuttingDown = true;
             paymentDetector = null;
+            bankImportController.shutdown();
             CreditManagerShutdownCoordinator.ShutdownResult result = CreditManagerShutdownCoordinator.shutdown();
-            if (!result.recoveryStopped()) {
+            if (!result.mutationsStopped()) {
+                LOGGER.error("[CreditManager] Angenommene Datenänderungen konnten beim Shutdown nicht vollständig abgeschlossen werden; Backup und Storage-Lease bleiben aktiv.");
+            } else if (!result.recoveryStopped()) {
                 LOGGER.error("[CreditManager] Kritische Recovery-Aktion lief beim Shutdown weiter; der Storage-Lease bleibt bis zum JVM-Ende gehalten.");
             } else if (!result.backupFlushed()) {
                 LOGGER.warn("[CreditManager] Finaler Backup-Checkpoint konnte innerhalb des Shutdown-Limits nicht bestätigt werden; der Storage-Lease bleibt bis zum JVM-Ende gehalten.");
+            } else if (!result.queriesStopped() || !result.skinFlushed()) {
+                LOGGER.warn("[CreditManager] Hintergrund-Worker konnten beim Shutdown nicht vollständig beendet werden; der Storage-Lease bleibt bis zum JVM-Ende gehalten.");
             }
         });
 

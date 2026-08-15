@@ -19,6 +19,25 @@ final class DatabaseQueryService {
         return queryPaylogPage(player, direction, query, limit, offset).entries();
     }
 
+    List<TransactionEntry> findPaylogCandidates(long minTimestamp, long maxTimestamp) {
+        if (minTimestamp < 0L || maxTimestamp < minTimestamp) return List.of();
+        return database.executeQueryWithSchemaRetry("Paylog-Kandidaten konnten nicht aus der Datenbank geladen werden.", () -> {
+            try (Connection connection = database.connection()) {
+                database.beginConsistentRead(connection);
+                String sql = "SELECT id, payer, receiver, amount, raw_text, normalized_text, created_at, entry_hash, source, metadata, linked_amount, (SELECT COUNT(paylog_id) FROM payments WHERE 1=0) AS schema_guard FROM paylogs WHERE created_at>=? AND created_at<=? ORDER BY created_at ASC, id ASC";
+                try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                    statement.setLong(1, minTimestamp);
+                    statement.setLong(2, maxTimestamp);
+                    try (ResultSet result = statement.executeQuery()) {
+                        List<TransactionEntry> entries = new ArrayList<>();
+                        while (result.next()) entries.add(database.readPaylog(result));
+                        return List.copyOf(entries);
+                    }
+                }
+            }
+        });
+    }
+
     DatabaseManager.QueryPage<TransactionEntry> queryPaylogPage(String player, int direction, String query, int limit, int offset) {
         int pageSize = Math.max(1, Math.min(DatabaseManager.PAGE_SIZE, limit));
         StringBuilder where = new StringBuilder(" WHERE 1=1");
@@ -86,8 +105,8 @@ final class DatabaseQueryService {
         List<String> values = new ArrayList<>(); values.add(lowerPlayer); values.add(lowerPlayer);
         if (!includeArchived) where.append(" AND archived=FALSE");
         for (String token : DealSearchText.tokens(query)) {
-            where.append(" AND EXISTS (SELECT 1 FROM deal_search_tokens tokens WHERE tokens.credit_id=credits.id AND tokens.token=?)");
-            values.add(token);
+            where.append(" AND EXISTS (SELECT 1 FROM deal_search_tokens tokens WHERE tokens.credit_id=credits.id AND tokens.token LIKE ? ESCAPE '!')");
+            values.add(database.escapeLike(token) + '%');
         }
         String order = historyOrder(sort == null ? DatabaseManager.DealHistorySort.NEWEST : sort);
         return database.executeQueryWithSchemaRetry("Deal-History konnte nicht aus der Datenbank geladen werden.", () -> {
@@ -110,7 +129,7 @@ final class DatabaseQueryService {
             case "offen", "rest" -> where.append(" AND ").append(linked).append("<amount");
             case "manual", "manuell" -> where.append(" AND UPPER(COALESCE(source,''))='MANUAL'");
             case "detected", "erkannt" -> where.append(" AND UPPER(COALESCE(source,''))='DETECTED'");
-            default -> { where.append(" AND (EXISTS (SELECT 1 FROM paylog_search_tokens tokens WHERE tokens.paylog_id=paylogs.id AND tokens.token=?) OR LOWER(COALESCE(source,'')) LIKE ? ESCAPE '!')"); values.add(token); values.add('%' + database.escapeLike(token) + '%'); }
+            default -> { where.append(" AND (EXISTS (SELECT 1 FROM paylog_search_tokens tokens WHERE tokens.paylog_id=paylogs.id AND tokens.token LIKE ? ESCAPE '!') OR LOWER(COALESCE(source,'')) LIKE ? ESCAPE '!')"); values.add(database.escapeLike(token) + '%'); values.add(database.escapeLike(token) + '%'); }
         }
     }
 

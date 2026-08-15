@@ -13,6 +13,7 @@ import op.creditmanager.client.gui.SkinHeadUtil;
 import op.creditmanager.client.model.CreditEntry;
 import op.creditmanager.client.util.FormatUtil;
 import op.creditmanager.client.util.TimeUtil;
+import op.creditmanager.client.search.DealSearchText;
 import op.creditmanager.client.search.FuzzySearch;
 import op.creditmanager.client.gui.modern.widget.ModernScrollArea;
 
@@ -24,6 +25,9 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class ModernCreditListScreen extends ModernBaseScreen {
+
+    private record ScoredEntry(CreditEntry entry, int score) {
+    }
 
     private final boolean debts;
     private TextFieldWidget searchField;
@@ -143,10 +147,12 @@ public class ModernCreditListScreen extends ModernBaseScreen {
         List<CreditEntry> source = debts ? manager.getAllCreditsAsDebtor(player) : manager.getAllCreditsAsCreditor(player);
         filteredCache = source.stream()
                 .filter(entry -> FILTERS[statusIndex].matches(entry))
-                .filter(entry -> query.isEmpty()
-                        || score(entry, query) > 0)
-                .sorted(Comparator.<CreditEntry>comparingInt(entry -> score(entry, query)).reversed()
-                        .thenComparing(Comparator.comparingLong(CreditEntry::getCreatedAt).reversed()))
+                .map(entry -> new ScoredEntry(entry, score(entry, query)))
+                .filter(entry -> entry.score() > 0)
+                .sorted(Comparator.comparingInt(ScoredEntry::score).reversed()
+                        .thenComparing(Comparator.comparingLong(
+                                (ScoredEntry entry) -> entry.entry().getCreatedAt()).reversed()))
+                .map(ScoredEntry::entry)
                 .toList();
         filteredCacheKey = key;
         return filteredCache;
@@ -154,8 +160,7 @@ public class ModernCreditListScreen extends ModernBaseScreen {
 
     private int score(CreditEntry entry, String query) {
         if (query == null || query.isBlank()) return 1;
-        return Math.max(FuzzySearch.score(entry.getDealName(), query), Math.max(
-                FuzzySearch.score(entry.getCreditor(), query), FuzzySearch.score(entry.getDebtor(), query)));
+        return FuzzySearch.score(DealSearchText.build(entry), query);
     }
 
     @Override

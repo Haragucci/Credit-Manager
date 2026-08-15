@@ -81,6 +81,28 @@ class ClientConfigMigrationTest {
     }
 
     @Test
+    void newVersionEightConfigKeepsBankImportOnboardingPending() {
+        ClientConfig config = new ClientConfig();
+
+        config.normalize();
+
+        assertEquals(8, config.getConfigVersion());
+        assertFalse(config.isBankPaylogImportOnboardingHandled());
+    }
+
+    @Test
+    void versionSevenUpgradeMarksBankImportOnboardingHandled() throws Exception {
+        ClientConfig config = new ClientConfig();
+        setField(config, "configVersion", 7);
+        setField(config, "bankPaylogImportOnboardingHandled", false);
+
+        config.normalize();
+
+        assertEquals(8, config.getConfigVersion());
+        assertTrue(config.isBankPaylogImportOnboardingHandled());
+    }
+
+    @Test
     void paylogSettingsPersistAfterManagerReload() throws Exception {
         Files.createDirectories(dataDirectory);
         Field directoryField = FileManager.class.getDeclaredField("dataDirectory");
@@ -109,6 +131,35 @@ class ClientConfigMigrationTest {
             assertEquals(PaylogAutoLinkMode.EXACT_PARTIAL_OR_OVERPAY_CLOSE, ClientConfigManager.getPaylogAutoLinkMode());
             assertTrue(ClientConfigManager.isCompleteDealOnPaylogOverpay());
             assertTrue(ClientConfigManager.isNotifyWhenPaylogHasNoMatchingDeal());
+        } finally {
+            directoryField.set(null, previousDirectory);
+            configField.set(null, previousConfig);
+            recoveryField.setBoolean(null, previousRecoveryRequired);
+        }
+    }
+
+    @Test
+    void handledBankImportOnboardingPersistsAfterManagerReload() throws Exception {
+        Files.createDirectories(dataDirectory);
+        Field directoryField = FileManager.class.getDeclaredField("dataDirectory");
+        Field configField = ClientConfigManager.class.getDeclaredField("config");
+        Field recoveryField = ClientConfigManager.class.getDeclaredField("recoveryRequired");
+        directoryField.setAccessible(true);
+        configField.setAccessible(true);
+        recoveryField.setAccessible(true);
+        Path previousDirectory = (Path) directoryField.get(null);
+        Object previousConfig = configField.get(null);
+        boolean previousRecoveryRequired = recoveryField.getBoolean(null);
+        try {
+            directoryField.set(null, dataDirectory);
+            configField.set(null, null);
+            recoveryField.setBoolean(null, false);
+
+            assertTrue(ClientConfigManager.isBankPaylogImportOnboardingPending());
+            assertTrue(ClientConfigManager.markBankPaylogImportOnboardingHandled());
+            ClientConfigManager.reload();
+
+            assertFalse(ClientConfigManager.isBankPaylogImportOnboardingPending());
         } finally {
             directoryField.set(null, previousDirectory);
             configField.set(null, previousConfig);

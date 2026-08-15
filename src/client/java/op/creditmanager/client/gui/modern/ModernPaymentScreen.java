@@ -9,6 +9,7 @@ import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.ItemStack;
 import net.minecraft.text.Text;
 import op.creditmanager.client.core.CreditManager;
+import op.creditmanager.client.core.CreditManagerMutationExecutor;
 import op.creditmanager.client.model.Payment;
 import op.creditmanager.client.gui.CenteredTextFieldWidget;
 import op.creditmanager.client.gui.ItemStackStorage;
@@ -163,8 +164,9 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         moneyActionBounds = ModernLayout.buttonRow(fieldX, saveY, fieldWidth, 2, 74, 23, 8);
         ModernLayout.Bounds save = moneyActionBounds.getFirst();
         ModernLayout.Bounds cancel = moneyActionBounds.get(1);
-        ModernUi.button(context, textRenderer, save.x(), save.y(), save.width(), save.height(), "Zahlung speichern", ModernUi.theme().buttonPrimary,
-                ModernUi.contains(mouseX, mouseY, save.x(), save.y(), save.width(), save.height()));
+        ModernUi.button(context, textRenderer, save.x(), save.y(), save.width(), save.height(),
+                submissionGuard.isActive() ? "Speichert…" : "Zahlung speichern", ModernUi.theme().buttonPrimary,
+                !submissionGuard.isActive() && ModernUi.contains(mouseX, mouseY, save.x(), save.y(), save.width(), save.height()));
         ModernUi.button(context, textRenderer, cancel.x(), cancel.y(), cancel.width(), cancel.height(), "Abbrechen", ModernUi.theme().buttonNeutral,
                 ModernUi.contains(mouseX, mouseY, cancel.x(), cancel.y(), cancel.width(), cancel.height()));
     }
@@ -175,8 +177,9 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         ModernLayout.Bounds save = itemActionBounds.getFirst();
         ModernLayout.Bounds clear = itemActionBounds.get(1);
         ModernUi.button(context, textRenderer, save.x(), save.y(), save.width(), save.height(),
-                "Speichern (" + selectedInventorySlots.size() + ")", ModernUi.theme().buttonPrimary,
-                ModernUi.contains(mouseX, mouseY, save.x(), save.y(), save.width(), save.height()));
+                submissionGuard.isActive() ? "Speichert…" : "Speichern (" + selectedInventorySlots.size() + ")",
+                ModernUi.theme().buttonPrimary,
+                !submissionGuard.isActive() && ModernUi.contains(mouseX, mouseY, save.x(), save.y(), save.width(), save.height()));
         ModernUi.button(context, textRenderer, clear.x(), clear.y(), clear.width(), clear.height(), "Auswahl leeren", ModernUi.theme().buttonNeutral,
                 ModernUi.contains(mouseX, mouseY, clear.x(), clear.y(), clear.width(), clear.height()));
 
@@ -302,9 +305,8 @@ public class ModernPaymentScreen extends ModernBaseScreen {
     }
 
     private void savePayment() {
-        if (!submissionGuard.tryBegin()) return;
+        if (submissionGuard.isActive()) return;
         if (currentPlayerName().isBlank()) {
-            submissionGuard.reset();
             toastError("Du musst mit einem Spieler verbunden sein.");
             return;
         }
@@ -312,37 +314,51 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         try {
             amountMinor = FormatUtil.parseMoneyMinor(amountField.getText());
         } catch (IllegalArgumentException exception) {
-            submissionGuard.reset();
             toastError("Bitte einen gültigen positiven Betrag eingeben.");
             return;
         }
+        CreditManagerMutationExecutor.CheckedSupplier<Payment> operation;
+        boolean submittedItemMode = itemMode;
+        java.util.UUID creditId = entry.getId();
         try {
-            Payment saved;
             if (itemMode) {
-                saved = saveSelectedItems(amountMinor);
+                ItemPaymentSnapshot snapshot = captureSelectedItems();
+                operation = () -> manager.addItemPaymentMinor(creditId, snapshot.descriptions(),
+                        amountMinor, snapshot.serializedStacks());
             } else if (selectedPaylog != null) {
-                saved = manager.addPaylogPaymentMinor(entry.getId(), selectedPaylog.getId(), amountMinor, parseSelectedTimestamp(), noteField.getText()).payment();
+                java.util.UUID paylogId = selectedPaylog.getId();
+                long timestamp = parseSelectedTimestamp();
+                String note = noteField.getText();
+                operation = () -> manager.addPaylogPaymentMinor(creditId, paylogId, amountMinor,
+                        timestamp, note).payment();
             } else {
-                saved = manager.addMoneyPaymentMinor(entry.getId(), amountMinor);
+                operation = () -> manager.addMoneyPaymentMinor(creditId, amountMinor);
             }
-            boolean commitNoticeShown = showMutationCommitNotice();
+        } catch (CreditManager.CreditException exception) {
+            toastError(exception.getMessage());
+            return;
+        } catch (IllegalArgumentException | IllegalStateException exception) {
+            toastError(exception.getMessage());
+            return;
+        }
+        submitMutation(submissionGuard, operation, (result, failure, screenCurrent) -> {
+            if (failure != null) {
+                toastError(failure.getMessage() == null ? "Zahlung konnte nicht gespeichert werden." : failure.getMessage());
+                return;
+            }
+            Payment saved = result.value();
+            boolean commitNoticeShown = showMutationCommitNotice(result.commitResult());
             if (!commitNoticeShown && saved.getAmountMinor() < amountMinor) {
                 toastWarning("Es wurden nur " + FormatUtil.formatAmountMinor(saved.getAmountMinor())
                         + " gebucht, da der Deal damit vollständig bezahlt ist.");
             } else if (!commitNoticeShown) {
-                toastSuccess(itemMode ? "Item-Zahlung gespeichert." : "Zahlung gespeichert.");
+                toastSuccess(submittedItemMode ? "Item-Zahlung gespeichert." : "Zahlung gespeichert.");
             }
-            closeToParent();
-        } catch (CreditManager.CreditException exception) {
-            submissionGuard.reset();
-            toastError(exception.getMessage());
-        } catch (IllegalArgumentException exception) {
-            submissionGuard.reset();
-            toastError(exception.getMessage());
-        }
+            if (screenCurrent) closeToParent();
+        });
     }
 
-    private Payment saveSelectedItems(long sharedValueMinor) throws CreditManager.CreditException {
+    private ItemPaymentSnapshot captureSelectedItems() throws CreditManager.CreditException {
         PlayerInventory inventory = playerInventory();
         if (inventory == null || selectedInventorySlots.isEmpty()) {
             throw new CreditManager.CreditException("Bitte mindestens ein Item aus dem Inventar auswählen.");
@@ -362,7 +378,7 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         if (descriptions.isEmpty()) {
             throw new CreditManager.CreditException("Die ausgewählten Items sind nicht mehr im Inventar.");
         }
-        return manager.addItemPaymentMinor(entry.getId(), descriptions, sharedValueMinor, serializedStacks);
+        return new ItemPaymentSnapshot(List.copyOf(descriptions), List.copyOf(serializedStacks));
     }
 
     private PlayerInventory playerInventory() {
@@ -434,9 +450,10 @@ public class ModernPaymentScreen extends ModernBaseScreen {
         itemActionBounds = List.of();
         modeTabBounds = List.of();
         moneyActionBounds = List.of();
-        submissionGuard.reset();
         formScroll.reset();
         selectedInventorySlots.clear();
         super.clearTransientState();
     }
+
+    private record ItemPaymentSnapshot(List<String> descriptions, List<String> serializedStacks) { }
 }

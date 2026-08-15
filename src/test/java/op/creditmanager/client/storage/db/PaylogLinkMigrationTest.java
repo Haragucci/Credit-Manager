@@ -36,6 +36,7 @@ class PaylogLinkMigrationTest {
 
         assertTrue(manager.isHealthy());
         assertEquals(DatabaseManager.SCHEMA_VERSION, schemaVersion());
+        assertEquals(1L, manager.revision());
         assertEquals("bigint", columnType("credits", "amount"));
         assertEquals("bigint", columnType("payments", "amount"));
         assertEquals("bigint", columnType("paylogs", "amount"));

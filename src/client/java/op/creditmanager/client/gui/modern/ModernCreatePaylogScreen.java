@@ -32,6 +32,7 @@ public final class ModernCreatePaylogScreen extends ModernBaseScreen {
     private TextFieldWidget noteField;
     private int formX, formWidth, viewportY, viewportHeight, buttonY;
     private List<ModernLayout.Bounds> buttons = List.of();
+    private final MutationSubmissionGuard submissionGuard = new MutationSubmissionGuard();
 
     public ModernCreatePaylogScreen(CreditManager manager, Screen parent) {
         super(manager, parent, "Paylog erfassen", "paylogs");
@@ -83,10 +84,13 @@ public final class ModernCreatePaylogScreen extends ModernBaseScreen {
         for (int index = 0; index < buttons.size(); index++) {
             ModernLayout.Bounds bounds = buttons.get(index);
             ModernLayout.Bounds placed = new ModernLayout.Bounds(bounds.x(), buttonY + bounds.y(), bounds.width(), bounds.height());
-            String label = index == 0 ? "Paylog speichern" : "Abbrechen";
+            String label = index == 0
+                    ? submissionGuard.isActive() ? "Speichert…" : "Paylog speichern"
+                    : "Abbrechen";
             int color = index == 0 ? ModernUi.theme().buttonPrimary : ModernUi.theme().buttonNeutral;
             ModernUi.button(context, textRenderer, placed.x(), placed.y(), placed.width(), placed.height(), label, color,
-                    ModernUi.contains(mouseX, mouseY, placed.x(), placed.y(), placed.width(), placed.height()));
+                    (index != 0 || !submissionGuard.isActive())
+                            && ModernUi.contains(mouseX, mouseY, placed.x(), placed.y(), placed.width(), placed.height()));
         }
         super.render(context, mouseX, mouseY, delta);
     }
@@ -123,6 +127,7 @@ public final class ModernCreatePaylogScreen extends ModernBaseScreen {
     }
 
     private void save() {
+        if (submissionGuard.isActive()) return;
         String payer = payerField.getText().trim();
         String receiver = receiverField.getText().trim();
         if (!isValidPlayerName(payer) || !isValidPlayerName(receiver) || payer.equalsIgnoreCase(receiver)) {
@@ -131,19 +136,27 @@ public final class ModernCreatePaylogScreen extends ModernBaseScreen {
         }
         try {
             long amountMinor = FormatUtil.parseMoneyMinor(amountField.getText());
-            TransactionEntry entry = new TransactionEntry(payer.toLowerCase(Locale.ROOT), receiver.toLowerCase(Locale.ROOT), amountMinor);
-            entry.setTimestamp(parseTimestamp());
-            entry.setSource("MANUAL");
+            String normalizedPayer = payer.toLowerCase(Locale.ROOT);
+            String normalizedReceiver = receiver.toLowerCase(Locale.ROOT);
+            long timestamp = parseTimestamp();
             String note = noteField.getText().trim();
-            entry.setRawText("[Manuell] " + payer + " -> " + receiver + ": " + FormatUtil.formatAmountMinor(amountMinor)
-                    + " am " + DateTimeFormatter.ofPattern("dd.MM.uuuu HH:mm").format(java.time.Instant.ofEpochMilli(entry.getTimestamp()).atZone(ZoneId.systemDefault()))
-                    + (note.isBlank() ? "" : " | " + note));
-            if (!TransactionRepository.getInstance().add(entry)) {
-                toastError("Paylog konnte nicht gespeichert werden.");
-                return;
-            }
-            toastSuccess("Manueller Paylog gespeichert.");
-            closeToParent();
+            String rawText = "[Manuell] " + payer + " -> " + receiver + ": " + FormatUtil.formatAmountMinor(amountMinor)
+                    + " am " + DateTimeFormatter.ofPattern("dd.MM.uuuu HH:mm").format(java.time.Instant.ofEpochMilli(timestamp).atZone(ZoneId.systemDefault()))
+                    + (note.isBlank() ? "" : " | " + note);
+            submitMutation(submissionGuard, () -> {
+                TransactionEntry entry = new TransactionEntry(normalizedPayer, normalizedReceiver, amountMinor);
+                entry.setTimestamp(timestamp);
+                entry.setSource("MANUAL");
+                entry.setRawText(rawText);
+                return TransactionRepository.getInstance().add(entry);
+            }, (result, failure, screenCurrent) -> {
+                if (failure != null || result == null || !result.value()) {
+                    toastError("Paylog konnte nicht gespeichert werden.");
+                    return;
+                }
+                toastSuccess("Manueller Paylog gespeichert.");
+                if (screenCurrent) closeToParent();
+            });
         } catch (IllegalArgumentException | DateTimeParseException exception) {
             toastError("Bitte Betrag, Datum und Uhrzeit prüfen.");
         }

@@ -1,11 +1,10 @@
 package op.creditmanager.client.gui.modern;
 
 import op.creditmanager.client.core.CreditManager;
-import op.creditmanager.client.model.CreditEntry;
+import op.creditmanager.client.core.CreditStatisticsSnapshot;
 import op.creditmanager.client.money.MoneyAggregate;
 
 import java.math.BigInteger;
-import java.util.List;
 
 final class OpenDealSummaryCache {
     private long revision = Long.MIN_VALUE;
@@ -16,17 +15,20 @@ final class OpenDealSummaryCache {
         String normalizedPlayer = currentPlayer == null ? "" : currentPlayer;
         long currentRevision = manager.getRevision();
         if (summary != null && revision == currentRevision && player.equalsIgnoreCase(normalizedPlayer)) return summary;
-        List<CreditEntry> claims = List.copyOf(manager.getOpenCreditsAsCreditor(normalizedPlayer));
-        List<CreditEntry> debts = List.copyOf(manager.getOpenCreditsAsDebtor(normalizedPlayer));
-        summary = new OpenDealSummary(claims, debts,
-                MoneyAggregate.sum(claims, CreditEntry::getRemainingAmountMinor),
-                MoneyAggregate.sum(debts, CreditEntry::getRemainingAmountMinor));
-        revision = currentRevision;
+
+        CreditStatisticsSnapshot snapshot = manager.getStatisticsSnapshot(normalizedPlayer);
+        BigInteger claimTotalMinor = MoneyAggregate.sum(snapshot.claims(),
+                CreditStatisticsSnapshot.OpenCredit::remainingAmountMinor);
+        BigInteger debtTotalMinor = MoneyAggregate.sum(snapshot.debts(),
+                CreditStatisticsSnapshot.OpenCredit::remainingAmountMinor);
+        summary = new OpenDealSummary(snapshot.claims().size(), snapshot.debts().size(),
+                claimTotalMinor, debtTotalMinor);
+        revision = snapshot.revision();
         player = normalizedPlayer;
         return summary;
     }
 
-    record OpenDealSummary(List<CreditEntry> claims, List<CreditEntry> debts,
+    record OpenDealSummary(int claimCount, int debtCount,
                            BigInteger claimTotalMinor, BigInteger debtTotalMinor) {
         BigInteger netMinor() {
             return claimTotalMinor.subtract(debtTotalMinor);

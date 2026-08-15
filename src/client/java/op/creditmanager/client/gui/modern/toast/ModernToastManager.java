@@ -9,6 +9,7 @@ import op.creditmanager.client.gui.modern.theme.ModernThemePalette;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.function.ToIntFunction;
 
 public final class ModernToastManager {
     private static final ModernToastManager INSTANCE = new ModernToastManager();
@@ -44,7 +45,7 @@ public final class ModernToastManager {
             float visible = toast.visibility(now);
             if (visible <= 0.0F) { iterator.remove(); continue; }
             int width = Math.min(Math.max(156, screenWidth - 24), 360);
-            List<String> lines = wrap(renderer, toast.message, width - 22);
+            List<String> lines = toast.wrappedLines(renderer, width - 22, ModernUi.fontEpoch());
             int height = 12 + lines.size() * 10;
             int x = (screenWidth - width) / 2;
             int animatedY = y - Math.round((1.0F - visible) * 38.0F);
@@ -80,26 +81,26 @@ public final class ModernToastManager {
         return false;
     }
 
-    private static List<String> wrap(TextRenderer renderer, String message, int maxWidth) {
+    static List<String> wrap(String message, int maxWidth, ToIntFunction<String> widthMeasurer) {
         List<String> lines = new ArrayList<>();
         StringBuilder line = new StringBuilder();
         for (String word : message.split("\\s+")) {
             String candidate = line.isEmpty() ? word : line + " " + word;
-            if (!line.isEmpty() && ModernUi.getGuiTextWidth(renderer, candidate) > maxWidth) {
+            if (!line.isEmpty() && widthMeasurer.applyAsInt(candidate) > maxWidth) {
                 lines.add(line.toString());
                 line.setLength(0);
             }
-            if (ModernUi.getGuiTextWidth(renderer, word) > maxWidth) {
+            if (widthMeasurer.applyAsInt(word) > maxWidth) {
                 String remaining = word;
                 while (!remaining.isEmpty()) {
                     int end = remaining.length();
-                    while (end > 1 && ModernUi.getGuiTextWidth(renderer, remaining.substring(0, end)) > maxWidth) end--;
+                    while (end > 1 && widthMeasurer.applyAsInt(remaining.substring(0, end)) > maxWidth) end--;
                     lines.add(remaining.substring(0, end));
                     remaining = remaining.substring(end);
                 }
             } else { if (!line.isEmpty()) line.append(' '); line.append(word); }
         }
         if (!line.isEmpty()) lines.add(line.toString());
-        return lines.isEmpty() ? List.of("") : lines;
+        return lines.isEmpty() ? List.of("") : List.copyOf(lines);
     }
 }

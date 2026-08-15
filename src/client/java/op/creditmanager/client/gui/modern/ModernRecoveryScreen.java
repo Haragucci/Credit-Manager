@@ -164,9 +164,10 @@ public final class ModernRecoveryScreen extends ModernBaseScreen {
 
     private void refreshViewState() {
         long sequence = ++loadSequence;
+        ModernQueryExecutor.cancel(this);
         if (pendingLoad != null) pendingLoad.cancel(true);
         viewState = RecoveryViewState.loading();
-        pendingLoad = CompletableFuture.supplyAsync(this::loadSnapshot, ModernQueryExecutor.get());
+        pendingLoad = ModernQueryExecutor.submitLatest(this, this::loadSnapshot);
         pendingLoad.whenComplete((snapshot, error) -> MinecraftClient.getInstance().execute(() -> {
             if (disposed || sequence != loadSequence || MinecraftClient.getInstance().currentScreen != this) return;
             viewState = error == null ? RecoveryViewState.ready(snapshot.lines())
@@ -313,6 +314,7 @@ public final class ModernRecoveryScreen extends ModernBaseScreen {
     protected void clearTransientState() {
         disposed = true;
         loadSequence++;
+        ModernQueryExecutor.cancel(this);
         if (pendingLoad != null) pendingLoad.cancel(true);
         pendingLoad = null;
         viewState = RecoveryViewState.loading();

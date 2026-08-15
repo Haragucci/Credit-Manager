@@ -60,9 +60,9 @@ public class ModernMainScreen extends ModernBaseScreen {
         cardWidth = Math.max(70, (safeContentWidth - 10) / 2);
         claimsX = contentX;
         debtsX = contentX + cardWidth + 10;
-        drawSummaryCard(context, mouseX, mouseY, claimsX, cardsY, cardWidth, summaryHeight, "Forderungen", summary.claims().size(), claimTotalMinor,
+        drawSummaryCard(context, mouseX, mouseY, claimsX, cardsY, cardWidth, summaryHeight, "Forderungen", summary.claimCount(), claimTotalMinor,
                 theme.success, compact ? "" : "Offen für dich");
-        drawSummaryCard(context, mouseX, mouseY, debtsX, cardsY, cardWidth, summaryHeight, "Schulden", summary.debts().size(), debtTotalMinor,
+        drawSummaryCard(context, mouseX, mouseY, debtsX, cardsY, cardWidth, summaryHeight, "Schulden", summary.debtCount(), debtTotalMinor,
                 theme.danger, compact ? "" : "Von dir offen");
 
         int statusY = cardsY + summaryHeight + 10;

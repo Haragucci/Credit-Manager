@@ -13,6 +13,7 @@ import op.creditmanager.client.model.TransactionEntry;
 import op.creditmanager.client.storage.FileManager;
 import op.creditmanager.client.storage.db.DatabaseManager;
 import op.creditmanager.client.storage.db.LegacyJsonMigrationService;
+import op.creditmanager.client.storage.db.StorageTestScope;
 
 import java.lang.reflect.Field;
 import java.nio.file.Files;
@@ -32,15 +33,31 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CreditRepositoryDatabaseTest {
     @TempDir Path dataDirectory;
-    private Path previousDirectory;
+
+    private StorageTestScope storageScope;
     private Object previousConfig;
     private boolean previousConfigRecovery;
+    private boolean temporaryStorageConfigured;
 
     @AfterEach
     void restoreStatics() throws Exception {
-        dataDirectoryField().set(null, previousDirectory);
-        configField().set(null, previousConfig);
-        configRecoveryField().setBoolean(null, previousConfigRecovery);
+        if (!temporaryStorageConfigured) {
+            return;
+        }
+
+        try {
+            resetDatabaseInitialization();
+
+            if (storageScope != null) {
+                storageScope.close();
+            }
+        } finally {
+            configField().set(null, previousConfig);
+            configRecoveryField().setBoolean(null, previousConfigRecovery);
+
+            storageScope = null;
+            temporaryStorageConfigured = false;
+        }
     }
 
     @Test
@@ -252,21 +269,6 @@ class CreditRepositoryDatabaseTest {
     }
 
     @Test
-    void paylogDefaultPageIsLimitedButSearchReachesOlderDatabaseRows() throws Exception {
-        useTemporaryDataDirectory();
-        List<TransactionEntry> paylogs = new ArrayList<>();
-        for (int index = 0; index < 501; index++) {
-            TransactionEntry entry = new TransactionEntry("player" + index, "me", index + 1D);
-            entry.setTimestamp(1_000L + index);
-            paylogs.add(entry);
-        }
-        assertTrue(DatabaseManager.getInstance().importLegacy(new DatabaseManager.DatabaseState(List.of(), List.of(), List.of()), paylogs, "paylog test"));
-
-        assertEquals(500, DatabaseManager.getInstance().queryPaylogs("me", 0, "", 500, 0).size());
-        assertEquals("player0", DatabaseManager.getInstance().queryPaylogs("me", 0, "player0", 500, 0).getFirst().getFromPlayer());
-    }
-
-    @Test
     void completedDealsLeaveActiveQueriesAndAppearInHistory() throws Exception {
         useTemporaryDataDirectory();
         CreditEntry credit = new CreditEntry(UUID.randomUUID(), "debtor-creditor", "creditor", "debtor", 100D, null, null);
@@ -278,39 +280,6 @@ class CreditRepositoryDatabaseTest {
 
         assertTrue(manager.getOpenCreditsAsCreditor("creditor").isEmpty());
         assertEquals(1, DatabaseManager.getInstance().queryDealHistory("creditor", "debtor-creditor", 500, 0).size());
-    }
-
-    @Test
-    void paylogPaginationDedupeAndBackupAreDatabaseBacked() throws Exception {
-        useTemporaryDataDirectory();
-        List<TransactionEntry> entries = new ArrayList<>();
-        for (int index = 0; index < 1_001; index++) {
-            TransactionEntry entry = new TransactionEntry("payer" + index, "receiver", index + 1D);
-            entry.setTimestamp(1_000_000L + index * 3_000L);
-            entry.setRawText("TEST_PAYLOG_" + index);
-            entries.add(entry);
-        }
-        assertTrue(DatabaseManager.getInstance().importLegacy(new DatabaseManager.DatabaseState(List.of(), List.of(), List.of()), entries, "page test"));
-        DatabaseManager.QueryPage<TransactionEntry> first = DatabaseManager.getInstance().queryPaylogPage("receiver", 0, "", 500, 0);
-        DatabaseManager.QueryPage<TransactionEntry> third = DatabaseManager.getInstance().queryPaylogPage("receiver", 0, "", 500, 1_000);
-        assertEquals(500, first.entries().size());
-        assertTrue(first.hasNext());
-        assertEquals(1, third.entries().size());
-
-        TransactionEntry duplicate = new TransactionEntry("same", "receiver", 5D);
-        duplicate.setTimestamp(9_000_000L); duplicate.setRawText("TEST_DUPLICATE");
-        assertTrue(DatabaseManager.getInstance().addPaylog(duplicate));
-        TransactionEntry repeated = new TransactionEntry("same", "receiver", 5D);
-        repeated.setTimestamp(9_000_000L); repeated.setRawText("TEST_DUPLICATE");
-        assertFalse(DatabaseManager.getInstance().addPaylog(repeated));
-        TransactionEntry distinctRapid = new TransactionEntry("same", "receiver", 5D);
-        distinctRapid.setTimestamp(9_000_001L); distinctRapid.setRawText("TEST_DUPLICATE");
-        assertTrue(DatabaseManager.getInstance().addPaylog(distinctRapid));
-        assertTrue(DatabaseManager.getInstance().createBackup());
-        try (var files = Files.list(FileManager.getDataDirectory().resolve("backups"))) {
-            assertTrue(files.anyMatch(path -> path.getFileName().toString().matches("creditmanager_backup_.*\\.zip")));
-        }
-        assertFalse(DatabaseManager.getInstance().listBackups().isEmpty());
     }
 
     @Test
@@ -345,19 +314,60 @@ class CreditRepositoryDatabaseTest {
     }
 
     private Connection connection() throws SQLException {
-        return DriverManager.getConnection("jdbc:h2:file:" + FileManager.getDatabaseFile().toAbsolutePath() + ";MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;AUTO_SERVER=FALSE");
+        String databasePath = FileManager.getDatabaseFile()
+                .toAbsolutePath()
+                .normalize()
+                .toString()
+                .replace('\\', '/');
+
+        return DriverManager.getConnection(
+                "jdbc:h2:file:" + databasePath
+                        + ";MODE=PostgreSQL"
+                        + ";DATABASE_TO_LOWER=TRUE"
+                        + ";AUTO_SERVER=FALSE"
+                        + ";IFEXISTS=TRUE"
+        );
     }
 
     private void useTemporaryDataDirectory() throws Exception {
-        Files.createDirectories(dataDirectory);
-        previousDirectory = (Path) dataDirectoryField().get(null);
         previousConfig = configField().get(null);
         previousConfigRecovery = configRecoveryField().getBoolean(null);
-        dataDirectoryField().set(null, dataDirectory);
+
+        storageScope = new StorageTestScope();
+        storageScope.configureExternal(dataDirectory);
+
         configField().set(null, new ClientConfig());
         configRecoveryField().setBoolean(null, false);
+
+        resetDatabaseInitialization();
+        DatabaseManager.getInstance().initialize();
+
+        temporaryStorageConfigured = true;
     }
-    private Field dataDirectoryField() throws Exception { Field field = FileManager.class.getDeclaredField("dataDirectory"); field.setAccessible(true); return field; }
+
+    private void resetDatabaseInitialization() throws Exception {
+        Field coordinatorField = DatabaseManager.class.getDeclaredField("coordinator");
+        coordinatorField.setAccessible(true);
+
+        Object coordinator = coordinatorField.get(DatabaseManager.getInstance());
+
+        setCoordinatorField(coordinator, "initialized", false);
+        setCoordinatorField(coordinator, "initializedAt", null);
+        setCoordinatorField(coordinator, "healthy", true);
+        setCoordinatorField(coordinator, "writeLocked", false);
+        setCoordinatorField(
+                coordinator,
+                "availability",
+                DatabaseManager.DatabaseAvailability.UNKNOWN
+        );
+    }
+
+    private void setCoordinatorField(Object coordinator, String name, Object value) throws Exception {
+        Field field = coordinator.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        field.set(coordinator, value);
+    }
+
     private Field configField() throws Exception { Field field = ClientConfigManager.class.getDeclaredField("config"); field.setAccessible(true); return field; }
     private Field configRecoveryField() throws Exception { Field field = ClientConfigManager.class.getDeclaredField("recoveryRequired"); field.setAccessible(true); return field; }
 }

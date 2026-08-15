@@ -56,14 +56,15 @@ public final class ModernPaylogPaymentSelectionScreen extends ModernBaseScreen {
             return;
         }
         String key = searchField == null ? "" : searchField.getText().trim();
-        if (!key.equals(rawKey)) { if (pending != null) pending.future().cancel(true); pending = null; sequence++; rawKey = key; debouncer.update(key, System.currentTimeMillis()); loaded = false; queryError = null; }
+        if (!key.equals(rawKey)) { ModernQueryExecutor.cancel(this); if (pending != null) pending.future().cancel(true); pending = null; sequence++; rawKey = key; debouncer.update(key, System.currentTimeMillis()); loaded = false; queryError = null; }
         if (pending != null && pending.future().isDone()) { apply(pending); pending = null; }
         if (pending == null && queryError == null && (force || debouncer.ready(System.currentTimeMillis()))) { force = false; schedule(); }
     }
 
     private void schedule() {
         long id = ++sequence; String key = rawKey;
-        pending = new Pending(id, key, CompletableFuture.supplyAsync(() -> TransactionRepository.getInstance().queryAvailableForDeal(credit.getDebtor(), credit.getCreditor(), key, DatabaseManager.PAGE_SIZE, 0), ModernQueryExecutor.get()));
+        pending = new Pending(id, key, ModernQueryExecutor.submitLatest(this,
+                () -> TransactionRepository.getInstance().queryAvailableForDeal(credit.getDebtor(), credit.getCreditor(), key, DatabaseManager.PAGE_SIZE, 0)));
     }
 
     private void apply(Pending result) {
@@ -140,6 +141,6 @@ public final class ModernPaylogPaymentSelectionScreen extends ModernBaseScreen {
     }
 
     @Override public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) { if (scroll.contains(mouseX, mouseY)) { scroll.scroll(verticalAmount); return true; } return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount); }
-    @Override protected void clearTransientState() { disposed = true; sequence++; if (pending != null) pending.future().cancel(true); scroll.reset(); pending = null; loaded = false; queryError = null; errorButtons = List.of(); super.clearTransientState(); }
+    @Override protected void clearTransientState() { disposed = true; sequence++; ModernQueryExecutor.cancel(this); if (pending != null) pending.future().cancel(true); scroll.reset(); pending = null; loaded = false; queryError = null; errorButtons = List.of(); super.clearTransientState(); }
     private record Pending(long id, String key, CompletableFuture<DatabaseManager.QueryPage<TransactionEntry>> future) { }
 }

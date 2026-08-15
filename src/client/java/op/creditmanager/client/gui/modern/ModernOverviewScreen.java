@@ -46,9 +46,9 @@ public class ModernOverviewScreen extends ModernBaseScreen {
         context.enableScissor(contentX, viewportY, contentX + contentWidth, viewportY + viewportHeight);
         debtsY = claimsY + rowHeight + 6;
         drawMetric(context, mouseX, mouseY, claimsY, "Forderungen", FormatUtil.formatAmountMinor(claimTotalMinor),
-                summary.claims().size() + " offene Deals · Liste öffnen", theme.success);
+                summary.claimCount() + " offene Deals · Liste öffnen", theme.success);
         drawMetric(context, mouseX, mouseY, debtsY, "Schulden", FormatUtil.formatAmountMinor(debtTotalMinor),
-                summary.debts().size() + " offene Deals · Liste öffnen", theme.danger);
+                summary.debtCount() + " offene Deals · Liste öffnen", theme.danger);
 
         int columns = safeContentWidth >= 360 ? 2 : 1;
         int belowY = debtsY + rowHeight + 10;

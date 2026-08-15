@@ -4,7 +4,7 @@ import op.creditmanager.client.gui.modern.theme.ModernThemeMode;
 
 public class ClientConfig {
 
-    public static final int CURRENT_VERSION = 7;
+    public static final int CURRENT_VERSION = 8;
 
     private int configVersion = CURRENT_VERSION;
     private boolean automaticPaylogDetection = true;
@@ -26,6 +26,7 @@ public class ClientConfig {
     private boolean checkedForJsonMigration;
     private boolean jsonMigrationCompleted;
     private int jsonMigrationVersion;
+    private boolean bankPaylogImportOnboardingHandled;
 
     public ClientConfig() {
     }
@@ -172,10 +173,13 @@ public class ClientConfig {
     public void setJsonMigrationCompleted(boolean jsonMigrationCompleted) { this.jsonMigrationCompleted = jsonMigrationCompleted; }
     public int getJsonMigrationVersion() { return jsonMigrationVersion; }
     public void setJsonMigrationVersion(int jsonMigrationVersion) { this.jsonMigrationVersion = jsonMigrationVersion; }
+    public boolean isBankPaylogImportOnboardingHandled() { return bankPaylogImportOnboardingHandled; }
+    public void setBankPaylogImportOnboardingHandled(boolean handled) { bankPaylogImportOnboardingHandled = handled; }
 
     public void normalize() {
         boolean needsThemeMigration = configVersion < 2;
         boolean needsPaylogSettingsMigration = configVersion < 7;
+        boolean upgradingFromBeforeBankImport = configVersion < 8;
         if (needsPaylogSettingsMigration) {
             showAnyPaylogFlyIns = showPaylogNotifications;
             showDealDetectionPaylogFlyIns = autoLinkDetectedPaylogsToDeals || showPaylogNotifications;
@@ -192,6 +196,7 @@ public class ClientConfig {
         }
         autoLinkDetectedPaylogsToDeals = paylogAutoLinkMode != PaylogAutoLinkMode.OFF;
         showPaylogNotifications = showAnyPaylogFlyIns;
+        if (upgradingFromBeforeBankImport) bankPaylogImportOnboardingHandled = true;
         configVersion = CURRENT_VERSION;
         if (modernThemeMode == null) {
             modernThemeMode = ModernThemeMode.DARK;

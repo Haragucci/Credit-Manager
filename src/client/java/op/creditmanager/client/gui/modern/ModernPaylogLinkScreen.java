@@ -14,6 +14,7 @@ import java.util.List;
 public final class ModernPaylogLinkScreen extends ModernBaseScreen {
     private final TransactionEntry paylog;
     private final ModernScrollArea scroll = new ModernScrollArea();
+    private final MutationSubmissionGuard submissionGuard = new MutationSubmissionGuard();
     private int listY, listHeight, renderedStart;
     private List<CreditEntry> rendered = List.of();
 
@@ -58,7 +59,9 @@ public final class ModernPaylogLinkScreen extends ModernBaseScreen {
     private void drawDeal(DrawContext context, int mouseX, int mouseY, CreditEntry deal, int x, int y, int width) {
         ModernUi.card(context, x, y, width, 39, ModernUi.contains(mouseX, mouseY, x, y, width, 39));
         ModernUi.drawTruncated(context, textRenderer, deal.getDealName(), x + 10, y + 8, Math.max(44, width - 145), ModernUi.theme().text);
-        ModernUi.drawTruncated(context, textRenderer, "Offen: " + FormatUtil.formatAmountMinor(deal.getRemainingAmountMinor()) + " · klicken zum Buchen", x + 10, y + 23,
+        String action = submissionGuard.isActive() ? "Buchung wird gespeichert…"
+                : "Offen: " + FormatUtil.formatAmountMinor(deal.getRemainingAmountMinor()) + " · klicken zum Buchen";
+        ModernUi.drawTruncated(context, textRenderer, action, x + 10, y + 23,
                 Math.max(44, width - 145), ModernUi.theme().muted);
         ModernUi.drawGuiTextRightAligned(context, textRenderer, FormatUtil.formatAmountMinor(Math.min(paylog.getRemainingAmountMinor(), deal.getRemainingAmountMinor())),
                 x + width - 10, y + 14, ModernUi.theme().success);
@@ -79,22 +82,28 @@ public final class ModernPaylogLinkScreen extends ModernBaseScreen {
     }
 
     private void link(CreditEntry deal) {
-        try {
-            CreditManager.PaylogLinkResult result = manager.linkPaylogToDeal(paylog.getId(), deal.getId());
-            if (result.linked()) {
-                boolean commitNoticeShown = showMutationCommitNotice();
-                if (!commitNoticeShown && result.remainingPaylogMinor() > 0L) {
-                    toastWarning("Teilbetrag gebucht; " + FormatUtil.formatAmountMinor(result.remainingPaylogMinor()) + " bleiben im Paylog verfügbar.");
-                } else if (!commitNoticeShown) {
-                    toastSuccess("Paylog vollständig als Zahlung gebucht.");
-                }
-                closeToParent();
-            } else {
-                toastWarning("Dieser Paylog ist bereits vollständig verwendet.");
-            }
-        } catch (CreditManager.CreditException exception) {
-            toastError(exception.getMessage());
-        }
+        if (submissionGuard.isActive()) return;
+        java.util.UUID paylogId = paylog.getId();
+        java.util.UUID dealId = deal.getId();
+        submitMutation(submissionGuard, () -> manager.linkPaylogToDeal(paylogId, dealId),
+                (outcome, failure, screenCurrent) -> {
+                    if (failure != null) {
+                        toastError(failure.getMessage() == null ? "Paylog konnte nicht gebucht werden." : failure.getMessage());
+                        return;
+                    }
+                    CreditManager.PaylogLinkResult result = outcome.value();
+                    if (result.linked()) {
+                        boolean commitNoticeShown = showMutationCommitNotice(outcome.commitResult());
+                        if (!commitNoticeShown && result.remainingPaylogMinor() > 0L) {
+                            toastWarning("Teilbetrag gebucht; " + FormatUtil.formatAmountMinor(result.remainingPaylogMinor()) + " bleiben im Paylog verfügbar.");
+                        } else if (!commitNoticeShown) {
+                            toastSuccess("Paylog vollständig als Zahlung gebucht.");
+                        }
+                        if (screenCurrent) closeToParent();
+                    } else {
+                        toastWarning("Dieser Paylog ist bereits vollständig verwendet.");
+                    }
+                });
     }
 
     @Override

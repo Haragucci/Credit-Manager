@@ -74,7 +74,35 @@ class DatabasePerformanceTest {
         List<DatabaseManager.DataHealthRecord> findings = DatabaseManager.getInstance().runHealthCheck();
 
         assertEquals(1, findings.stream().filter(record -> "PAYLOG_LINK_AGGREGATE".equals(record.type())).count());
-        assertEquals(6, coordinator().lastHealthInspectionQueryCount());
+        assertEquals(15, coordinator().lastHealthInspectionQueryCount());
+    }
+
+    @Test
+    void tenThousandCreditsUseOneAggregateInspectionQuery() throws Exception {
+        try (Connection connection = connection(); PreparedStatement insert = connection.prepareStatement(
+                "INSERT INTO credits (id,deal_name,creditor,debtor,amount,paid_amount,created_at,status,archived,revision) VALUES (?,?,?,?,?,?,?,?,?,?)")) {
+            connection.setAutoCommit(false);
+            for (int index = 0; index < 10_000; index++) {
+                insert.setString(1, new UUID(11L, index + 1L).toString());
+                insert.setString(2, "performance credit " + index);
+                insert.setString(3, "creditor");
+                insert.setString(4, "debtor" + index);
+                insert.setLong(5, 10_000L);
+                insert.setLong(6, index == 9_999 ? 1L : 0L);
+                insert.setLong(7, index + 1L);
+                insert.setString(8, index == 9_999 ? "PARTIAL" : "OPEN");
+                insert.setBoolean(9, false);
+                insert.setLong(10, 0L);
+                insert.addBatch();
+                if ((index + 1) % 1_000 == 0) insert.executeBatch();
+            }
+            connection.commit();
+        }
+
+        List<DatabaseManager.DataHealthRecord> findings = DatabaseManager.getInstance().runHealthCheck();
+
+        assertEquals(1, findings.stream().filter(record -> "CREDIT_PAYMENT_TOTAL".equals(record.type())).count());
+        assertEquals(15, coordinator().lastHealthInspectionQueryCount());
     }
 
     @Test
@@ -203,13 +231,14 @@ class DatabasePerformanceTest {
         }
 
         assertEquals(100L, DatabaseManager.getInstance().queryPaylogPage("", 0, "needle", 500, 0).totalCount());
+        assertEquals(100L, DatabaseManager.getInstance().queryPaylogPage("", 0, "need", 500, 0).totalCount());
         assertEquals(50L, DatabaseManager.getInstance().queryPaylogPage("", 0, "needle alpha", 500, 0).totalCount());
         DatabaseManager.QueryPage<?> triple = DatabaseManager.getInstance().queryPaylogPage("", 0, "needle alpha omega", 500, 0);
         assertEquals(10L, triple.totalCount());
         assertEquals(10, triple.entries().size());
 
         try (Connection connection = connection(); Statement statement = connection.createStatement();
-             ResultSet result = statement.executeQuery("EXPLAIN SELECT paylog_id FROM paylog_search_tokens WHERE token='needle'")) {
+             ResultSet result = statement.executeQuery("EXPLAIN SELECT paylog_id FROM paylog_search_tokens WHERE token LIKE 'need%'")) {
             assertTrue(result.next());
             assertTrue(result.getString(1).toUpperCase(Locale.ROOT).contains("IDX_PAYLOG_SEARCH_TOKEN"));
         }

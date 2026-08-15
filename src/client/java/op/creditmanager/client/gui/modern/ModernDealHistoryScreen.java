@@ -84,8 +84,8 @@ public final class ModernDealHistoryScreen extends ModernBaseScreen {
         int offset = pageOffset;
         boolean archives = showArchived;
         DatabaseManager.DealHistorySort sort = SORTS[sortIndex];
-        pending = queries.replace(key, CompletableFuture.supplyAsync(
-                () -> DatabaseManager.getInstance().queryDealHistoryPage(player, query, archives, sort, PAGE_SIZE, offset), ModernQueryExecutor.get()));
+        pending = queries.replace(key, ModernQueryExecutor.submitLatest(this,
+                () -> DatabaseManager.getInstance().queryDealHistoryPage(player, query, archives, sort, PAGE_SIZE, offset)));
     }
 
     private void applyFinished(LatestQueryController.Ticket<String, DatabaseManager.QueryPage<CreditEntry>> result) {
@@ -195,5 +195,5 @@ public final class ModernDealHistoryScreen extends ModernBaseScreen {
     @Override public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) { if (scroll.contains(mouseX, mouseY)) { scroll.scroll(verticalAmount); return true; } return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount); }
     private String viewKey() { return rawSearchKey + '|' + showArchived + '|' + sortIndex + '|' + pageOffset; }
     private String statusLabel(String status) { return switch (status) { case CreditManager.STATUS_PAID -> "Bezahlt"; case CreditManager.STATUS_CLOSED -> "Abgeschlossen"; case CreditManager.STATUS_CANCELLED -> "Storniert"; default -> "Teilweise bezahlt"; }; }
-    @Override protected void clearTransientState() { queries.close(); scroll.reset(); page = new DatabaseManager.QueryPage<>(List.of(), 0, 0, PAGE_SIZE); rawSearchKey = ""; requestedKey = ""; appliedKey = ""; pending = null; queryError = null; errorButtons = List.of(); pageOffset = 0; super.clearTransientState(); }
+    @Override protected void clearTransientState() { queries.close(); ModernQueryExecutor.cancel(this); scroll.reset(); page = new DatabaseManager.QueryPage<>(List.of(), 0, 0, PAGE_SIZE); rawSearchKey = ""; requestedKey = ""; appliedKey = ""; pending = null; queryError = null; errorButtons = List.of(); pageOffset = 0; super.clearTransientState(); }
 }

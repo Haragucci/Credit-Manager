@@ -25,6 +25,35 @@ class ModernLayoutTest {
         }
     }
 
+    @Test
+    void paylogImportButtonStaysBelowManualButtonWithoutToolbarOverlap() {
+        for (int height : List.of(64, 240)) {
+            for (int width : List.of(1, 80, 151, 152, 229, 230, 420)) {
+                int contentX = 17;
+                int toolbarY = 23;
+                ModernPaylogToolbarLayout.Layout layout =
+                        ModernPaylogToolbarLayout.calculate(contentX, toolbarY, width, height);
+                List<ModernLayout.Bounds> bounds = List.of(layout.search(), layout.manual(),
+                        layout.importer(), layout.filter());
+
+                for (ModernLayout.Bounds value : bounds) {
+                    assertTrue(value.x() >= contentX);
+                    assertTrue(value.right() <= contentX + width);
+                    assertTrue(value.y() >= toolbarY);
+                    assertTrue(value.bottom() <= toolbarY + layout.height());
+                }
+                assertEquals(layout.manual().x(), layout.importer().x());
+                assertEquals(layout.manual().width(), layout.importer().width());
+                assertTrue(layout.importer().y() >= layout.manual().bottom());
+                for (int left = 0; left < bounds.size(); left++) {
+                    for (int right = left + 1; right < bounds.size(); right++) {
+                        assertFalse(bounds.get(left).overlaps(bounds.get(right)));
+                    }
+                }
+            }
+        }
+    }
+
     private void assertReachable(ModernLayout.ShellBounds shell, int count, int minimumWidth, int formHeight) {
         List<ModernLayout.Bounds> actions = ModernLayout.buttonRow(shell.contentX(), 0, shell.contentWidth(), count, minimumWidth, 23, 8);
         for (ModernLayout.Bounds bounds : actions) {

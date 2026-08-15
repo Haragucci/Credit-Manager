@@ -37,6 +37,7 @@ public final class ModernEditCreditScreen extends ModernBaseScreen {
     private int viewportY;
     private int viewportHeight;
     private List<ModernLayout.Bounds> actionButtons = List.of();
+    private final MutationSubmissionGuard submissionGuard = new MutationSubmissionGuard();
 
     public ModernEditCreditScreen(CreditManager manager, CreditEntry entry, boolean debts, Screen parent) {
         super(manager, parent, debts ? "Schuld bearbeiten" : "Forderung bearbeiten", debts ? "debts" : "claims");
@@ -192,9 +193,11 @@ public final class ModernEditCreditScreen extends ModernBaseScreen {
         ModernLayout.Bounds save = actionButtons.get(0);
         ModernLayout.Bounds reset = actionButtons.get(1);
         ModernLayout.Bounds cancel = actionButtons.get(2);
-        ModernUi.button(context, textRenderer, save.x(), save.y(), save.width(), save.height(), canSave ? "Speichern" : changed ? "Eingaben prüfen" : "Keine Änderungen",
-                canSave ? ModernUi.theme().buttonPrimary : ModernUi.theme().buttonNeutral,
-                ModernUi.contains(mouseX, mouseY, save.x(), save.y(), save.width(), save.height()));
+        String saveLabel = submissionGuard.isActive() ? "Speichert…"
+                : canSave ? "Speichern" : changed ? "Eingaben prüfen" : "Keine Änderungen";
+        ModernUi.button(context, textRenderer, save.x(), save.y(), save.width(), save.height(), saveLabel,
+                canSave && !submissionGuard.isActive() ? ModernUi.theme().buttonPrimary : ModernUi.theme().buttonNeutral,
+                !submissionGuard.isActive() && ModernUi.contains(mouseX, mouseY, save.x(), save.y(), save.width(), save.height()));
         ModernUi.button(context, textRenderer, reset.x(), reset.y(), reset.width(), reset.height(), "Zurücksetzen", ModernUi.theme().buttonGold,
                 ModernUi.contains(mouseX, mouseY, reset.x(), reset.y(), reset.width(), reset.height()));
         ModernUi.button(context, textRenderer, cancel.x(), cancel.y(), cancel.width(), cancel.height(), "Abbrechen", ModernUi.theme().buttonNeutral,
@@ -317,17 +320,26 @@ public final class ModernEditCreditScreen extends ModernBaseScreen {
             toastError("Bitte die markierten Eingaben prüfen.");
             return;
         }
-        try {
-            Long dueDate = dueField.getText().isBlank() ? null : TimeUtil.parseDueDate(dueField.getText());
-            String other = playerField.getText().trim();
-            String own = currentPlayerName();
-            entry = manager.updateCreditMinor(entry.getId(), debts ? other : own, debts ? own : other, validation.amountMinor(), dueDate,
-                    blankToNull(labelField.getText()), blankToNull(noteField.getText()));
-            if (!showMutationCommitNotice()) toastSuccess("Deal aktualisiert.");
-            closeToParent();
-        } catch (CreditManager.CreditException exception) {
-            toastError(exception.getMessage());
-        }
+        Long dueDate = dueField.getText().isBlank() ? null : TimeUtil.parseDueDate(dueField.getText());
+        String other = playerField.getText().trim();
+        String own = currentPlayerName();
+        java.util.UUID creditId = entry.getId();
+        String creditor = debts ? other : own;
+        String debtor = debts ? own : other;
+        String label = blankToNull(labelField.getText());
+        String note = blankToNull(noteField.getText());
+        submitMutation(submissionGuard,
+                () -> manager.updateCreditMinor(creditId, creditor, debtor, validation.amountMinor(), dueDate, label, note),
+                (result, failure, screenCurrent) -> {
+                    if (failure != null) {
+                        toastError(failure.getMessage() == null ? "Deal konnte nicht aktualisiert werden." : failure.getMessage());
+                        return;
+                    }
+                    if (!showMutationCommitNotice(result.commitResult())) toastSuccess("Deal aktualisiert.");
+                    if (!screenCurrent) return;
+                    entry = result.value();
+                    closeToParent();
+                });
     }
 
     private void refreshEntry() {

@@ -29,6 +29,7 @@ public class ModernCreateCreditScreen extends ModernBaseScreen {
     private int viewportY;
     private int viewportHeight;
     private List<ModernLayout.Bounds> actionButtons = java.util.List.of();
+    private final MutationSubmissionGuard submissionGuard = new MutationSubmissionGuard();
 
     public ModernCreateCreditScreen(CreditManager manager, boolean debts, Screen parent) {
         super(manager, parent, debts ? "Neue Schuld" : "Neue Forderung", debts ? "debts" : "claims");
@@ -86,8 +87,10 @@ public class ModernCreateCreditScreen extends ModernBaseScreen {
         actionButtons = ModernLayout.buttonRow(fieldX, y + 225, fieldWidth, 2, 74, 23, 8);
         ModernLayout.Bounds save = actionButtons.getFirst();
         ModernLayout.Bounds cancel = actionButtons.get(1);
-        ModernUi.button(context, textRenderer, save.x(), save.y(), save.width(), save.height(), "Speichern", debts ? ModernUi.theme().buttonDanger : ModernUi.theme().buttonPrimary,
-                ModernUi.contains(mouseX, mouseY, save.x(), save.y(), save.width(), save.height()));
+        ModernUi.button(context, textRenderer, save.x(), save.y(), save.width(), save.height(),
+                submissionGuard.isActive() ? "Speichert…" : "Speichern",
+                debts ? ModernUi.theme().buttonDanger : ModernUi.theme().buttonPrimary,
+                !submissionGuard.isActive() && ModernUi.contains(mouseX, mouseY, save.x(), save.y(), save.width(), save.height()));
         ModernUi.button(context, textRenderer, cancel.x(), cancel.y(), cancel.width(), cancel.height(), "Abbrechen", ModernUi.theme().buttonNeutral,
                 ModernUi.contains(mouseX, mouseY, cancel.x(), cancel.y(), cancel.width(), cancel.height()));
         context.disableScissor();
@@ -175,18 +178,23 @@ public class ModernCreateCreditScreen extends ModernBaseScreen {
                 return;
             }
         }
-        try {
-            manager.createCreditMinor(debts ? otherPlayer : ownPlayer, debts ? ownPlayer : otherPlayer, amountMinor, dueDate,
-                    blankToNull(labelField.getText()), blankToNull(noteField.getText()));
-            if (!showMutationCommitNotice()) toastSuccess("Deal erstellt.");
-            if (parent instanceof ModernCreditListScreen) {
-                closeToParent();
-            } else {
-                open(new ModernCreditListScreen(manager, debts, null));
-            }
-        } catch (CreditManager.CreditException exception) {
-            toastError(exception.getMessage());
-        }
+        String creditor = debts ? otherPlayer : ownPlayer;
+        String debtor = debts ? ownPlayer : otherPlayer;
+        String label = blankToNull(labelField.getText());
+        String note = blankToNull(noteField.getText());
+        Long requestedDueDate = dueDate;
+        submitMutation(submissionGuard,
+                () -> manager.createCreditMinor(creditor, debtor, amountMinor, requestedDueDate, label, note),
+                (result, failure, screenCurrent) -> {
+                    if (failure != null) {
+                        toastError(failure.getMessage() == null ? "Deal konnte nicht gespeichert werden." : failure.getMessage());
+                        return;
+                    }
+                    if (!showMutationCommitNotice(result.commitResult())) toastSuccess("Deal erstellt.");
+                    if (!screenCurrent) return;
+                    if (parent instanceof ModernCreditListScreen) closeToParent();
+                    else open(new ModernCreditListScreen(manager, debts, null));
+                });
     }
 
     private String blankToNull(String value) {

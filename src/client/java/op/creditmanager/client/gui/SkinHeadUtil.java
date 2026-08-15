@@ -23,14 +23,21 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.SequencedSet;
 import java.util.UUID;
+import java.time.Duration;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
 public final class SkinHeadUtil {
@@ -47,6 +54,7 @@ public final class SkinHeadUtil {
     private static final long GLOBAL_RATE_LIMIT_COOLDOWN_MS = 15L * 60L * 1000L;
     private static final long REQUEST_PAUSE_MS = 7000L;
     private static final int MAX_CACHED_SKINS = 256;
+    private static final long CACHE_SAVE_DEBOUNCE_MS = 750L;
 
     private static final Pattern VALID_MINECRAFT_NAME =
             Pattern.compile("^[A-Za-z0-9_]{3,16}$");
@@ -60,6 +68,7 @@ public final class SkinHeadUtil {
 
     private static final Map<String, Boolean> SKIN_LOADING = new ConcurrentHashMap<>();
     private static final Map<String, Long> SKIN_FAILED_UNTIL = new ConcurrentHashMap<>();
+    private static final Map<String, JsonElement> PRESERVED_INVALID_CACHE_ENTRIES = new ConcurrentHashMap<>();
 
     private static final ScheduledExecutorService SKIN_EXECUTOR =
             Executors.newSingleThreadScheduledExecutor(r -> {
@@ -68,8 +77,27 @@ public final class SkinHeadUtil {
                 return thread;
             });
 
-    private static volatile boolean cacheLoaded = false;
+    private static final ScheduledExecutorService CACHE_EXECUTOR =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread thread = new Thread(r, "CreditManager-SkinCache");
+                thread.setDaemon(true);
+                return thread;
+            });
+
+    private static final Object CACHE_STATE_LOCK = new Object();
+    private static final List<Runnable> CACHE_REFRESH_CALLBACKS = new ArrayList<>();
+    private static final CoalescingSaveScheduler CACHE_SAVES = new CoalescingSaveScheduler(
+            CACHE_EXECUTOR, CACHE_SAVE_DEBOUNCE_MS, SkinHeadUtil::saveCacheSnapshot);
+    private static volatile CacheLoadState cacheLoadState = CacheLoadState.UNLOADED;
+    private static volatile boolean shuttingDown;
+    private static volatile boolean cacheRewriteAllowed = true;
     private static volatile long globalRateLimitUntil = 0L;
+
+    private enum CacheLoadState {
+        UNLOADED,
+        LOADING,
+        LOADED
+    }
 
     private SkinHeadUtil() {
     }
@@ -77,29 +105,81 @@ public final class SkinHeadUtil {
     public static void setzeSkin(ItemStack kopf, String spielerName, Runnable refreshGui) {
         if (kopf == null || spielerName == null || spielerName.isBlank()) return;
 
-        ensureCacheLoaded();
+        initializeAsync();
 
         String name = spielerName.trim();
         String key = normalizeKey(name);
 
-        CachedSkin cachedSkin = SKIN_ALIASES.get(key);
-
-        if (cachedSkin != null) {
-            GameProfile profile = cachedSkin.toGameProfile();
-
-            if (profile != null) {
-                kopf.set(DataComponentTypes.PROFILE, ProfileComponent.ofStatic(profile));
-                return;
-            }
-        }
+        if (applyCachedSkin(kopf, SKIN_ALIASES.get(key))) return;
 
         kopf.set(DataComponentTypes.PROFILE, ProfileComponent.ofStatic(createFallbackProfile(name)));
+
+        if (!cacheReady(refreshGui)) return;
+
+        if (applyCachedSkin(kopf, SKIN_ALIASES.get(key))) return;
 
         if (!darfSkinOnlineLaden(name)) {
             return;
         }
 
         ladeSkinAsync(name, refreshGui);
+    }
+
+    public static void initializeAsync() {
+        synchronized (CACHE_STATE_LOCK) {
+            if (cacheLoadState != CacheLoadState.UNLOADED || shuttingDown) return;
+            cacheLoadState = CacheLoadState.LOADING;
+            try {
+                CACHE_EXECUTOR.execute(SkinHeadUtil::loadCache);
+            } catch (RejectedExecutionException exception) {
+                cacheLoadState = CacheLoadState.LOADED;
+            }
+        }
+    }
+
+    public static void shutdown() {
+        shutdownAndAwait(Duration.ofSeconds(4L));
+    }
+
+    public static boolean shutdownAndAwait(Duration timeout) {
+        long budgetNanos = timeout == null ? 0L : Math.max(0L, timeout.toNanos());
+        long startedAt = System.nanoTime();
+        shuttingDown = true;
+        SKIN_EXECUTOR.shutdownNow();
+        boolean networkStopped = false;
+        try {
+            networkStopped = SKIN_EXECUTOR.awaitTermination(remainingNanos(startedAt, budgetNanos),
+                    TimeUnit.NANOSECONDS);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+        }
+        java.util.concurrent.Future<Boolean> flush = CACHE_SAVES.flushAsync();
+        boolean flushed = flush == null;
+        if (flush != null) {
+            try {
+                flushed = Boolean.TRUE.equals(flush.get(remainingNanos(startedAt, budgetNanos),
+                        TimeUnit.NANOSECONDS));
+            } catch (Exception exception) {
+                LOGGER.warn("[CreditManager] Ausstehender Skin-Cache konnte beim Shutdown nicht vollständig geschrieben werden: {}",
+                        exception.getMessage());
+            }
+        }
+        CACHE_SAVES.close();
+        CACHE_EXECUTOR.shutdown();
+        boolean cacheStopped = false;
+        try {
+            cacheStopped = CACHE_EXECUTOR.awaitTermination(remainingNanos(startedAt, budgetNanos),
+                    TimeUnit.NANOSECONDS);
+            if (!cacheStopped) CACHE_EXECUTOR.shutdownNow();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            CACHE_EXECUTOR.shutdownNow();
+        }
+        return networkStopped && flushed && cacheStopped;
+    }
+
+    private static long remainingNanos(long startedAt, long budgetNanos) {
+        return Math.max(0L, budgetNanos - Math.max(0L, System.nanoTime() - startedAt));
     }
 
     public static void versteckeProfilTooltip(ItemStack kopf) {
@@ -131,6 +211,7 @@ public final class SkinHeadUtil {
     }
 
     private static void ladeSkinAsync(String name, Runnable refreshGui) {
+        if (shuttingDown) return;
         String requestKey = normalizeKey(name);
         long now = System.currentTimeMillis();
 
@@ -151,9 +232,12 @@ public final class SkinHeadUtil {
             return;
         }
 
-        SKIN_EXECUTOR.execute(() -> {
+        try {
+            SKIN_EXECUTOR.execute(() -> {
             try {
                 GameProfile profile = fetchMojangProfileMitSkin(name);
+
+                if (shuttingDown) return;
 
                 if (profile == null) {
                     markNameFailed(requestKey);
@@ -175,7 +259,7 @@ public final class SkinHeadUtil {
                 SKIN_FAILED_UNTIL.remove(normalizeKey(cachedSkin.name()));
                 SKIN_FAILED_UNTIL.remove(normalizeKey(cachedSkin.uuid().toString()));
 
-                saveCache();
+                requestCacheSave();
 
                 net.minecraft.client.MinecraftClient client =
                         net.minecraft.client.MinecraftClient.getInstance();
@@ -209,7 +293,10 @@ public final class SkinHeadUtil {
                     Thread.currentThread().interrupt();
                 }
             }
-        });
+            });
+        } catch (RejectedExecutionException exception) {
+            SKIN_LOADING.remove(requestKey);
+        }
     }
 
     private static GameProfile fetchMojangProfileMitSkin(String name) {
@@ -324,62 +411,120 @@ public final class SkinHeadUtil {
         }
     }
 
-    private static synchronized void ensureCacheLoaded() {
-        if (cacheLoaded) return;
-        cacheLoaded = true;
-
+    private static void loadCache() {
+        boolean shouldPersistCanonicalCache = false;
         try {
-            if (!Files.exists(CACHE_FILE)) return;
-
-            try (Reader reader = Files.newBufferedReader(CACHE_FILE, StandardCharsets.UTF_8)) {
-                JsonElement parsed = JsonParser.parseReader(reader);
-
-                if (!parsed.isJsonObject()) return;
-
-                JsonObject root = parsed.getAsJsonObject();
-
-                for (Map.Entry<String, JsonElement> entry : root.entrySet()) {
-                    if (!entry.getValue().isJsonObject()) continue;
-
-                    CachedSkin loaded = CachedSkin.fromJson(entry.getValue().getAsJsonObject());
-
-                    if (loaded == null || loaded.toGameProfile() == null) continue;
-
-                    putSkinInRuntimeAndCanonicalCache(entry.getKey(), loaded);
+            if (Files.exists(CACHE_FILE)) {
+                try (Reader reader = Files.newBufferedReader(CACHE_FILE, StandardCharsets.UTF_8)) {
+                    JsonElement parsed = JsonParser.parseReader(reader);
+                    if (parsed.isJsonObject()) {
+                        JsonObject root = parsed.getAsJsonObject();
+                        boolean allEntriesValid = true;
+                        for (Map.Entry<String, JsonElement> entry : root.entrySet()) {
+                            if (!entry.getValue().isJsonObject()) {
+                                allEntriesValid = false;
+                                PRESERVED_INVALID_CACHE_ENTRIES.put(entry.getKey(), entry.getValue().deepCopy());
+                                continue;
+                            }
+                            CachedSkin loaded = CachedSkin.fromJson(entry.getValue().getAsJsonObject());
+                            if (loaded == null || loaded.toGameProfile() == null) {
+                                allEntriesValid = false;
+                                PRESERVED_INVALID_CACHE_ENTRIES.put(entry.getKey(), entry.getValue().deepCopy());
+                                continue;
+                            }
+                            putSkinInRuntimeAndCanonicalCache(entry.getKey(), loaded);
+                        }
+                        shouldPersistCanonicalCache = allEntriesValid;
+                    } else {
+                        cacheRewriteAllowed = false;
+                    }
                 }
             }
-
-            saveCache();
-
             LOGGER.info(
                     "[CreditManager] {} eindeutige Skin-Cache-Einträge geladen.",
                     SKIN_BY_UUID.size()
             );
-
         } catch (Exception e) {
+            cacheRewriteAllowed = false;
             LOGGER.warn("[CreditManager] Skin-Cache konnte nicht geladen werden: {}", e.getMessage());
+        } finally {
+            completeCacheLoad();
+        }
+        if (shouldPersistCanonicalCache) requestCacheSave();
+    }
+
+    private static void requestCacheSave() {
+        CACHE_SAVES.request();
+    }
+
+    private static boolean saveCacheSnapshot() {
+        if (!cacheRewriteAllowed) return false;
+        Path temporary = CACHE_FILE.resolveSibling(CACHE_FILE.getFileName() + ".tmp");
+        try {
+            Files.createDirectories(CACHE_FILE.getParent());
+            JsonObject root = new JsonObject();
+            for (CachedSkin cachedSkin : SKIN_BY_UUID.values()) {
+                if (cachedSkin == null || cachedSkin.uuid() == null) continue;
+                root.add(cachedSkin.uuid().toString(), cachedSkin.toJson());
+            }
+            for (Map.Entry<String, JsonElement> entry : PRESERVED_INVALID_CACHE_ENTRIES.entrySet()) {
+                root.add(entry.getKey(), entry.getValue().deepCopy());
+            }
+            try (Writer writer = Files.newBufferedWriter(temporary, StandardCharsets.UTF_8)) {
+                GSON.toJson(root, writer);
+            }
+            try {
+                Files.move(temporary, CACHE_FILE, StandardCopyOption.REPLACE_EXISTING,
+                        StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException ignored) {
+                Files.move(temporary, CACHE_FILE, StandardCopyOption.REPLACE_EXISTING);
+            }
+            return true;
+        } catch (Exception e) {
+            LOGGER.warn("[CreditManager] Skin-Cache konnte nicht gespeichert werden: {}", e.getMessage());
+            return false;
+        } finally {
+            try {
+                Files.deleteIfExists(temporary);
+            } catch (Exception ignored) {
+            }
         }
     }
 
-    private static synchronized void saveCache() {
-        try {
-            Files.createDirectories(CACHE_FILE.getParent());
+    private static boolean applyCachedSkin(ItemStack head, CachedSkin cachedSkin) {
+        if (cachedSkin == null) return false;
+        GameProfile profile = cachedSkin.toGameProfile();
+        if (profile == null) return false;
+        head.set(DataComponentTypes.PROFILE, ProfileComponent.ofStatic(profile));
+        return true;
+    }
 
-            JsonObject root = new JsonObject();
-
-            for (CachedSkin cachedSkin : SKIN_BY_UUID.values()) {
-                if (cachedSkin == null || cachedSkin.uuid() == null) continue;
-
-                root.add(cachedSkin.uuid().toString(), cachedSkin.toJson());
-            }
-
-            try (Writer writer = Files.newBufferedWriter(CACHE_FILE, StandardCharsets.UTF_8)) {
-                GSON.toJson(root, writer);
-            }
-
-        } catch (Exception e) {
-            LOGGER.warn("[CreditManager] Skin-Cache konnte nicht gespeichert werden: {}", e.getMessage());
+    private static boolean cacheReady(Runnable refreshGui) {
+        synchronized (CACHE_STATE_LOCK) {
+            if (cacheLoadState == CacheLoadState.LOADED) return true;
+            if (refreshGui != null) CACHE_REFRESH_CALLBACKS.add(refreshGui);
+            return false;
         }
+    }
+
+    private static void completeCacheLoad() {
+        List<Runnable> callbacks;
+        synchronized (CACHE_STATE_LOCK) {
+            cacheLoadState = CacheLoadState.LOADED;
+            callbacks = List.copyOf(CACHE_REFRESH_CALLBACKS);
+            CACHE_REFRESH_CALLBACKS.clear();
+        }
+        if (callbacks.isEmpty()) return;
+        net.minecraft.client.MinecraftClient client = net.minecraft.client.MinecraftClient.getInstance();
+        client.execute(() -> {
+            for (Runnable callback : callbacks) {
+                try {
+                    callback.run();
+                } catch (RuntimeException exception) {
+                    LOGGER.debug("[CreditManager] Skin-Cache-Refresh fehlgeschlagen: {}", exception.getMessage());
+                }
+            }
+        });
     }
 
     private static void putSkinInRuntimeAndCanonicalCache(String requestedKeyOrName, CachedSkin cachedSkin) {

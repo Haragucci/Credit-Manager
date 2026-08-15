@@ -13,6 +13,7 @@ import op.creditmanager.client.gui.modern.widget.ModernScrollArea;
 import op.creditmanager.client.gui.modern.query.ModernQueryDebouncer;
 import op.creditmanager.client.gui.modern.query.ModernQueryExecutor;
 import op.creditmanager.client.model.TransactionEntry;
+import op.creditmanager.client.paylog.importer.BankPaylogImportController;
 import op.creditmanager.client.storage.db.DatabaseManager;
 import op.creditmanager.client.util.FormatUtil;
 import op.creditmanager.client.util.TimeUtil;
@@ -22,7 +23,6 @@ import java.util.concurrent.CompletableFuture;
 
 public final class ModernPaylogScreen extends ModernBaseScreen {
     private static final int PAGE_SIZE = DatabaseManager.PAGE_SIZE;
-    private static final int PAYLOG_TOOLBAR_BUTTON_NUDGE = 4;
     private static final String[] DIRECTION_FILTERS = {"Alle", "Eingehend", "Ausgehend"};
 
     private final ModernScrollArea scroll = new ModernScrollArea();
@@ -33,8 +33,8 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
     private int listHeight;
     private int previousX, nextX, pageControlsY, pageButtonWidth;
     private int manualButtonX, manualButtonY, manualButtonWidth;
+    private int importButtonX, importButtonY, importButtonWidth;
     private int filterButtonX, filterButtonY, filterButtonWidth;
-    private List<ModernLayout.Bounds> toolbarButtons = List.of();
     private List<ModernLayout.Bounds> pagingButtons = List.of();
     private List<ModernLayout.Bounds> errorButtons = List.of();
     private List<TransactionEntry> renderedEntries = List.of();
@@ -57,7 +57,6 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
         disposed = false;
         forceQuery = true;
         clearChildren();
-        manualButtonWidth = 82;
         searchField = ModernUi.configureGuiTextField(new CenteredTextFieldWidget(textRenderer, 0, 0, 1, 24, Text.empty()));
         searchField.setMaxLength(96);
         ModernUi.setGuiPlaceholder(searchField, "Spieler, Betrag, Datum oder Freitext...");
@@ -74,6 +73,7 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
         }
         String filterKey = filterKey();
         if (!filterKey.equals(requestedFilterKey)) {
+            ModernQueryExecutor.cancel(this);
             if (pending != null) pending.future().cancel(true);
             pending = null;
             requestSequence++;
@@ -98,7 +98,8 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
         String query = searchField == null ? "" : searchField.getText().trim();
         int direction = directionIndex;
         int offset = pageOffset;
-        pending = new PendingQuery(sequence, key, CompletableFuture.supplyAsync(() -> TransactionRepository.getInstance().queryPage(player, direction, query, PAGE_SIZE, offset), ModernQueryExecutor.get()));
+        pending = new PendingQuery(sequence, key, ModernQueryExecutor.submitLatest(this,
+                () -> TransactionRepository.getInstance().queryPage(player, direction, query, PAGE_SIZE, offset)));
     }
 
     private void applyFinishedQuery(PendingQuery result) {
@@ -117,23 +118,25 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
     @Override public void render(DrawContext context, int mouseX, int mouseY, float delta) {
         renderShell(context, mouseX, mouseY);
         int toolbarY = contentY + 4;
-        boolean compactToolbar = contentWidth < 230;
-        if (!compactToolbar) manualButtonWidth = Math.min(82, Math.max(64, contentWidth / 3));
-        int searchWidth = compactToolbar ? Math.max(1, contentWidth - 8) : Math.max(1, contentWidth - manualButtonWidth - 12);
-        ModernLayout.positionTextField(searchField, contentX + 4, toolbarY + 4, searchWidth, contentY, contentHeight, true);
-        toolbarButtons = ModernLayout.buttonRow(contentX, toolbarY + 32, compactToolbar ? contentWidth : manualButtonWidth,
-                compactToolbar ? 2 : 1, 72, 24, 8);
-        ModernLayout.Bounds manual = toolbarButtons.getFirst();
-        manualButtonX = compactToolbar ? manual.x() : contentX + contentWidth - manualButtonWidth - PAYLOG_TOOLBAR_BUTTON_NUDGE;
-        manualButtonY = compactToolbar ? manual.y() : toolbarY + 4;
-        manualButtonWidth = compactToolbar ? manual.width() : manualButtonWidth;
-        filterButtonX = compactToolbar ? toolbarButtons.get(1).x() : contentX + PAYLOG_TOOLBAR_BUTTON_NUDGE;
-        filterButtonY = compactToolbar ? toolbarButtons.get(1).y() : toolbarY + 32;
-        filterButtonWidth = compactToolbar ? toolbarButtons.get(1).width() : Math.max(72, Math.min(104, contentWidth));
-        int toolbarHeight = compactToolbar ? ModernLayout.rowHeight(toolbarButtons, 0) + 32 : 60;
+        ModernPaylogToolbarLayout.Layout toolbar = ModernPaylogToolbarLayout.calculate(
+                contentX, toolbarY, contentWidth, contentHeight);
+        ModernLayout.positionTextField(searchField, toolbar.search().x(), toolbar.search().y(),
+                toolbar.search().width(), contentY, contentHeight, true);
+        manualButtonX = toolbar.manual().x();
+        manualButtonY = toolbar.manual().y();
+        manualButtonWidth = toolbar.manual().width();
+        importButtonX = toolbar.importer().x();
+        importButtonY = toolbar.importer().y();
+        importButtonWidth = toolbar.importer().width();
+        filterButtonX = toolbar.filter().x();
+        filterButtonY = toolbar.filter().y();
+        filterButtonWidth = toolbar.filter().width();
+        int toolbarHeight = toolbar.height();
         ModernUi.card(context, contentX, toolbarY, contentWidth, toolbarHeight, ModernUi.contains(mouseX, mouseY, contentX, toolbarY, contentWidth, toolbarHeight));
         ModernUi.button(context, textRenderer, manualButtonX, manualButtonY, manualButtonWidth, 24, "+ Paylog",
                 ModernUi.theme().buttonPrimary, ModernUi.contains(mouseX, mouseY, manualButtonX, manualButtonY, manualButtonWidth, 24));
+        ModernUi.button(context, textRenderer, importButtonX, importButtonY, importButtonWidth, 24, "Importieren",
+                ModernUi.theme().buttonNeutral, ModernUi.contains(mouseX, mouseY, importButtonX, importButtonY, importButtonWidth, 24));
         ModernUi.button(context, textRenderer, filterButtonX, filterButtonY, filterButtonWidth, 24, DIRECTION_FILTERS[directionIndex], ModernUi.theme().buttonNeutral,
                 ModernUi.contains(mouseX, mouseY, filterButtonX, filterButtonY, filterButtonWidth, 24));
 
@@ -241,6 +244,10 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
             open(new ModernCreatePaylogScreen(manager, this));
             return true;
         }
+        if (ModernUi.contains(click.x(), click.y(), importButtonX, importButtonY, importButtonWidth, 24)) {
+            BankPaylogImportController.getInstance().requestFromPaylogScreen();
+            return true;
+        }
         if (ModernUi.contains(click.x(), click.y(), filterButtonX, filterButtonY, filterButtonWidth, 24)) {
             directionIndex = (directionIndex + 1) % DIRECTION_FILTERS.length;
             requestedFilterKey = "";
@@ -277,6 +284,7 @@ public final class ModernPaylogScreen extends ModernBaseScreen {
     @Override protected void clearTransientState() {
         disposed = true;
         requestSequence++;
+        ModernQueryExecutor.cancel(this);
         scroll.reset();
         if (searchField != null) searchField.setText("");
         page = new DatabaseManager.QueryPage<>(List.of(), 0, 0, PAGE_SIZE);

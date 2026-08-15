@@ -12,12 +12,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-final class StorageTestScope implements AutoCloseable {
+public final class StorageTestScope implements AutoCloseable {
     private static final List<String> FIELDS = List.of("dataDirectory", "initializedDirectory", "storageLocation",
             "backupMirrorDirectory", "storageLease", "storageAccessState", "dataDirectoryCreated");
     private final Map<Field, Object> previous = new LinkedHashMap<>();
 
-    StorageTestScope() throws Exception {
+    public StorageTestScope() throws Exception {
         for (String name : FIELDS) {
             Field field = FileManager.class.getDeclaredField(name);
             field.setAccessible(true);
@@ -25,7 +25,7 @@ final class StorageTestScope implements AutoCloseable {
         }
     }
 
-    void configureExternal(Path root) throws Exception {
+    public void configureExternal(Path root) throws Exception {
         configure(root, null, new StorageRootResolver.StorageLocation(root, null,
                 StorageRootResolver.StorageEnvironment.STANDARD, "test-instance",
                 StorageRootResolver.ResolutionSource.STANDARD_GAME_DIR, true, List.of("test")),

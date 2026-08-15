@@ -127,6 +127,28 @@ public final class DatabaseSchemaManager {
 
     public void ensureAdditiveSchemaObjects(Connection connection) throws SQLException {
         try (Statement statement = connection.createStatement()) {
+            if (!tableExists(connection, "paylog_search_tokens")) {
+                statement.execute(
+                        "CREATE TABLE paylog_search_tokens (" +
+                                "paylog_id VARCHAR(36) NOT NULL, " +
+                                "token VARCHAR(96) NOT NULL, " +
+                                "PRIMARY KEY (paylog_id, token), " +
+                                "CONSTRAINT fk_paylog_search_token " +
+                                "FOREIGN KEY (paylog_id) REFERENCES paylogs(id) ON DELETE CASCADE)"
+                );
+            }
+
+            if (!tableExists(connection, "deal_search_tokens")) {
+                statement.execute(
+                        "CREATE TABLE deal_search_tokens (" +
+                                "credit_id VARCHAR(36) NOT NULL, " +
+                                "token VARCHAR(96) NOT NULL, " +
+                                "PRIMARY KEY (credit_id, token), " +
+                                "CONSTRAINT fk_deal_search_token " +
+                                "FOREIGN KEY (credit_id) REFERENCES credits(id) ON DELETE CASCADE)"
+                );
+            }
+
             createEventCountTable(statement);
             createIndexes(statement);
         }
@@ -229,11 +251,61 @@ public final class DatabaseSchemaManager {
     }
 
     private void createAuxiliaryTables(Statement statement) throws SQLException {
-        statement.execute("CREATE TABLE IF NOT EXISTS paylog_search_tokens (paylog_id VARCHAR(36) NOT NULL, token VARCHAR(96) NOT NULL, PRIMARY KEY (paylog_id, token), CONSTRAINT fk_paylog_search_token FOREIGN KEY (paylog_id) REFERENCES paylogs(id) ON DELETE CASCADE)");
-        statement.execute("CREATE TABLE IF NOT EXISTS deal_search_tokens (credit_id VARCHAR(36) NOT NULL, token VARCHAR(96) NOT NULL, PRIMARY KEY (credit_id, token), CONSTRAINT fk_deal_search_token FOREIGN KEY (credit_id) REFERENCES credits(id) ON DELETE CASCADE)");
-        statement.execute("CREATE TABLE IF NOT EXISTS data_health_records (id VARCHAR(36) PRIMARY KEY, record_type VARCHAR(64) NOT NULL, severity VARCHAR(32) NOT NULL, source_table VARCHAR(64), source_id VARCHAR(128), title VARCHAR(256), message CLOB, raw_payload CLOB, repair_payload CLOB, status VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, resolved_at BIGINT)");
-        statement.execute("CREATE TABLE IF NOT EXISTS migration_log (id VARCHAR(36) PRIMARY KEY, migration_type VARCHAR(64) NOT NULL, started_at BIGINT NOT NULL, completed_at BIGINT, details CLOB, status VARCHAR(32) NOT NULL)");
-        statement.execute("CREATE TABLE IF NOT EXISTS legacy_records (id VARCHAR(36) PRIMARY KEY, record_kind VARCHAR(64) NOT NULL, original_id VARCHAR(256), raw_payload CLOB NOT NULL, reason CLOB, created_at BIGINT NOT NULL, migration_id VARCHAR(36) NOT NULL)");
+        statement.execute(
+                "CREATE TABLE IF NOT EXISTS paylog_search_tokens (" +
+                        "paylog_id VARCHAR(36) NOT NULL, " +
+                        "token VARCHAR(96) NOT NULL, " +
+                        "PRIMARY KEY (paylog_id, token), " +
+                        "CONSTRAINT fk_paylog_search_token " +
+                        "FOREIGN KEY (paylog_id) REFERENCES paylogs(id) ON DELETE CASCADE)"
+        );
+
+        statement.execute(
+                "CREATE TABLE IF NOT EXISTS deal_search_tokens (" +
+                        "credit_id VARCHAR(36) NOT NULL, " +
+                        "token VARCHAR(96) NOT NULL, " +
+                        "PRIMARY KEY (credit_id, token), " +
+                        "CONSTRAINT fk_deal_search_token " +
+                        "FOREIGN KEY (credit_id) REFERENCES credits(id) ON DELETE CASCADE)"
+        );
+
+        statement.execute(
+                "CREATE TABLE IF NOT EXISTS data_health_records (" +
+                        "id VARCHAR(36) PRIMARY KEY, " +
+                        "record_type VARCHAR(64) NOT NULL, " +
+                        "severity VARCHAR(32) NOT NULL, " +
+                        "source_table VARCHAR(64), " +
+                        "source_id VARCHAR(128), " +
+                        "title VARCHAR(256), " +
+                        "message CLOB, " +
+                        "raw_payload CLOB, " +
+                        "repair_payload CLOB, " +
+                        "status VARCHAR(32) NOT NULL, " +
+                        "created_at BIGINT NOT NULL, " +
+                        "resolved_at BIGINT)"
+        );
+
+        statement.execute(
+                "CREATE TABLE IF NOT EXISTS migration_log (" +
+                        "id VARCHAR(36) PRIMARY KEY, " +
+                        "migration_type VARCHAR(64) NOT NULL, " +
+                        "started_at BIGINT NOT NULL, " +
+                        "completed_at BIGINT, " +
+                        "details CLOB, " +
+                        "status VARCHAR(32) NOT NULL)"
+        );
+
+        statement.execute(
+                "CREATE TABLE IF NOT EXISTS legacy_records (" +
+                        "id VARCHAR(36) PRIMARY KEY, " +
+                        "record_kind VARCHAR(64) NOT NULL, " +
+                        "original_id VARCHAR(256), " +
+                        "raw_payload CLOB NOT NULL, " +
+                        "reason CLOB, " +
+                        "created_at BIGINT NOT NULL, " +
+                        "migration_id VARCHAR(36) NOT NULL)"
+        );
+
         createEventCountTable(statement);
     }
 

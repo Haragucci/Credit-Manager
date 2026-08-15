@@ -9,7 +9,9 @@ import net.minecraft.client.gui.Element;
 import net.minecraft.client.gl.RenderPipelines;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
+import op.creditmanager.client.CreditManagerClient;
 import op.creditmanager.client.core.CreditManager;
+import op.creditmanager.client.core.CreditManagerMutationExecutor;
 import op.creditmanager.client.core.service.MutationCommitResult;
 import op.creditmanager.client.gui.modern.theme.ModernThemePalette;
 import op.creditmanager.client.gui.modern.theme.ColorUtil;
@@ -17,16 +19,30 @@ import op.creditmanager.client.gui.modern.toast.ModernToastManager;
 import op.creditmanager.client.gui.modern.toast.ModernToastType;
 import op.creditmanager.client.storage.DataHealth;
 
+import java.util.List;
+
 public abstract class ModernBaseScreen extends Screen {
 
     private static final Identifier LOGO_TEXTURE = Identifier.of("creditmanager", "textures/gui/logo.png");
     private static final int LOGO_TEXTURE_SIZE = 128;
     private static final int LOGO_DRAW_SIZE = 32;
+    private static final String NAVIGATION_POSITION_KEY = "navigation-active-position";
+    private static final List<NavigationEntry> NAVIGATION = List.of(
+            new NavigationEntry("Übersicht", "overview"),
+            new NavigationEntry("Forderungen", "claims"),
+            new NavigationEntry("Schulden", "debts"),
+            new NavigationEntry("Paylogs", "paylogs"),
+            new NavigationEntry("History", "history"),
+            new NavigationEntry("Info", "info"),
+            new NavigationEntry("Einstellungen", "settings")
+    );
+    private static final IdentitySnapshotCache<Boolean> LOGO_AVAILABILITY = new IdentitySnapshotCache<>();
 
     protected final CreditManager manager;
     protected final Screen parent;
     private final String pageTitle;
     private final String activeNavigation;
+    private final UiCompletionGeneration completionGeneration = new UiCompletionGeneration();
 
     protected int panelX;
     protected int panelY;
@@ -43,6 +59,12 @@ public abstract class ModernBaseScreen extends Screen {
     protected int backButtonY;
     protected int backButtonWidth;
     protected boolean compactLayout;
+
+    private record NavigationEntry(String label, String id, String animationKey) {
+        private NavigationEntry(String label, String id) {
+            this(label, id, "navigation:" + id);
+        }
+    }
 
     protected ModernBaseScreen(CreditManager manager, Screen parent, String pageTitle, String activeNavigation) {
         super(Text.literal(pageTitle));
@@ -81,7 +103,7 @@ public abstract class ModernBaseScreen extends Screen {
         int brandX = panelX + (compactLayout ? 6 : 12);
         int brandY = panelY + 8;
 
-        if (!compactLayout && MinecraftClient.getInstance().getResourceManager().getResource(LOGO_TEXTURE).isPresent()) {
+        if (!compactLayout && logoAvailable()) {
             ModernUi.card(context, brandX - 2, brandY - 2, LOGO_DRAW_SIZE + 4, LOGO_DRAW_SIZE + 4, false);
             context.drawTexture(
                     RenderPipelines.GUI_TEXTURED,
@@ -141,46 +163,38 @@ public abstract class ModernBaseScreen extends Screen {
 
     private void drawNavigation(DrawContext context, int mouseX, int mouseY) {
         if (compactLayout) return;
-        String[][] entries = {
-                {"Übersicht", "overview"},
-                {"Forderungen", "claims"},
-                {"Schulden", "debts"},
-                {"Paylogs", "paylogs"},
-                {"History", "history"},
-                {"Info", "info"},
-                {"Einstellungen", "settings"}
-        };
+        ModernThemePalette theme = ModernUi.theme();
         int activeIndex = 0;
-        for (int index = 0; index < entries.length; index++) {
-            if (entries[index][1].equals(activeNavigation)) {
+        for (int index = 0; index < NAVIGATION.size(); index++) {
+            if (NAVIGATION.get(index).id().equals(activeNavigation)) {
                 activeIndex = index;
                 break;
             }
         }
-        int activeY = ModernUi.animatedPosition("navigation-active-position", panelY + 48 + activeIndex * 27);
+        int activeY = ModernUi.animatedPosition(NAVIGATION_POSITION_KEY, panelY + 48 + activeIndex * 27);
         int y = panelY + 48;
-        for (String[] entry : entries) {
-            boolean active = entry[1].equals(activeNavigation);
+        for (NavigationEntry entry : NAVIGATION) {
+            boolean active = entry.id().equals(activeNavigation);
             boolean hovered = ModernUi.contains(mouseX, mouseY, panelX + 8, y, sidebarWidth - 16, 22);
-            float emphasis = ModernUi.animationProgress("navigation:" + entry[1], hovered);
+            float emphasis = ModernUi.animationProgress(entry.animationKey(), hovered);
             if (emphasis > 0.01F) {
-                int base = active ? ModernUi.theme().navActive : ModernUi.theme().panelAlt;
+                int base = active ? theme.navActive : theme.panelAlt;
                 context.fill(panelX + 8, y, panelX + sidebarWidth - 8, y + 22,
-                        ColorUtil.mix(base, ModernUi.theme().navActive, emphasis));
+                        ColorUtil.mix(base, theme.navActive, emphasis));
                 context.fill(panelX + 8, y, panelX + 10, y + 22,
-                        ColorUtil.withAlpha(ModernUi.theme().accent, Math.max(1, Math.round(255.0F * emphasis))));
+                        ColorUtil.withAlpha(theme.accent, Math.max(1, Math.round(255.0F * emphasis))));
             }
             y += 27;
         }
 
-        context.fill(panelX + 8, activeY, panelX + sidebarWidth - 8, activeY + 22, ModernUi.theme().navActive);
-        context.fill(panelX + 8, activeY, panelX + 10, activeY + 22, ModernUi.theme().accent);
+        context.fill(panelX + 8, activeY, panelX + sidebarWidth - 8, activeY + 22, theme.navActive);
+        context.fill(panelX + 8, activeY, panelX + 10, activeY + 22, theme.accent);
 
         y = panelY + 48;
-        for (String[] entry : entries) {
-            boolean active = entry[1].equals(activeNavigation);
-            ModernUi.drawTruncated(context, textRenderer, entry[0], panelX + 16, y + 7,
-                    sidebarWidth - 28, active ? ModernUi.theme().text : ModernUi.theme().muted);
+        for (NavigationEntry entry : NAVIGATION) {
+            boolean active = entry.id().equals(activeNavigation);
+            ModernUi.drawTruncated(context, textRenderer, entry.label(), panelX + 16, y + 7,
+                    sidebarWidth - 28, active ? theme.text : theme.muted);
             y += 27;
         }
     }
@@ -191,10 +205,9 @@ public abstract class ModernBaseScreen extends Screen {
             return false;
         }
         int y = panelY + 48;
-        String[] ids = {"overview", "claims", "debts", "paylogs", "history", "info", "settings"};
-        for (String id : ids) {
+        for (NavigationEntry entry : NAVIGATION) {
             if (ModernUi.contains(click.x(), click.y(), panelX + 8, y, sidebarWidth - 16, 22)) {
-                openNavigation(id);
+                openNavigation(entry.id());
                 return true;
             }
             y += 27;
@@ -215,6 +228,21 @@ public abstract class ModernBaseScreen extends Screen {
         open(next);
     }
 
+    public static void invalidateResourceCaches() {
+        LOGO_AVAILABILITY.invalidate();
+        ModernUi.invalidateTextCaches();
+    }
+
+    static List<String> navigationIds() {
+        return NAVIGATION.stream().map(NavigationEntry::id).toList();
+    }
+
+    private static boolean logoAvailable() {
+        Object resourceManager = MinecraftClient.getInstance().getResourceManager();
+        return LOGO_AVAILABILITY.get(resourceManager,
+                () -> MinecraftClient.getInstance().getResourceManager().getResource(LOGO_TEXTURE).isPresent());
+    }
+
     protected void open(Screen screen) {
         clearTransientState();
         MinecraftClient.getInstance().setScreen(screen);
@@ -232,7 +260,10 @@ public abstract class ModernBaseScreen extends Screen {
     protected void toastInfo(String message) { toast(message, ModernToastType.INFO); }
 
     protected boolean showMutationCommitNotice() {
-        MutationCommitResult result = manager.consumeLastMutationCommit();
+        return showMutationCommitNotice(manager.consumeLastMutationCommit());
+    }
+
+    protected boolean showMutationCommitNotice(MutationCommitResult result) {
         if (result == null || result.status() == MutationCommitResult.Status.COMMITTED_SYNCED) return false;
         if (result.status() == MutationCommitResult.Status.COMMITTED_RELOAD_REQUIRED) {
             toastWarning(result.userMessage());
@@ -243,6 +274,41 @@ public abstract class ModernBaseScreen extends Screen {
             return true;
         }
         return false;
+    }
+
+    protected <T> boolean submitMutation(MutationSubmissionGuard guard,
+                                         CreditManagerMutationExecutor.CheckedSupplier<T> operation,
+                                         MutationCompletion<T> completion) {
+        if (guard == null || operation == null || completion == null) return false;
+        long submissionToken = guard.tryBeginToken();
+        if (submissionToken < 0L) return false;
+        long generation = completionGeneration.capture();
+        CreditManagerMutationExecutor.getInstance().submit(manager, operation).whenComplete((result, failure) -> {
+            try {
+                MinecraftClient.getInstance().execute(() -> {
+                    boolean ownsSubmission = guard.complete(submissionToken);
+                    boolean current = ownsSubmission && completionGeneration.isCurrent(generation)
+                            && MinecraftClient.getInstance().currentScreen == this;
+                    try {
+                        completion.complete(result, unwrapCompletionFailure(failure), current);
+                    } catch (RuntimeException completionFailure) {
+                        CreditManagerClient.LOGGER.error("CreditManager mutation completion failed", completionFailure);
+                    }
+                });
+            } catch (RuntimeException publicationFailure) {
+                CreditManagerClient.LOGGER.error("CreditManager mutation completion could not be published", publicationFailure);
+            }
+        });
+        return true;
+    }
+
+    private Throwable unwrapCompletionFailure(Throwable failure) {
+        Throwable current = failure;
+        while ((current instanceof java.util.concurrent.CompletionException
+                || current instanceof java.util.concurrent.ExecutionException) && current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current;
     }
 
     protected boolean isAnyInputFocused() {
@@ -341,8 +407,15 @@ public abstract class ModernBaseScreen extends Screen {
 
     @Override
     public void removed() {
+        completionGeneration.invalidate();
         clearTransientState();
         super.removed();
+    }
+
+    @FunctionalInterface
+    protected interface MutationCompletion<T> {
+        void complete(CreditManagerMutationExecutor.MutationOutcome<T> result, Throwable failure,
+                      boolean screenCurrent);
     }
 
     @Override

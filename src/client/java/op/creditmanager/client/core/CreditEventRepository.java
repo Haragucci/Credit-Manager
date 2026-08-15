@@ -14,21 +14,21 @@ import java.util.UUID;
 public final class CreditEventRepository {
     static final int CACHE_LIMIT = DatabaseManager.PAGE_SIZE;
     private static final CreditEventRepository INSTANCE = new CreditEventRepository();
-    private final List<CreditEventEntry> recentEvents = new ArrayList<>(CACHE_LIMIT);
-    private boolean recoveryRequired;
-    private long revision;
+    private volatile List<CreditEventEntry> recentEvents = List.of();
+    private volatile boolean recoveryRequired;
+    private volatile long revision;
 
     private CreditEventRepository() { }
 
     public static CreditEventRepository getInstance() { return INSTANCE; }
 
     public synchronized boolean load() {
+        recoveryRequired = true;
         try {
             DatabaseManager.QueryPage<CreditEventEntry> page = DatabaseManager.getInstance()
                     .queryCreditEventPage("", null, CACHE_LIMIT, 0);
             List<CreditEventEntry> nextEvents = new ArrayList<>(page.entries());
-            recentEvents.clear();
-            recentEvents.addAll(nextEvents);
+            recentEvents = List.copyOf(nextEvents);
             recoveryRequired = false;
             revision = DatabaseManager.getInstance().revision();
             CreditManagerClient.LOGGER.info("Loaded {} of {} credit events into the bounded runtime cache.",
@@ -42,11 +42,11 @@ public final class CreditEventRepository {
         }
     }
 
-    public synchronized List<CreditEventEntry> getRecentEvents() { return List.copyOf(recentEvents); }
+    public List<CreditEventEntry> getRecentEvents() { return recentEvents; }
 
-    public synchronized long getRevision() { return revision; }
+    public long getRevision() { return revision; }
 
-    public synchronized boolean isWritable() {
+    public boolean isWritable() {
         return !recoveryRequired && DatabaseManager.getInstance().isSafeForWrites();
     }
 
@@ -66,14 +66,16 @@ public final class CreditEventRepository {
 
     public synchronized void acceptCommittedEvents(List<CreditEventEntry> values, long committedRevision) {
         if (values != null && !values.isEmpty()) {
+            List<CreditEventEntry> nextEvents = new ArrayList<>(recentEvents);
             Set<UUID> ids = new HashSet<>();
-            for (CreditEventEntry event : recentEvents) {
+            for (CreditEventEntry event : nextEvents) {
                 if (event != null && event.getId() != null) ids.add(event.getId());
             }
             for (CreditEventEntry event : values) {
-                if (event != null && event.getId() != null && ids.add(event.getId())) recentEvents.add(0, event);
+                if (event != null && event.getId() != null && ids.add(event.getId())) nextEvents.add(0, event);
             }
-            if (recentEvents.size() > CACHE_LIMIT) recentEvents.subList(CACHE_LIMIT, recentEvents.size()).clear();
+            if (nextEvents.size() > CACHE_LIMIT) nextEvents.subList(CACHE_LIMIT, nextEvents.size()).clear();
+            recentEvents = List.copyOf(nextEvents);
         }
         recoveryRequired = false;
         revision = committedRevision;

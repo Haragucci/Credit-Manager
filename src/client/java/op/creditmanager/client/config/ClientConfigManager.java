@@ -2,20 +2,60 @@ package op.creditmanager.client.config;
 
 import op.creditmanager.client.storage.FileManager;
 import op.creditmanager.client.storage.JsonStorage;
+import op.creditmanager.client.gui.modern.theme.ModernThemeFactory;
 import op.creditmanager.client.gui.modern.theme.ModernThemeMode;
 
 import java.nio.file.Path;
 
 public final class ClientConfigManager {
 
-    private static ClientConfig config;
-    private static boolean recoveryRequired;
+    private static volatile ClientConfig config;
+    private static volatile boolean recoveryRequired;
+    private static ModernThemeMode renderedThemeMode = ModernThemeMode.DARK;
+    private static GuiFontMode renderedFontMode = GuiFontMode.MOD;
+    private static int renderedMainColor = 0xFF1F7A3A;
+    private static int renderedAccentColor = 0xFF7EE787;
+    private static long renderEpoch;
+    private static long fontEpoch;
+    private static volatile UiRenderConfig renderConfig = new UiRenderConfig(
+            ModernThemeFactory.create(renderedThemeMode, renderedMainColor, renderedAccentColor),
+            renderedFontMode, renderEpoch, fontEpoch);
+    private static volatile RuntimeConfig runtimeConfig = RuntimeConfig.defaults();
+    private static volatile ClientConfig runtimeConfigSource;
+
+    private record RuntimeConfig(boolean automaticPaylogDetection, boolean autoLinkDetectedPaylogsToDeals,
+                                 boolean detectPaylogsInOverlay, boolean showAnyPaylogFlyIns,
+                                 boolean showDealDetectionPaylogFlyIns, PaylogAutoLinkMode paylogAutoLinkMode,
+                                 boolean completeDealOnPaylogOverpay, boolean notifyWhenPaylogHasMatchingDeal,
+                                 boolean notifyWhenPaylogHasNoMatchingDeal,
+                                 boolean notifyWhenPaylogHasMultipleMatchingDeals,
+                                 ModernThemeMode modernThemeMode, GuiFontMode guiFontMode,
+                                 int customMainColor, int customAccentColor, int statisticsDefaultPeriodDays,
+                                 boolean checkedForJsonMigration, boolean bankPaylogImportOnboardingHandled) {
+        private static RuntimeConfig defaults() {
+            ClientConfig defaults = new ClientConfig();
+            defaults.normalize();
+            return from(defaults);
+        }
+
+        private static RuntimeConfig from(ClientConfig value) {
+            return new RuntimeConfig(value.isAutomaticPaylogDetection(),
+                    value.isAutoLinkDetectedPaylogsToDeals(), value.isDetectPaylogsInOverlay(),
+                    value.isShowAnyPaylogFlyIns(), value.isShowDealDetectionPaylogFlyIns(),
+                    value.getPaylogAutoLinkMode(), value.isCompleteDealOnPaylogOverpay(),
+                    value.isNotifyWhenPaylogHasMatchingDeal(), value.isNotifyWhenPaylogHasNoMatchingDeal(),
+                    value.isNotifyWhenPaylogHasMultipleMatchingDeals(), value.getModernThemeMode(),
+                    value.getGuiFontMode(), value.getCustomMainColor(), value.getCustomAccentColor(),
+                    value.getStatisticsDefaultPeriodDays(), value.isCheckedForJsonMigration(),
+                    value.isBankPaylogImportOnboardingHandled());
+        }
+    }
 
     private ClientConfigManager() {
     }
 
-    public static synchronized boolean isAutomaticPaylogDetection() {
-        return getConfig().isAutomaticPaylogDetection();
+    public static boolean isAutomaticPaylogDetection() {
+        return runtimeConfig().automaticPaylogDetection();
     }
 
     public static synchronized boolean setAutomaticPaylogDetection(boolean enabled) {
@@ -25,8 +65,8 @@ public final class ClientConfigManager {
         return save(loaded);
     }
 
-    public static synchronized boolean isAutoLinkDetectedPaylogsToDeals() {
-        return getConfig().isAutoLinkDetectedPaylogsToDeals();
+    public static boolean isAutoLinkDetectedPaylogsToDeals() {
+        return runtimeConfig().autoLinkDetectedPaylogsToDeals();
     }
 
     public static synchronized boolean setAutoLinkDetectedPaylogsToDeals(boolean enabled) {
@@ -36,8 +76,8 @@ public final class ClientConfigManager {
         return save(loaded);
     }
 
-    public static synchronized boolean isDetectPaylogsInOverlay() {
-        return getConfig().isDetectPaylogsInOverlay();
+    public static boolean isDetectPaylogsInOverlay() {
+        return runtimeConfig().detectPaylogsInOverlay();
     }
 
     public static synchronized boolean setDetectPaylogsInOverlay(boolean enabled) {
@@ -47,16 +87,16 @@ public final class ClientConfigManager {
         return save(loaded);
     }
 
-    public static synchronized boolean isShowPaylogNotifications() {
-        return isShowAnyPaylogFlyIns();
+    public static boolean isShowPaylogNotifications() {
+        return runtimeConfig().showAnyPaylogFlyIns();
     }
 
     public static synchronized boolean setShowPaylogNotifications(boolean enabled) {
         return setShowAnyPaylogFlyIns(enabled);
     }
 
-    public static synchronized boolean isShowAnyPaylogFlyIns() {
-        return getConfig().isShowAnyPaylogFlyIns();
+    public static boolean isShowAnyPaylogFlyIns() {
+        return runtimeConfig().showAnyPaylogFlyIns();
     }
 
     public static synchronized boolean setShowAnyPaylogFlyIns(boolean enabled) {
@@ -66,8 +106,8 @@ public final class ClientConfigManager {
         return save(loaded);
     }
 
-    public static synchronized boolean isShowDealDetectionPaylogFlyIns() {
-        return getConfig().isShowDealDetectionPaylogFlyIns();
+    public static boolean isShowDealDetectionPaylogFlyIns() {
+        return runtimeConfig().showDealDetectionPaylogFlyIns();
     }
 
     public static synchronized boolean setShowDealDetectionPaylogFlyIns(boolean enabled) {
@@ -77,8 +117,8 @@ public final class ClientConfigManager {
         return save(loaded);
     }
 
-    public static synchronized PaylogAutoLinkMode getPaylogAutoLinkMode() {
-        return getConfig().getPaylogAutoLinkMode();
+    public static PaylogAutoLinkMode getPaylogAutoLinkMode() {
+        return runtimeConfig().paylogAutoLinkMode();
     }
 
     public static synchronized boolean setPaylogAutoLinkMode(PaylogAutoLinkMode mode) {
@@ -88,8 +128,8 @@ public final class ClientConfigManager {
         return save(loaded);
     }
 
-    public static synchronized boolean isCompleteDealOnPaylogOverpay() {
-        return getConfig().isCompleteDealOnPaylogOverpay();
+    public static boolean isCompleteDealOnPaylogOverpay() {
+        return runtimeConfig().completeDealOnPaylogOverpay();
     }
 
     public static synchronized boolean setCompleteDealOnPaylogOverpay(boolean enabled) {
@@ -99,8 +139,8 @@ public final class ClientConfigManager {
         return save(loaded);
     }
 
-    public static synchronized boolean isNotifyWhenPaylogHasMatchingDeal() {
-        return getConfig().isNotifyWhenPaylogHasMatchingDeal();
+    public static boolean isNotifyWhenPaylogHasMatchingDeal() {
+        return runtimeConfig().notifyWhenPaylogHasMatchingDeal();
     }
 
     public static synchronized boolean setNotifyWhenPaylogHasMatchingDeal(boolean enabled) {
@@ -110,8 +150,8 @@ public final class ClientConfigManager {
         return save(loaded);
     }
 
-    public static synchronized boolean isNotifyWhenPaylogHasNoMatchingDeal() {
-        return getConfig().isNotifyWhenPaylogHasNoMatchingDeal();
+    public static boolean isNotifyWhenPaylogHasNoMatchingDeal() {
+        return runtimeConfig().notifyWhenPaylogHasNoMatchingDeal();
     }
 
     public static synchronized boolean setNotifyWhenPaylogHasNoMatchingDeal(boolean enabled) {
@@ -121,8 +161,8 @@ public final class ClientConfigManager {
         return save(loaded);
     }
 
-    public static synchronized boolean isNotifyWhenPaylogHasMultipleMatchingDeals() {
-        return getConfig().isNotifyWhenPaylogHasMultipleMatchingDeals();
+    public static boolean isNotifyWhenPaylogHasMultipleMatchingDeals() {
+        return runtimeConfig().notifyWhenPaylogHasMultipleMatchingDeals();
     }
 
     public static synchronized boolean setNotifyWhenPaylogHasMultipleMatchingDeals(boolean enabled) {
@@ -132,8 +172,12 @@ public final class ClientConfigManager {
         return save(loaded);
     }
 
-    public static synchronized ModernThemeMode getModernThemeMode() {
-        return getConfig().getModernThemeMode();
+    public static ModernThemeMode getModernThemeMode() {
+        return runtimeConfig().modernThemeMode();
+    }
+
+    public static UiRenderConfig uiRenderConfig() {
+        return renderConfig;
     }
 
     public static synchronized boolean setModernThemeMode(ModernThemeMode mode) {
@@ -143,8 +187,8 @@ public final class ClientConfigManager {
         return save(loaded);
     }
 
-    public static synchronized GuiFontMode getGuiFontMode() {
-        return getConfig().getGuiFontMode();
+    public static GuiFontMode getGuiFontMode() {
+        return runtimeConfig().guiFontMode();
     }
 
     public static synchronized boolean setGuiFontMode(GuiFontMode mode) {
@@ -154,8 +198,8 @@ public final class ClientConfigManager {
         return save(loaded);
     }
 
-    public static synchronized int getCustomMainColor() {
-        return getConfig().getCustomMainColor();
+    public static int getCustomMainColor() {
+        return runtimeConfig().customMainColor();
     }
 
     public static synchronized boolean setCustomMainColor(int color) {
@@ -165,8 +209,8 @@ public final class ClientConfigManager {
         return save(loaded);
     }
 
-    public static synchronized int getCustomAccentColor() {
-        return getConfig().getCustomAccentColor();
+    public static int getCustomAccentColor() {
+        return runtimeConfig().customAccentColor();
     }
 
     public static synchronized boolean setCustomAccentColor(int color) {
@@ -176,8 +220,8 @@ public final class ClientConfigManager {
         return save(loaded);
     }
 
-    public static synchronized int getStatisticsDefaultPeriodDays() {
-        return getConfig().getStatisticsDefaultPeriodDays();
+    public static int getStatisticsDefaultPeriodDays() {
+        return runtimeConfig().statisticsDefaultPeriodDays();
     }
 
     public static synchronized boolean setStatisticsDefaultPeriodDays(int days) {
@@ -196,7 +240,7 @@ public final class ClientConfigManager {
         return save(loaded);
     }
 
-    public static synchronized boolean isCheckedForJsonMigration() { return getConfig().isCheckedForJsonMigration(); }
+    public static boolean isCheckedForJsonMigration() { return runtimeConfig().checkedForJsonMigration(); }
     public static synchronized boolean markJsonMigrationChecked(boolean completed) {
         ClientConfig loaded = writableConfig();
         if (loaded == null) return false;
@@ -214,14 +258,26 @@ public final class ClientConfigManager {
         return save(loaded);
     }
 
-    public static synchronized boolean isWritable() {
-        getConfig();
-        return !recoveryRequired;
+    public static boolean isBankPaylogImportOnboardingPending() {
+        RuntimeConfig snapshot = runtimeConfig();
+        return !recoveryRequired && !snapshot.bankPaylogImportOnboardingHandled();
+    }
+
+    public static synchronized boolean markBankPaylogImportOnboardingHandled() {
+        ClientConfig loaded = writableConfig();
+        if (loaded == null) return false;
+        if (loaded.isBankPaylogImportOnboardingHandled()) return true;
+        loaded.setBankPaylogImportOnboardingHandled(true);
+        return save(loaded);
+    }
+
+    public static boolean isWritable() {
+        return !recoveryRequiredAfterLoad();
     }
 
     public static synchronized void reload() {
+        recoveryRequired = true;
         config = null;
-        recoveryRequired = false;
         getConfig();
     }
 
@@ -232,9 +288,11 @@ public final class ClientConfigManager {
         if (!JsonStorage.createBackup(path)) return false;
         ClientConfig defaults = new ClientConfig();
         defaults.normalize();
-        recoveryRequired = false;
         if (JsonStorage.save(path, defaults)) {
             config = defaults;
+            publishRuntimeConfig(defaults);
+            publishRenderConfig(defaults);
+            recoveryRequired = false;
             return true;
         }
         recoveryRequired = true;
@@ -248,25 +306,36 @@ public final class ClientConfigManager {
 
         FileManager.initialize();
         if (!FileManager.databaseAccessAllowed()) {
-            config = new ClientConfig();
-            config.normalize();
+            ClientConfig loaded = new ClientConfig();
+            loaded.normalize();
             recoveryRequired = true;
-            return config;
+            publishRuntimeConfig(loaded);
+            publishRenderConfig(loaded);
+            config = loaded;
+            return loaded;
         }
         Path path = FileManager.getClientConfigFile();
         JsonStorage.LoadResult<ClientConfig> result = JsonStorage.load(path, ClientConfig.class, new ClientConfig());
-        config = result.value();
+        ClientConfig loaded = result.value();
+        loaded.normalize();
         recoveryRequired = result.recoveryRequired();
-        config.normalize();
+        publishRuntimeConfig(loaded);
+        publishRenderConfig(loaded);
+        config = loaded;
 
-        if (result.missing()) save(config);
-        return config;
+        if (result.missing()) save(loaded);
+        return loaded;
     }
 
     private static boolean save(ClientConfig value) {
         if (recoveryRequired || !FileManager.databaseAccessAllowed()) return false;
         value.normalize();
-        if (JsonStorage.save(FileManager.getClientConfigFile(), value)) return true;
+        if (JsonStorage.save(FileManager.getClientConfigFile(), value)) {
+            config = value;
+            publishRuntimeConfig(value);
+            publishRenderConfig(value);
+            return true;
+        }
         config = null;
         getConfig();
         return false;
@@ -275,5 +344,58 @@ public final class ClientConfigManager {
     private static ClientConfig writableConfig() {
         ClientConfig loaded = getConfig();
         return recoveryRequired ? null : loaded;
+    }
+
+    private static RuntimeConfig runtimeConfig() {
+        ensureLoaded();
+        ClientConfig current = config;
+        if (current != null && current != runtimeConfigSource) {
+            synchronized (ClientConfigManager.class) {
+                current = config;
+                if (current != null && current != runtimeConfigSource) {
+                    publishRuntimeConfig(current);
+                    publishRenderConfig(current);
+                }
+            }
+        }
+        return runtimeConfig;
+    }
+
+    private static boolean recoveryRequiredAfterLoad() {
+        ensureLoaded();
+        return recoveryRequired;
+    }
+
+    private static void ensureLoaded() {
+        if (config != null) return;
+        synchronized (ClientConfigManager.class) {
+            if (config == null) getConfig();
+        }
+    }
+
+    private static void publishRuntimeConfig(ClientConfig value) {
+        runtimeConfig = RuntimeConfig.from(value);
+        runtimeConfigSource = value;
+    }
+
+    private static void publishRenderConfig(ClientConfig value) {
+        ModernThemeMode mode = value.getModernThemeMode();
+        GuiFontMode fontMode = value.getGuiFontMode();
+        int mainColor = value.getCustomMainColor();
+        int accentColor = value.getCustomAccentColor();
+        boolean themeChanged = mode != renderedThemeMode
+                || mainColor != renderedMainColor
+                || accentColor != renderedAccentColor;
+        boolean fontChanged = fontMode != renderedFontMode;
+        if (!themeChanged && !fontChanged) return;
+        renderedThemeMode = mode;
+        renderedFontMode = fontMode;
+        renderedMainColor = mainColor;
+        renderedAccentColor = accentColor;
+        renderEpoch++;
+        if (fontChanged) fontEpoch++;
+        renderConfig = new UiRenderConfig(
+                ModernThemeFactory.create(mode, mainColor, accentColor),
+                fontMode, renderEpoch, fontEpoch);
     }
 }

@@ -34,6 +34,7 @@ final class DatabaseHealthInspectionService {
     );
     private final DatabaseCoordinator database;
     private volatile int lastInspectionQueryCount;
+    private final ThreadLocal<QueryCounter> inspectionCounter = new ThreadLocal<>();
 
     DatabaseHealthInspectionService(DatabaseCoordinator database) {
         this.database = database;
@@ -42,43 +43,52 @@ final class DatabaseHealthInspectionService {
     List<DataHealthRecord> runHealthCheck() {
         database.initialize();
         Set<FindingKey> observed = new HashSet<>();
-        int[] queryCount = {0};
-        boolean completed = database.inTransaction(DatabaseWriteMode.HEALTH_MAINTENANCE, connection -> {
-            try (Statement statement = connection.createStatement()) {
-                queryCount[0]++;
-                try (ResultSet result = statement.executeQuery("SELECT c.* FROM credits c")) {
-                    while (result.next()) inspectCredit(connection, result, paymentAggregate(connection, result.getString("id")), observed);
+        QueryCounter counter = new QueryCounter();
+        inspectionCounter.set(counter);
+        try {
+            boolean completed = database.inTransaction(DatabaseWriteMode.HEALTH_MAINTENANCE, connection -> {
+                PaymentAggregates aggregates = loadPaymentAggregates(connection);
+                try (Statement statement = connection.createStatement()) {
+                    queryExecuted();
+                    try (ResultSet result = statement.executeQuery("SELECT c.* FROM credits c")) {
+                        while (result.next()) inspectCredit(connection, result,
+                                aggregates.byCredit().getOrDefault(result.getString("id"), PaymentAggregateValue.ZERO), observed);
+                    }
+                    database.inject(DatabaseFaultInjector.FailurePoint.HEALTH_AFTER_CREDITS_BEFORE_PAYMENTS);
+                    queryExecuted();
+                    try (ResultSet result = statement.executeQuery("SELECT p.*, c.id AS credit_exists, l.id AS paylog_exists, l.amount AS paylog_amount, l.payer AS paylog_payer, l.receiver AS paylog_receiver FROM payments p LEFT JOIN credits c ON c.id=p.credit_id LEFT JOIN paylogs l ON l.id=p.paylog_id")) {
+                        while (result.next()) inspectPayment(connection, result, observed);
+                    }
+                    queryExecuted();
+                    try (ResultSet result = statement.executeQuery("SELECT e.*, c.id AS credit_exists FROM credit_events e LEFT JOIN credits c ON c.id=e.credit_id")) {
+                        while (result.next()) inspectEvent(connection, result, observed);
+                    }
+                    queryExecuted();
+                    try (ResultSet result = statement.executeQuery("SELECT l.* FROM paylogs l")) {
+                        while (result.next()) inspectPaylog(connection, result,
+                                aggregates.byPaylog().getOrDefault(result.getString("id"), PaymentAggregateValue.ZERO), observed);
+                    }
+                    queryExecuted();
+                    try (ResultSet result = statement.executeQuery("SELECT entry_hash FROM paylogs GROUP BY entry_hash HAVING COUNT(*) > 1")) {
+                        while (result.next()) report(connection, observed, "PAYLOG_DUPLICATE_HASH", "WARNING", "paylogs", result.getString(1), "Doppelter Paylog-Hash", "Mehrere Paylogs besitzen denselben Hash.", null, null);
+                    }
+                    queryExecuted();
+                    try (ResultSet result = statement.executeQuery("SELECT id FROM migration_log WHERE status='STARTED' OR status='FAILED'")) {
+                        while (result.next()) report(connection, observed, "MIGRATION_INCOMPLETE", "ERROR", "migration_log", result.getString(1), "Unvollständige Migration", "Eine Migration wurde begonnen, aber nicht abgeschlossen.", null, null);
+                    }
                 }
-                database.inject(DatabaseFaultInjector.FailurePoint.HEALTH_AFTER_CREDITS_BEFORE_PAYMENTS);
-                queryCount[0]++;
-                try (ResultSet result = statement.executeQuery("SELECT p.*, c.id AS credit_exists, l.id AS paylog_exists, l.amount AS paylog_amount, l.payer AS paylog_payer, l.receiver AS paylog_receiver FROM payments p LEFT JOIN credits c ON c.id=p.credit_id LEFT JOIN paylogs l ON l.id=p.paylog_id")) {
-                    while (result.next()) inspectPayment(connection, result, observed);
+                if (database.installedSchemaVersion(connection) != DatabaseManager.SCHEMA_VERSION) {
+                    report(connection, observed, "SCHEMA_VERSION", "ERROR", "metadata", "schema_version", "Unerwartete Schemaversion", "Die gespeicherte Schemaversion passt nicht zur Anwendung.", null, null);
                 }
-                queryCount[0]++;
-                try (ResultSet result = statement.executeQuery("SELECT e.*, c.id AS credit_exists FROM credit_events e LEFT JOIN credits c ON c.id=e.credit_id")) {
-                    while (result.next()) inspectEvent(connection, result, observed);
-                }
-                queryCount[0]++;
-                try (ResultSet result = statement.executeQuery("SELECT l.* FROM paylogs l")) {
-                    while (result.next()) inspectPaylog(connection, result, paymentAggregateForPaylog(connection, result.getString("id")), observed);
-                }
-                queryCount[0]++;
-                try (ResultSet result = statement.executeQuery("SELECT entry_hash FROM paylogs GROUP BY entry_hash HAVING COUNT(*) > 1")) {
-                    while (result.next()) report(connection, observed, "PAYLOG_DUPLICATE_HASH", "WARNING", "paylogs", result.getString(1), "Doppelter Paylog-Hash", "Mehrere Paylogs besitzen denselben Hash.", null, null);
-                }
-                queryCount[0]++;
-                try (ResultSet result = statement.executeQuery("SELECT id FROM migration_log WHERE status='STARTED' OR status='FAILED'")) {
-                    while (result.next()) report(connection, observed, "MIGRATION_INCOMPLETE", "ERROR", "migration_log", result.getString(1), "Unvollständige Migration", "Eine Migration wurde begonnen, aber nicht abgeschlossen.", null, null);
-                }
-            }
-            if (database.installedSchemaVersion(connection) != DatabaseManager.SCHEMA_VERSION) {
-                report(connection, observed, "SCHEMA_VERSION", "ERROR", "metadata", "schema_version", "Unerwartete Schemaversion", "Die gespeicherte Schemaversion passt nicht zur Anwendung.", null, null);
-            }
-            resolveAbsentFindings(connection, observed);
-        });
-        if (!completed) throw new IllegalStateException("Data-health scan could not be completed");
-        lastInspectionQueryCount = queryCount[0];
-        return listHealthRecords(false);
+                resolveAbsentFindings(connection, observed);
+            });
+            if (!completed) throw new IllegalStateException("Data-health scan could not be completed");
+            List<DataHealthRecord> records = listHealthRecords(false);
+            lastInspectionQueryCount = counter.value();
+            return records;
+        } finally {
+            inspectionCounter.remove();
+        }
     }
 
     int lastInspectionQueryCount() {
@@ -88,6 +98,7 @@ final class DatabaseHealthInspectionService {
     List<DataHealthRecord> listHealthRecords(boolean includeResolved) {
         database.initialize();
         String sql = "SELECT * FROM data_health_records" + (includeResolved ? "" : " WHERE status='OPEN'") + " ORDER BY CASE severity WHEN 'ERROR' THEN 0 WHEN 'WARNING' THEN 1 ELSE 2 END, created_at DESC";
+        queryExecuted();
         try (Connection connection = database.connection(); PreparedStatement statement = connection.prepareStatement(sql); ResultSet result = statement.executeQuery()) {
             List<DataHealthRecord> records = new ArrayList<>();
             while (result.next()) records.add(database.readHealth(result));
@@ -185,27 +196,27 @@ final class DatabaseHealthInspectionService {
         if (actualLinked.compareTo(BigInteger.valueOf(amount)) > 0) report(connection, observed, "PAYLOG_LINK_OVERBOOKED", "ERROR", "paylogs", id, "Paylog überbucht", "Die Summe verknüpfter Zahlungen ist größer als der Paylog-Betrag.", rowPayload(result), null);
     }
 
-    private PaymentAggregateValue paymentAggregate(Connection connection, String creditId) throws SQLException {
-        return paymentAggregate(connection, "SELECT amount FROM payments WHERE credit_id=?", creditId);
-    }
-
-    private PaymentAggregateValue paymentAggregateForPaylog(Connection connection, String paylogId) throws SQLException {
-        return paymentAggregate(connection, "SELECT amount FROM payments WHERE paylog_id=?", paylogId);
-    }
-
-    private PaymentAggregateValue paymentAggregate(Connection connection, String sql, String id) throws SQLException {
-        BigInteger total = BigInteger.ZERO;
-        int count = 0;
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setString(1, id);
-            try (ResultSet result = statement.executeQuery()) {
-                while (result.next()) {
-                    total = total.add(BigInteger.valueOf(result.getLong(1)));
-                    if (count < Integer.MAX_VALUE) count++;
-                }
+    private PaymentAggregates loadPaymentAggregates(Connection connection) throws SQLException {
+        Map<String, PaymentAggregateValue> byCredit = new LinkedHashMap<>();
+        Map<String, PaymentAggregateValue> byPaylog = new LinkedHashMap<>();
+        queryExecuted();
+        try (PreparedStatement statement = connection.prepareStatement("SELECT credit_id,paylog_id,amount FROM payments");
+             ResultSet result = statement.executeQuery()) {
+            while (result.next()) {
+                long amount = result.getLong("amount");
+                mergeAggregate(byCredit, result.getString("credit_id"), amount);
+                String paylogId = result.getString("paylog_id");
+                if (!blank(paylogId)) mergeAggregate(byPaylog, paylogId, amount);
             }
         }
-        return new PaymentAggregateValue(total, count);
+        return new PaymentAggregates(Map.copyOf(byCredit), Map.copyOf(byPaylog));
+    }
+
+    private void mergeAggregate(Map<String, PaymentAggregateValue> aggregates, String id, long amount) {
+        if (blank(id)) return;
+        PaymentAggregateValue current = aggregates.getOrDefault(id, PaymentAggregateValue.ZERO);
+        int count = current.count() == Integer.MAX_VALUE ? Integer.MAX_VALUE : current.count() + 1;
+        aggregates.put(id, new PaymentAggregateValue(current.total().add(BigInteger.valueOf(amount)), count));
     }
 
     private JsonElement parseStringArray(String json) {
@@ -227,23 +238,28 @@ final class DatabaseHealthInspectionService {
 
     private void resolveAbsentFindings(Connection connection, Set<FindingKey> observed) throws SQLException {
         List<UUID> resolved = new ArrayList<>();
+        queryExecuted();
         try (PreparedStatement statement = connection.prepareStatement("SELECT id,record_type,COALESCE(source_table,''),COALESCE(source_id,'') FROM data_health_records WHERE status='OPEN'"); ResultSet result = statement.executeQuery()) {
             while (result.next()) {
                 FindingKey key = new FindingKey(result.getString(2), result.getString(3), result.getString(4));
                 if (MANAGED_TYPES.contains(key.type()) && !observed.contains(key)) resolved.add(UUID.fromString(result.getString(1)));
             }
         }
-        try (PreparedStatement statement = connection.prepareStatement("UPDATE data_health_records SET status='RESOLVED',resolved_at=? WHERE id=? AND status='OPEN'")) {
-            for (UUID id : resolved) {
-                statement.setLong(1, System.currentTimeMillis());
-                statement.setString(2, id.toString());
-                statement.addBatch();
+        if (!resolved.isEmpty()) {
+            try (PreparedStatement statement = connection.prepareStatement("UPDATE data_health_records SET status='RESOLVED',resolved_at=? WHERE id=? AND status='OPEN'")) {
+                for (UUID id : resolved) {
+                    statement.setLong(1, System.currentTimeMillis());
+                    statement.setString(2, id.toString());
+                    statement.addBatch();
+                }
+                queryExecuted();
+                statement.executeBatch();
             }
-            statement.executeBatch();
         }
     }
 
     void storeHealth(Connection connection, String type, String severity, String table, String sourceId, String title, String message, String raw, String repair) throws SQLException {
+        queryExecuted();
         try (PreparedStatement check = connection.prepareStatement("SELECT id FROM data_health_records WHERE record_type=? AND COALESCE(source_table,'')=COALESCE(?,'') AND COALESCE(source_id,'')=COALESCE(?,'') AND status='OPEN'")) {
             check.setString(1, type);
             check.setString(2, table);
@@ -252,6 +268,7 @@ final class DatabaseHealthInspectionService {
                 if (result.next()) return;
             }
         }
+        queryExecuted();
         try (PreparedStatement statement = connection.prepareStatement("INSERT INTO data_health_records (id,record_type,severity,source_table,source_id,title,message,raw_payload,repair_payload,status,created_at,resolved_at) VALUES (?,?,?,?,?,?,?,?,?,'OPEN',?,NULL)")) {
             statement.setString(1, UUID.randomUUID().toString());
             statement.setString(2, type);
@@ -298,6 +315,20 @@ final class DatabaseHealthInspectionService {
         }
     }
 
+    void queryExecuted() {
+        QueryCounter counter = inspectionCounter.get();
+        if (counter != null) counter.increment();
+    }
+
     private record FindingKey(String type, String table, String sourceId) { }
-    private record PaymentAggregateValue(BigInteger total, int count) { }
+    private record PaymentAggregateValue(BigInteger total, int count) {
+        private static final PaymentAggregateValue ZERO = new PaymentAggregateValue(BigInteger.ZERO, 0);
+    }
+    private record PaymentAggregates(Map<String, PaymentAggregateValue> byCredit,
+                                     Map<String, PaymentAggregateValue> byPaylog) { }
+    private static final class QueryCounter {
+        private int value;
+        private void increment() { value++; }
+        private int value() { return value; }
+    }
 }

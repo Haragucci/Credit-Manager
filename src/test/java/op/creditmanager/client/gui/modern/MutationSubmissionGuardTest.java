@@ -16,4 +16,28 @@ class MutationSubmissionGuardTest {
         guard.reset();
         assertTrue(guard.tryBegin());
     }
+
+    @Test
+    void onlyMatchingCompletionTokenReleasesPendingSubmission() {
+        MutationSubmissionGuard guard = new MutationSubmissionGuard();
+        long first = guard.tryBeginToken();
+
+        assertFalse(guard.complete(first + 1L));
+        assertTrue(guard.isActive());
+        assertFalse(guard.tryBegin());
+        assertTrue(guard.complete(first));
+        assertFalse(guard.isActive());
+    }
+
+    @Test
+    void staleCompletionCannotReleaseANewerSubmission() {
+        MutationSubmissionGuard guard = new MutationSubmissionGuard();
+        long first = guard.tryBeginToken();
+        assertTrue(guard.complete(first));
+        long second = guard.tryBeginToken();
+
+        assertFalse(guard.complete(first));
+        assertTrue(guard.isActive());
+        assertTrue(guard.complete(second));
+    }
 }

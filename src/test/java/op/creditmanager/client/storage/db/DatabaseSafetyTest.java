@@ -57,19 +57,26 @@ class DatabaseSafetyTest {
     @Test
     void transactionRecoveryCanRecheckAnUnhealthyDatabaseEvenBeforeItsOwnFlagIsUpdated() throws Exception {
         useTemporaryDataDirectory();
+
         DatabaseManager database = DatabaseManager.getInstance();
         database.initialize();
-        Field healthy = databaseField("healthy");
-        Field writeLocked = databaseField("writeLocked");
-        Field transactionRecovery = TransactionRepository.class.getDeclaredField("recoveryRequired");
-        healthy.setAccessible(true);
-        writeLocked.setAccessible(true);
-        transactionRecovery.setAccessible(true);
-        healthy.setBoolean(databaseTarget(), false);
-        writeLocked.setBoolean(databaseTarget(), true);
-        transactionRecovery.setBoolean(TransactionRepository.getInstance(), false);
 
-        assertTrue(TransactionRepository.getInstance().resetCorruptTransactionsWithBackup());
+        Field transactionRecovery =
+                TransactionRepository.class.getDeclaredField("recoveryRequired");
+        transactionRecovery.setAccessible(true);
+
+        database.markRuntimeStateDegraded("TEST: recovery recheck");
+
+        transactionRecovery.setBoolean(
+                TransactionRepository.getInstance(),
+                false
+        );
+
+        assertTrue(
+                TransactionRepository.getInstance()
+                        .resetCorruptTransactionsWithBackup()
+        );
+
         assertTrue(database.isHealthy());
         assertFalse(database.isWriteLocked());
     }

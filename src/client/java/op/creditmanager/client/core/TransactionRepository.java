@@ -5,20 +5,22 @@ import op.creditmanager.client.cache.BoundedQueryCache;
 import op.creditmanager.client.model.TransactionEntry;
 import op.creditmanager.client.storage.db.DatabaseManager;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 public final class TransactionRepository {
     private static final TransactionRepository INSTANCE = new TransactionRepository();
-    private long revision;
-    private boolean recoveryRequired;
+    private volatile long revision;
+    private volatile boolean recoveryRequired;
     private final BoundedQueryCache<PaylogQuery, DatabaseManager.QueryPage<TransactionEntry>> queryCache = new BoundedQueryCache<>(128);
 
     private TransactionRepository() { }
     public static TransactionRepository getInstance() { return INSTANCE; }
 
     public synchronized void load() {
+        recoveryRequired = true;
         try {
             DatabaseManager database = DatabaseManager.getInstance();
             database.initialize();
@@ -41,6 +43,27 @@ public final class TransactionRepository {
         return saved;
     }
 
+    public synchronized DatabaseManager.BatchInsertResult addBatchDetailed(Collection<TransactionEntry> entries) {
+        int requested = entries == null ? 0 : entries.size();
+        if (requested == 0) return new DatabaseManager.BatchInsertResult(0, 0, 0, 0, List.of());
+        if (recoveryRequired || !DatabaseManager.getInstance().isSafeForWrites()) {
+            return new DatabaseManager.BatchInsertResult(requested, 0, 0, requested,
+                    List.of("Paylog-Datenbank ist nicht beschreibbar."));
+        }
+        DatabaseManager.BatchInsertResult result = DatabaseManager.getInstance().addPaylogsBatchDetailed(entries);
+        if (result.failed() == 0 && result.inserted() > 0) {
+            revision = DatabaseManager.getInstance().revision();
+            queryCache.clear();
+        }
+        return result;
+    }
+
+    public List<TransactionEntry> findPaylogCandidates(long minTimestamp, long maxTimestamp) {
+        return DatabaseManager.getInstance().findPaylogCandidates(minTimestamp, maxTimestamp).stream()
+                .map(this::copy)
+                .toList();
+    }
+
     public List<TransactionEntry> getAll() { return query("", 0, "", 500, 0); }
     public List<TransactionEntry> query(String player, int direction, String query, int limit, int offset) {
         return queryPage(player, direction, query, limit, offset).entries();
@@ -54,11 +77,11 @@ public final class TransactionRepository {
                 () -> DatabaseManager.getInstance().queryAvailablePaylogs(payer, receiver, query, limit, offset));
     }
     public Optional<TransactionEntry> find(UUID id) { return DatabaseManager.getInstance().findPaylog(id); }
-    public synchronized long getRevision() { return revision; }
+    public long getRevision() { return revision; }
     public BoundedQueryCache.CacheStats queryCacheStats() { return queryCache.stats(); }
-    public synchronized boolean isWritable() { return !recoveryRequired && DatabaseManager.getInstance().isSafeForWrites(); }
+    public boolean isWritable() { return !recoveryRequired && DatabaseManager.getInstance().isSafeForWrites(); }
 
-    public synchronized void acceptCommittedMutation(long committedRevision) {
+    public void acceptCommittedMutation(long committedRevision) {
         revision = committedRevision;
         queryCache.clear();
     }

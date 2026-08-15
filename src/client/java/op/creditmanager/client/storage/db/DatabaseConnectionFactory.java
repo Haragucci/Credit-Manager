@@ -4,25 +4,37 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.util.concurrent.atomic.AtomicLong;
 
 final class DatabaseConnectionFactory {
+    private final AtomicLong openedConnections = new AtomicLong();
+
     void loadDriver() throws ClassNotFoundException {
         Class.forName("org.h2.Driver");
     }
 
     Connection createFresh(Path databaseBase) throws SQLException {
         requireMissing(databaseBase);
-        return DriverManager.getConnection(url(databaseBase, false, false));
+        return open(url(databaseBase, false, false));
     }
 
     Connection openExistingReadWrite(Path databaseBase) throws SQLException {
         requireExisting(databaseBase);
-        return DriverManager.getConnection(url(databaseBase, true, false));
+        return open(url(databaseBase, true, false));
     }
 
     Connection openExistingReadOnly(Path databaseBase) throws SQLException {
         requireExisting(databaseBase);
-        return DriverManager.getConnection(url(databaseBase, true, true));
+        return open(url(databaseBase, true, true));
+    }
+
+    long openedConnectionCount() {
+        return openedConnections.get();
+    }
+
+    private Connection open(String url) throws SQLException {
+        openedConnections.incrementAndGet();
+        return DriverManager.getConnection(url);
     }
 
     private String url(Path databaseBase, boolean ifExists, boolean readOnly) throws SQLException {
